@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}الحسابات — Link Intelligence{% endblock %}
+
+{% block content %}
+<h1 class="page-title">👤 حسابات تيليجرام</h1>
+
+<div class="alert alert-info">
+    <strong>ضمانات أمنية:</strong>
+    <ul>
+        <li>البوتات <strong>لا تُرسل أبداً</strong> لمجموعات الآخرين — قراءة فقط.</li>
+        <li>الحساب الرئيسي وحده يُنشئ المجموعات (حد أقصى ٣).</li>
+        <li>كل المعرّفات مشفّرة بـ AES-256-GCM.</li>
+        <li>HMAC منفصل لكل حساب.</li>
+    </ul>
+</div>
+
+<section class="card">
+    <h2>الحسابات الحالية</h2>
+    {% if accounts %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>الاسم</th>
+                <th>رئيسي؟</th>
+                <th>نشط</th>
+                <th>آخر ظهور</th>
+                <th>أنشئ في</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in accounts %}
+            <tr>
+                <td><code>{{ a.name }}</code></td>
+                <td>{% if a.is_main %}⭐ نعم{% else %}—{% endif %}</td>
+                <td>{% if a.is_active %}✅{% else %}❌{% endif %}</td>
+                <td>{{ a.last_seen_at.strftime('%Y-%m-%d %H:%M') if a.last_seen_at else '—' }}</td>
+                <td>{{ a.created_at.strftime('%Y-%m-%d') if a.created_at else '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">لا توجد حسابات مُضافة بعد. أضف بيانات اعتمادك في <code>.env</code>.</p>
+    {% endif %}
+</section>
+
+<section class="card">
+    <h2>➕ إضافة حساب (عبر .env)</h2>
+    <p>لإضافة حساب جديد، عيّن المتغيرات التالية في ملف <code>.env</code> ثم أعد التشغيل:</p>
+    <pre><code>TG_API_ID=your_api_id
+TG_API_HASH=your_api_hash
+TG_PHONE=+1234567890
+TG_SESSION_NAME=userbot_main
+TG_MOCK_MODE=false
+TG_MONITOR_CHANNELS=channel1,channel2,channel3</code></pre>
+    <p>احصل على <code>api_id</code> و <code>api_hash</code> من <a href="https://my.telegram.org" target="_blank">my.telegram.org</a>.</p>
+</section>
+{% endblock %}

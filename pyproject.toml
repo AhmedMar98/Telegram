@@ -1,0 +1,33 @@
+[project]
+name = "link-intelligence-platform"
+version = "4.0.0"
+description = "Distributed platform that collects links from multiple Telegram accounts, classifies them via layered rules + AI, verifies vitality, and provides hybrid search — fully free, SaaS-ready."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "AhmedMar98" }]
+keywords = ["telegram", "link-intelligence", "ai", "classification", "fastapi", "sqlite"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["alembic/versions", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "SIM"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --cov=app --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["alembic/versions/"]

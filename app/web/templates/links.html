@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}الروابط — Link Intelligence{% endblock %}
+
+{% block content %}
+<h1 class="page-title">🔗 الروابط المُكتشفة</h1>
+
+<form method="get" class="filter-form">
+    <select name="category">
+        <option value="">كل الفئات</option>
+        {% for c in categories %}
+        <option value="{{ c }}" {% if c == current_category %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+    </select>
+    <select name="status">
+        <option value="">كل الحالات</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if s == current_status %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" class="btn">تصفية</button>
+    <a href="/links" class="btn btn-secondary">إعادة ضبط</a>
+</form>
+
+<div class="search-bar">
+    <input type="text" id="searchInput" placeholder="بحث هجين (نصي + دلالي)..." />
+    <button onclick="doSearch()" class="btn">🔍 بحث</button>
+</div>
+
+<div id="searchResults"></div>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>الفئة</th>
+            <th>المصدر</th>
+            <th>الحيوية</th>
+            <th>الحالة</th>
+            <th>تاريخ الاكتشاف</th>
+            <th>إجراءات</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for l in links %}
+        <tr>
+            <td>{{ l.id }}</td>
+            <td><a href="{{ l.url }}" target="_blank" rel="noopener" title="{{ l.url }}">
+                {{ (l.title or l.url)[:60] }}{% if l.url|length > 60 %}…{% endif %}
+            </a></td>
+            <td><span class="badge badge-{{ l.category }}">{{ l.category }}</span></td>
+            <td>{{ l.source_channel or '—' }}</td>
+            <td>
+                {% if l.alive is none %}—
+                {% elif l.alive %}✅ ({{ l.http_status or 'ok' }})
+                {% else %}❌{% endif %}
+            </td>
+            <td>{{ l.status }}</td>
+            <td>{{ l.discovered_at.strftime('%Y-%m-%d %H:%M') if l.discovered_at else '—' }}</td>
+            <td>
+                <button class="btn-mini" onclick="checkLink({{ l.id }})">تحقق</button>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">لا توجد روابط.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function checkLink(id) {
+    const r = await fetch(`/api/v1/links/${id}/check`, { method: 'POST' });
+    const data = await r.json();
+    alert(`Link ${id}: ${data.alive ? '✅ alive' : '❌ dead'} (${data.http_status || data.error})`);
+    location.reload();
+}
+
+async function doSearch() {
+    const q = document.getElementById('searchInput').value.trim();
+    if (!q) return;
+    const r = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}&limit=20`);
+    const data = await r.json();
+    const div = document.getElementById('searchResults');
+    if (!data.items || data.items.length === 0) {
+        div.innerHTML = '<p class="empty">لا نتائج.</p>';
+        return;
+    }
+    div.innerHTML = '<h3>نتائج البحث (' + data.count + ')</h3>' +
+        data.items.map(it => `
+            <div class="search-item">
+                <a href="${it.url}" target="_blank">${it.title || it.url}</a>
+                <div class="search-meta">
+                    <span class="badge badge-${it.category}">${it.category}</span>
+                    <span>⭐ ${it.score.toFixed(3)}</span>
+                    ${it.alive ? '✅' : '❌'}
+                </div>
+                ${it.description ? '<p>' + it.description.slice(0,150) + '</p>' : ''}
+            </div>
+        `).join('');
+}
+</script>
+{% endblock %}

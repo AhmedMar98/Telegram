@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Link Intelligence Platform{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="navbar">
+        <div class="container nav-inner">
+            <a href="/" class="brand">
+                <span class="logo">🔗</span>
+                <span>Link Intelligence</span>
+            </a>
+            <nav class="nav-links">
+                <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>لوحة التحكم</a>
+                <a href="/links" {% if "/links" in request.url.path %}class="active"{% endif %}>الروابط</a>
+                <a href="/accounts" {% if "/accounts" in request.url.path %}class="active"{% endif %}>الحسابات</a>
+                <a href="/docs" target="_blank">API</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <span>Link Intelligence Platform v4.0 — SQLite + Redis + FastAPI</span>
+        </div>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

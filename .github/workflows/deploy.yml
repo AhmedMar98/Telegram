@@ -1,0 +1,85 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-oracle:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        if: env.ORACLE_HOST != ''
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${ORACLE_SSH_KEY}" > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          ssh-keyscan -H ${ORACLE_HOST} >> ~/.ssh/known_hosts
+
+      - name: Sync code to Oracle Cloud
+        if: env.ORACLE_HOST != ''
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER || 'ubuntu' }}
+          ORACLE_DEPLOY_PATH: ${{ secrets.ORACLE_DEPLOY_PATH || '/home/ubuntu/link-intelligence' }}
+        run: |
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='data/' \
+            --exclude='logs/' \
+            --exclude='.env' \
+            --exclude='*.session' \
+            -e "ssh -i ~/.ssh/oracle_key" \
+            ./ ${ORACLE_USER}@${ORACLE_HOST}:${ORACLE_DEPLOY_PATH}/
+
+      - name: Restart services on remote
+        if: env.ORACLE_HOST != ''
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER || 'ubuntu' }}
+          ORACLE_DEPLOY_PATH: ${{ secrets.ORACLE_DEPLOY_PATH || '/home/ubuntu/link-intelligence' }}
+        run: |
+          ssh -i ~/.ssh/oracle_key ${ORACLE_USER}@${ORACLE_HOST} bash -c '
+            cd ${ORACLE_DEPLOY_PATH}
+            source venv/bin/activate 2>/dev/null || python3 -m venv venv && source venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            # Initialize DB if needed
+            python scripts/init_db.py
+            # Restart systemd services (or nohup as fallback)
+            if systemctl --user list-unit-files | grep -q link-intel; then
+              systemctl --user restart link-intel-web
+              systemctl --user restart link-intel-worker
+            else
+              # Fallback: kill old + start new in background
+              pkill -f "uvicorn app.main" || true
+              pkill -f "scripts/run_worker.py" || true
+              nohup python scripts/run_web.py > logs/web.log 2>&1 &
+              nohup python scripts/run_worker.py all > logs/worker.log 2>&1 &
+            fi
+          '
+
+      - name: Deployment skipped (no ORACLE_HOST configured)
+        if: env.ORACLE_HOST == ''
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          echo "⚠️ ORACLE_HOST secret not set."
+          echo "To enable auto-deploy, set these repository secrets:"
+          echo "  - ORACLE_HOST (your Oracle Cloud VM IP)"
+          echo "  - ORACLE_SSH_KEY (private SSH key)"
+          echo "  - ORACLE_USER (default: ubuntu)"
+          echo "  - ORACLE_DEPLOY_PATH (default: /home/ubuntu/link-intelligence)"
