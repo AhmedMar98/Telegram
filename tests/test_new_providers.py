@@ -181,25 +181,29 @@ async def test_cloudflare_api_error_returns_none():
 
 
 # ============================================================
-# Orchestrator integration — all 10 providers
+# Orchestrator integration — all 11 providers (v5.1)
 # ============================================================
 
-def test_orchestrator_default_priority_has_10_providers():
-    """v5.0 orchestrator should know about all 10 providers in priority order."""
+def test_orchestrator_default_priority_has_11_providers():
+    """v5.1 orchestrator should know about all 11 providers in priority order."""
     from app.llm.orchestrator import DEFAULT_PRIORITY
-    assert len(DEFAULT_PRIORITY) == 10
+    assert len(DEFAULT_PRIORITY) == 11
+    # v5.0 providers
     assert "cohere" in DEFAULT_PRIORITY
     assert "mistral" in DEFAULT_PRIORITY
     assert "together" in DEFAULT_PRIORITY
     assert "anyscale" in DEFAULT_PRIORITY
     assert "cloudflare" in DEFAULT_PRIORITY
+    # v5.1 addition
+    assert "nvidia" in DEFAULT_PRIORITY
 
 
 def test_orchestrator_instantiates_all_providers():
     from app.llm.orchestrator import LLMOrchestrator
     orch = LLMOrchestrator()
-    # All 10 provider classes should be instantiated (even if not configured)
-    assert len(orch.providers) == 10
-    for name in ["groq", "gemini", "cloudflare", "openrouter", "mistral",
-                 "together", "anyscale", "cohere", "huggingface", "zai"]:
+    # All 11 provider classes should be instantiated (even if not configured)
+    assert len(orch.providers) == 11
+    for name in ["groq", "gemini", "cloudflare", "nvidia", "openrouter",
+                 "mistral", "together", "anyscale", "cohere",
+                 "huggingface", "zai"]:
         assert name in orch.providers

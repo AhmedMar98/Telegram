@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # --- LLM providers ---
     openrouter_api_key: str = ""
-    openrouter_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    openrouter_model: str = "google/gemma-4-26b-a4b-it:free"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-1.5-flash"
     groq_api_key: str = ""
@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     cloudflare_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_model: str = "@cf/meta/llama-3.1-8b-instruct"
+
+    # v5.1 NVIDIA Integrate API: https://build.nvidia.com → "Get API Key"
+    # Supports: mistralai/mistral-nemotron (tested working),
+    #           meta/llama-3.3-70b-instruct, deepseek-ai/deepseek-v4-pro,
+    #           z-ai/glm-5.2 (may cold-start slowly), thinkingmachines/inkling
+    nvidia_api_key: str = ""
+    nvidia_model: str = "mistralai/mistral-nemotron"
 
     # --- Stripe billing (v5.0) ---
     stripe_api_key: str = ""

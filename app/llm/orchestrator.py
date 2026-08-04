@@ -33,16 +33,19 @@ from .providers import (
     TogetherProvider,
     AnyscaleProvider,
     CloudflareProvider,
+    # v5.1 NVIDIA Integrate API
+    NVIDIAProvider,
 )
 from .quota_tracker import QuotaTracker
 
 
 # Provider priority — cheapest/fastest first
-# v5.0: expanded to 10 providers
+# v5.1: expanded to 11 providers (NVIDIA added)
 DEFAULT_PRIORITY = [
     "groq",        # LPU, fastest
     "gemini",      # generous free tier
     "cloudflare",  # edge network, fast
+    "nvidia",      # NVIDIA Integrate API (glm-5.2, deepseek-v4-pro, etc.)
     "openrouter",  # many free models
     "mistral",     # direct API
     "together",    # open-source models
@@ -72,6 +75,7 @@ class LLMOrchestrator:
             GroqProvider(),
             GeminiProvider(),
             CloudflareProvider(),
+            NVIDIAProvider(),
             OpenRouterProvider(),
             MistralProvider(),
             TogetherProvider(),
