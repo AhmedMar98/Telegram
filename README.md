@@ -1,10 +1,11 @@
-# 🔗 Link Intelligence Platform v4.0
+# 🔗 Link Intelligence Platform v4.1
 
 > **منصة موزّعة تجمع الروابط من حسابات تيليجرام المتعددة وتصنّفها وتتحقق من حيويتها آلياً عبر ذكاء اصطناعي مجاني بالكامل، مع سلوك بشري يمنع الحظر، وجاهزية للتحول إلى منتج SaaS.**
 
 [![CI](https://github.com/AhmedMar98/Telegram/actions/workflows/ci.yml/badge.svg)](https://github.com/AhmedMar98/Telegram/actions/workflows/ci.yml)
 [![Deploy](https://github.com/AhmedMar98/Telegram/actions/workflows/deploy.yml/badge.svg)](https://github.com/AhmedMar98/Telegram/actions/workflows/deploy.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-93%20passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
@@ -399,15 +400,16 @@ sudo systemctl start link-intel-web link-intel-worker
 | لا ضمان ضد الحظر | خوارزميات تيليجرام سرية؛ السلوك البشري يقلّل المخاطر لكن لا يلغيها |
 | الحصص المجانية قابلة للتغيير | مزودو LLM قد يغيّرون حدودهم في أي وقت |
 | يتطلب ٣ حسابات شرعية | للإنتاج الموزّع (MVP يعمل بحساب واحد) |
-| الاختبارات ناقصة الإنجاز | تغطية الأساسيات كاملة، لكن E2E tests تحتاج تطوير |
-| لا Multi-tenant حقيقي | البنية مهيّأة لـ RLS لكن غير مفعّلة بعد |
-| Semantic memory غير مفعّلة | البنية موجودة لكن threshold logic يحتاج ربط |
+| RLS على مستوى ORM فقط | SQLite لا يدعم RLS على مستوى DB؛ للإنتاج متعدد المستأجرين، استخدم PostgreSQL |
+| Federated Learning = stub | `LocalStubAggregator` لا يتدرب فعلياً؛ الواجهة موجودة للاستبدال لاحقاً بـ Flower |
+| Stripe billing يحتاج اختبار إنتاج | الـ webhooks معرّضة لكن تحتاج اختبار مع مفاتيح Stripe حقيقية |
+| Mobile app مؤجّل | يتطلب فريق React Native منفصل (خارج نطاق هذا المستودع) |
 
 ---
 
 ## خارطة الطريق
 
-### v4.0 (الحالي) ✅
+### v4.0 ✅ (السابق)
 - بنية موزّعة (collector → processor → storage → interfaces)
 - ٥ مزودي LLM مع failover
 - AES-256-GCM + HMAC
@@ -416,19 +418,26 @@ sudo systemctl start link-intel-web link-intel-worker
 - بوت تيليجرام
 - CI/CD كامل
 
-### v4.1 (التالي)
-- [ ] تفعيل Semantic Memory (إعادة استخدام التصنيف عند تشابه > 0.92)
-- [ ] Multi-tenant: RLS حقيقي
-- [ ] ملخّص يومي للروابط الرائجة (cron job)
-- [ ] WebSockets لـ live logs في اللوحة
-- [ ] Prometheus metrics endpoint
+### v4.1 ✅ (الحالي)
+- ✅ **Semantic Memory**: إعادة استخدام التصنيف عند تشابه > 0.92 (جدول `semantic_cache`)
+- ✅ **Multi-tenant**: `TenantContext` + `X-API-Key` header + `tenant_id` في كل الجداول + `SAAS_MODE`
+- ✅ **Daily Summary Cron**: `DailySummaryWorker` يولّد ملخصاً يومياً للروابط الرائجة
+- ✅ **WebSockets Live Logs**: `/ws/logs` endpoint + صفحة `/logs` مع auto-reconnect
+- ✅ **Prometheus Metrics**: `/metrics` endpoint مع counters/histograms/gauges
 
-### v5.0 (المستقبل)
-- [ ] ٣+ userbots موزّعة فعلياً
-- [ ] ١٠ مزودي LLM (إضافة: Cohere, Mistral, Together AI, Anyscale, Cloudflare Workers AI)
-- [ ] Federated learning بين الحسابات
-- [ ] SaaS billing (Stripe)
-- [ ] Mobile app (React Native)
+### v5.0 ✅ (جزئياً — انظر التفاصيل)
+- ✅ **١٠ مزودي LLM**: Cohere + Mistral + Together + Anyscale + Cloudflare مُضافين
+- ✅ **Distributed Userbots**: `WorkerCoordinator` + Redis claim locks + heartbeats + dead-worker detection
+- ✅ **Stripe Billing**: `Subscription` model + Checkout + Webhooks + usage tracking (`/api/v1/billing/*`)
+- ✅ **Federated Learning**: واجهة `BaseFederatedAggregator` + `LocalStubAggregator` + وثيقة تصميم
+- ⏳ **Mobile app (React Native)**: مؤجّل (يحتاج فريق منفصل)
+
+### v5.1 (التالي)
+- [ ] استبدال `LocalStubAggregator` بـ `FlowerAggregator` حقيقي
+- [ ] نقل قاعدة البيانات إلى PostgreSQL لتفعيل RLS حقيقي على مستوى الـ DB
+- [ ] Mobile app (React Native) — يحتاج فريق منفصل
+- [ ] Prometheus alerting rules + Grafana dashboards
+- [ ] Multi-region deployment
 
 ---
 

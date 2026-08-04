@@ -118,6 +118,13 @@ class VitalityChecker:
                 error=result.error,
             ))
             db.commit()
+
+        # v4.1 Prometheus metrics
+        try:
+            from ..web.metrics import record_vitality
+            record_vitality(result="alive" if result.alive else "dead")
+        except Exception:
+            pass
         return result
 
     async def run_loop(self, batch_size: int = 20) -> None:

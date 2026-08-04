@@ -27,15 +27,27 @@ from .providers import (
     LLMResponse,
     OpenRouterProvider,
     ZAIProvider,
+    # v5.0 additional providers
+    CohereProvider,
+    MistralProvider,
+    TogetherProvider,
+    AnyscaleProvider,
+    CloudflareProvider,
 )
 from .quota_tracker import QuotaTracker
 
 
 # Provider priority — cheapest/fastest first
+# v5.0: expanded to 10 providers
 DEFAULT_PRIORITY = [
     "groq",        # LPU, fastest
     "gemini",      # generous free tier
+    "cloudflare",  # edge network, fast
     "openrouter",  # many free models
+    "mistral",     # direct API
+    "together",    # open-source models
+    "anyscale",    # Llama fine-tunes
+    "cohere",      # Command R
     "huggingface", # slower but free
     "zai",         # fallback
 ]
@@ -59,7 +71,12 @@ class LLMOrchestrator:
         return [
             GroqProvider(),
             GeminiProvider(),
+            CloudflareProvider(),
             OpenRouterProvider(),
+            MistralProvider(),
+            TogetherProvider(),
+            AnyscaleProvider(),
+            CohereProvider(),
             HuggingFaceProvider(),
             ZAIProvider(),
         ]
@@ -107,17 +124,34 @@ class LLMOrchestrator:
             if response.error == "rate_limited" or "429" in (response.error or ""):
                 self.tracker.update_rate_limited(name, response.quota)
                 logger.info("[orchestrator] {} rate-limited, failover", name)
+                try:
+                    from ..web.metrics import record_llm_call
+                    record_llm_call(provider=name, status="rate_limited")
+                except Exception:
+                    pass
                 continue
 
             if response.error:
                 self.tracker.update_failure(name, response.error)
                 last_error = response.error
+                try:
+                    from ..web.metrics import record_llm_call
+                    record_llm_call(provider=name, status="error")
+                except Exception:
+                    pass
                 continue
 
             # Success
             self.tracker.update_success(name, response.quota)
             logger.debug("[orchestrator] {} ok ({}ms, {} in / {} out)",
                          name, latency_ms, response.tokens_in, response.tokens_out)
+            # v4.1 Prometheus metrics
+            try:
+                from ..web.metrics import record_llm_call
+                record_llm_call(provider=name, status="success",
+                                latency_seconds=latency_ms / 1000.0)
+            except Exception:
+                pass
             return response
 
         logger.warning("[orchestrator] all providers failed; last_error={}", last_error)

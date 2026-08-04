@@ -3,21 +3,24 @@ Classify worker — picks NEW links and runs them through the classification pip
 
 Per-link flow:
     1. Lock via Redis (prevent duplicate work across workers)
-    2. Run ClassificationPipeline.classify()
+    2. Run ClassificationPipeline.classify() (with semantic memory tier)
     3. Apply result to Link + write ClassificationLog
-    4. Compute embedding for semantic memory + search
-    5. Release lock
+    4. Compute embedding for semantic search (if LLM available)
+    5. Record Prometheus metrics
+    6. Release lock
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 
 from loguru import logger
 from sqlalchemy import select
 
 from ..classifier.pipeline import ClassificationPipeline
+from ..classifier.semantic_memory import SemanticMemory
 from ..database import SessionLocal
 from ..llm.orchestrator import LLMOrchestrator
 from ..models import Link, LinkEmbedding, LinkStatus
@@ -41,7 +44,11 @@ async def classify_once(orchestrator: LLMOrchestrator) -> int:
     if not links:
         return 0
 
-    pipeline = ClassificationPipeline(llm_orchestrator=orchestrator)
+    semantic_memory = SemanticMemory()
+    pipeline = ClassificationPipeline(
+        llm_orchestrator=orchestrator,
+        semantic_memory=semantic_memory,
+    )
     classified = 0
 
     for link in links:
@@ -50,18 +57,40 @@ async def classify_once(orchestrator: LLMOrchestrator) -> int:
             if fresh is None:
                 continue
             try:
-                result = await pipeline.classify(fresh.url, context=fresh.title or "")
+                t0 = time.perf_counter()
+                result = await pipeline.classify(
+                    fresh.url,
+                    context=fresh.title or "",
+                )
+                latency = time.perf_counter() - t0
                 pipeline.db = db  # type: ignore
                 pipeline.apply_to_link(fresh, result)
                 db.commit()
                 classified += 1
-                logger.info("[classify] #{} → {} ({}, {})",
-                            fresh.id, result.category.value,
-                            result.tier.value, result.confidence)
 
-                # Embedding for semantic search
-                if orchestrator is not None:
-                    text = " ".join(filter(None, [fresh.url, fresh.title or "", fresh.description or ""]))
+                # v4.1 metrics
+                try:
+                    from ..web.metrics import record_classified, record_semantic_hit
+                    record_classified(tier=result.tier.value, latency_seconds=latency)
+                    if result.semantic_reused:
+                        record_semantic_hit(hit=True)
+                    elif orchestrator is not None:
+                        record_semantic_hit(hit=False)
+                except Exception:
+                    pass
+
+                logger.info(
+                    "[classify] #{} → {} ({}, {}, reuse={})",
+                    fresh.id, result.category.value,
+                    result.tier.value, round(result.confidence, 2),
+                    result.semantic_reused,
+                )
+
+                # Embedding for semantic search (separate from cache)
+                if orchestrator is not None and not result.semantic_reused:
+                    text = " ".join(filter(None, [
+                        fresh.url, fresh.title or "", fresh.description or "",
+                    ]))
                     vec = orchestrator.embed(text)
                     if vec is not None:
                         db.add(LinkEmbedding(

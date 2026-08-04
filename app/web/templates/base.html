@@ -19,6 +19,9 @@
                 <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>لوحة التحكم</a>
                 <a href="/links" {% if "/links" in request.url.path %}class="active"{% endif %}>الروابط</a>
                 <a href="/accounts" {% if "/accounts" in request.url.path %}class="active"{% endif %}>الحسابات</a>
+                <a href="/logs" {% if "/logs" in request.url.path %}class="active"{% endif %}>Live Logs</a>
+                <a href="/tenants" {% if "/tenants" in request.url.path %}class="active"{% endif %}>Tenants</a>
+                <a href="/metrics" target="_blank">Metrics</a>
                 <a href="/docs" target="_blank">API</a>
             </nav>
         </div>

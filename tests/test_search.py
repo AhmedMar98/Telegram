@@ -53,23 +53,27 @@ def _seed_links():
         db.commit()
 
 
+def _run_async(coro):
+    """Run a coroutine with a fresh event loop (Python 3.12 compatible)."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def test_fts_search_finds_python_links():
     _seed_links()
     s = HybridSearch(llm_orchestrator=None)
     s.init_fts()
-    # The FTS search is synchronous internally
-    results = asyncio.get_event_loop().run_until_complete(
-        s.search("python", limit=10)
-    )
+    results = _run_async(s.search("python", limit=10))
     titles = [r.title for r in results]
     assert any("Python" in t for t in titles), f"Expected Python in results, got {titles}"
 
 
 def test_search_empty_query_returns_empty():
     s = HybridSearch(llm_orchestrator=None)
-    results = asyncio.get_event_loop().run_until_complete(
-        s.search("", limit=10)
-    )
+    results = _run_async(s.search("", limit=10))
     assert results == []
 
 
@@ -77,9 +81,7 @@ def test_search_with_category_filter():
     _seed_links()
     s = HybridSearch(llm_orchestrator=None)
     s.init_fts()
-    results = asyncio.get_event_loop().run_until_complete(
-        s.search("python", category="telegram", limit=10)
-    )
+    results = _run_async(s.search("python", category="telegram", limit=10))
     for r in results:
         assert r.category == "telegram"
 
@@ -94,9 +96,7 @@ def test_search_alive_only():
 
     s = HybridSearch(llm_orchestrator=None)
     s.init_fts()
-    results = asyncio.get_event_loop().run_until_complete(
-        s.search("python", alive_only=True, limit=10)
-    )
+    results = _run_async(s.search("python", alive_only=True, limit=10))
     for r in results:
         assert r.alive is True
 
@@ -105,9 +105,7 @@ def test_search_result_has_score():
     _seed_links()
     s = HybridSearch(llm_orchestrator=None)
     s.init_fts()
-    results = asyncio.get_event_loop().run_until_complete(
-        s.search("python", limit=5)
-    )
+    results = _run_async(s.search("python", limit=5))
     assert len(results) > 0
     for r in results:
         assert 0.0 <= r.score <= 1.0

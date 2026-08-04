@@ -69,6 +69,25 @@ class Settings(BaseSettings):
     hf_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
     zai_api_key: str = ""
     zai_model: str = "glm-4-flash"
+    # v5.0 additional providers
+    cohere_api_key: str = ""
+    cohere_model: str = "command-r-08-2024"
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-small-latest"
+    together_api_key: str = ""
+    together_model: str = "meta-llama/Llama-3-8b-chat-hf"
+    anyscale_api_key: str = ""
+    anyscale_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    cloudflare_api_key: str = ""
+    cloudflare_account_id: str = ""
+    cloudflare_model: str = "@cf/meta/llama-3.1-8b-instruct"
+
+    # --- Stripe billing (v5.0) ---
+    stripe_api_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_free: str = ""
+    stripe_price_pro: str = ""
+    stripe_price_enterprise: str = ""
 
     # --- Classification ---
     semantic_reuse_threshold: float = 0.92

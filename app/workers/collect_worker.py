@@ -20,6 +20,7 @@ from sqlalchemy import select
 from ..collectors.base import make_collector
 from ..database import SessionLocal
 from ..models import Channel, Link, LinkStatus
+from ..tenant import get_current_tenant
 
 
 def url_hash(url: str) -> str:
@@ -60,6 +61,7 @@ async def collect_once() -> int:
                     new_link = Link(
                         url=link_ext.url,
                         url_hash=url_hash(link_ext.url),
+                        tenant_id=get_current_tenant().tenant_id,
                         title=None,
                         description=None,
                         category="unknown",
@@ -71,6 +73,12 @@ async def collect_once() -> int:
                     db.add(new_link)
                     db.commit()
                     new_count += 1
+                    # v4.1 metrics
+                    try:
+                        from ..web.metrics import record_link_collected
+                        record_link_collected()
+                    except Exception:
+                        pass
                     logger.debug("[collect] new link #{}: {}", new_link.id, link_ext.url[:80])
 
                     # Update channel's last_message_id

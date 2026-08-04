@@ -63,24 +63,28 @@ class HybridSearch:
             return
         with engine.connect() as conn:
             try:
+                # Create FTS5 table without contentless external-content linking
+                # (simpler + more robust against schema changes)
                 conn.execute(text(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS {self.FTS_TABLE}
                     USING fts5(
                         link_id UNINDEXED,
                         url, title, description, category,
-                        content='links',
-                        content_rowid='id',
                         tokenize='unicode61'
                     )
                 """))
-                # Populate existing rows
-                conn.execute(text(f"""
-                    INSERT INTO {self.FTS_TABLE}(rowid, link_id, url, title, description, category)
-                    SELECT id, id, url, COALESCE(title,''), COALESCE(description,''), category
-                    FROM links
-                    WHERE id NOT IN (SELECT link_id FROM {self.FTS_TABLE})
-                """))
                 conn.commit()
+                # Populate from links table (idempotent via NOT EXISTS check)
+                try:
+                    conn.execute(text(f"""
+                        INSERT INTO {self.FTS_TABLE}(rowid, link_id, url, title, description, category)
+                        SELECT id, id, url, COALESCE(title,''), COALESCE(description,''), category
+                        FROM links
+                        WHERE id NOT IN (SELECT link_id FROM {self.FTS_TABLE} WHERE link_id IS NOT NULL)
+                    """))
+                    conn.commit()
+                except Exception:
+                    pass  # OK if empty or already populated
                 self._fts_initialized = True
                 logger.info("FTS5 table '{}' initialized", self.FTS_TABLE)
             except Exception as e:

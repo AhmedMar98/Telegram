@@ -128,6 +128,28 @@ async def accounts_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request):
+    """Live log viewer (WebSocket-based)."""
+    return templates.TemplateResponse(
+        request=request,
+        name="logs.html",
+        context={},
+    )
+
+
+@router.get("/tenants", response_class=HTMLResponse)
+async def tenants_page(request: Request, db: Session = Depends(get_db)):
+    """Multi-tenant management panel."""
+    from ..models import Tenant
+    tenants = db.query(Tenant).all()
+    return templates.TemplateResponse(
+        request=request,
+        name="tenants.html",
+        context={"tenants": tenants},
+    )
+
+
 # ============================================================
 # REST API
 # ============================================================
