@@ -5,10 +5,11 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from loguru import logger
+
 from app.database import SessionLocal, init_db
 from app.logging_setup import setup_logging
 from app.models import Account
-from loguru import logger
 
 
 def seed_default_account() -> None:

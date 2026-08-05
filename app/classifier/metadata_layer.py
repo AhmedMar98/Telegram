@@ -11,7 +11,6 @@ Uses HTTP HEAD/GET to fetch:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -24,11 +23,11 @@ from ..models import LinkCategory
 class MetadataResult:
     category: LinkCategory
     confidence: float
-    title: Optional[str] = None
-    description: Optional[str] = None
-    http_status: Optional[int] = None
-    final_url: Optional[str] = None
-    content_type: Optional[str] = None
+    title: str | None = None
+    description: str | None = None
+    http_status: int | None = None
+    final_url: str | None = None
+    content_type: str | None = None
 
 
 # Map content-type → category
@@ -45,14 +44,14 @@ _CT_MAP = [
 ]
 
 
-def _categorize_by_content_type(ct: str) -> Optional[tuple[LinkCategory, float]]:
+def _categorize_by_content_type(ct: str) -> tuple[LinkCategory, float] | None:
     for prefix, cat, conf in _CT_MAP:
         if ct.lower().startswith(prefix):
             return cat, conf
     return None
 
 
-def _categorize_by_html_title(title: str, desc: str = "") -> Optional[tuple[LinkCategory, float]]:
+def _categorize_by_html_title(title: str, desc: str = "") -> tuple[LinkCategory, float] | None:
     """Heuristic: scan title keywords."""
     text = f"{title} {desc}".lower()
     if not text.strip():
@@ -69,7 +68,7 @@ def _categorize_by_html_title(title: str, desc: str = "") -> Optional[tuple[Link
     return None
 
 
-async def fetch_metadata(url: str, timeout: float = 8.0) -> Optional[MetadataResult]:
+async def fetch_metadata(url: str, timeout: float = 8.0) -> MetadataResult | None:
     """
     Fetch URL metadata (HEAD first, GET if HTML needed).
 

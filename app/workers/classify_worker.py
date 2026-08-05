@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime
 
 from loguru import logger
 from sqlalchemy import select
@@ -24,7 +23,6 @@ from ..classifier.semantic_memory import SemanticMemory
 from ..database import SessionLocal
 from ..llm.orchestrator import LLMOrchestrator
 from ..models import Link, LinkEmbedding, LinkStatus
-
 
 # Max links per cycle
 BATCH_SIZE = 50

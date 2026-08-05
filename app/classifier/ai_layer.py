@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional
 
 from loguru import logger
 
@@ -54,7 +53,7 @@ Return JSON: {{"category": "...", "confidence": 0.0-1.0, "reason": "...", "tags"
 _VALID_CATS = {c.value for c in LinkCategory}
 
 
-def _parse_llm_json(raw: str) -> Optional[dict]:
+def _parse_llm_json(raw: str) -> dict | None:
     """Robust JSON extraction from LLM output (handles code fences, extra text)."""
     if not raw:
         return None
@@ -81,7 +80,7 @@ async def classify_with_llm(
     url: str,
     context: str = "",
     deep: bool = False,
-) -> Optional[AIResult]:
+) -> AIResult | None:
     """Use the LLM orchestrator to classify a URL."""
     user_msg = (
         f"URL: {url}\nContext: {context[:500]}"

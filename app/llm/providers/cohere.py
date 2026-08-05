@@ -1,13 +1,11 @@
 """Cohere provider — Command R / Command R+ via Cohere API v2."""
 from __future__ import annotations
 
-from typing import List, Optional
-
 import httpx
 from loguru import logger
 
 from ...config import get_settings
-from .base import BaseLLMProvider, LLMResponse, QuotaInfo
+from .base import BaseLLMProvider, LLMResponse
 
 
 class CohereProvider(BaseLLMProvider):
@@ -25,10 +23,10 @@ class CohereProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         if not self.is_available:
             return None
         headers = {

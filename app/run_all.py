@@ -16,7 +16,7 @@ from loguru import logger
 
 from .config import get_settings
 from .logging_setup import setup_logging
-from .workers import collect_worker, classify_worker, vitality_worker
+from .workers import classify_worker, collect_worker, vitality_worker
 
 
 async def main() -> None:

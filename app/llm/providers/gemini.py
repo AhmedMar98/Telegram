@@ -1,12 +1,10 @@
 """Google Gemini provider via the google-generativeai SDK."""
 from __future__ import annotations
 
-from typing import List, Optional
-
 from loguru import logger
 
 from ...config import get_settings
-from .base import BaseLLMProvider, LLMResponse, QuotaInfo
+from .base import BaseLLMProvider, LLMResponse
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -39,10 +37,10 @@ class GeminiProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         if not self.is_available:
             return None
         client = self._ensure_client()

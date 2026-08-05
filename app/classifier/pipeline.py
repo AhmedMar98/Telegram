@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
 
 from loguru import logger
 
@@ -29,7 +27,7 @@ from ..models import (
 from .ai_layer import classify_with_llm
 from .metadata_layer import fetch_metadata
 from .rules_layer import classify_with_rules
-from .semantic_memory import SemanticMemory, SemanticHit
+from .semantic_memory import SemanticMemory
 
 
 @dataclass
@@ -37,10 +35,10 @@ class ClassificationResult:
     category: LinkCategory
     confidence: float
     tier: ClassificationTier
-    rule_matched: Optional[str] = None
-    title: Optional[str] = None
-    description: Optional[str] = None
-    llm_provider: Optional[str] = None
+    rule_matched: str | None = None
+    title: str | None = None
+    description: str | None = None
+    llm_provider: str | None = None
     semantic_reused: bool = False
     semantic_similarity: float = 0.0
 
@@ -54,7 +52,7 @@ class ClassificationPipeline:
     """Orchestrates tiered classification with semantic memory."""
 
     def __init__(self, llm_orchestrator=None, db_session=None,
-                 semantic_memory: Optional[SemanticMemory] = None) -> None:
+                 semantic_memory: SemanticMemory | None = None) -> None:
         self.llm = llm_orchestrator
         self.db = db_session
         # Semantic memory is optional but recommended when LLM is configured

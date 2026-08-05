@@ -7,13 +7,10 @@ Python's sqlite3 module.
 """
 from __future__ import annotations
 
-import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from .config import DATA_DIR, get_settings
 
@@ -80,8 +77,9 @@ def get_db():
 
 def init_db() -> None:
     """Create all tables (used by scripts/init_db.py)."""
-    from . import models  # noqa: F401 — register models
     from sqlalchemy.orm import registry
+
+    from . import models  # noqa: F401 — register models
 
     # Ensure all models are mapped
     registry().configure()

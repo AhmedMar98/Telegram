@@ -14,13 +14,12 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncIterator, Iterable, Optional
+from typing import AsyncIterator, Iterable
 from urllib.parse import urlparse
 
 from loguru import logger
 
 from ..config import get_settings
-
 
 # ============================================================
 # Regex patterns
@@ -42,7 +41,7 @@ class LinkExtraction:
 
     url: str
     source_channel: str
-    source_message_id: Optional[int] = None
+    source_message_id: int | None = None
     discovered_at: datetime = field(default_factory=datetime.utcnow)
     # Raw text around the link (helps classification)
     context: str = ""
@@ -60,7 +59,7 @@ class CollectedMessage:
     """A raw message pulled from a source."""
 
     channel: str
-    message_id: Optional[int]
+    message_id: int | None
     text: str
     timestamp: datetime
     has_media: bool = False
@@ -89,7 +88,7 @@ class BaseCollector(ABC):
 
     @abstractmethod
     async def fetch_messages(
-        self, channel: str, last_message_id: Optional[int] = None
+        self, channel: str, last_message_id: int | None = None
     ) -> AsyncIterator[CollectedMessage]:
         """Yield messages from a channel newer than last_message_id."""
         ...
@@ -97,7 +96,7 @@ class BaseCollector(ABC):
         yield  # pragma: no cover
 
     async def collect_links(
-        self, channel: str, last_message_id: Optional[int] = None
+        self, channel: str, last_message_id: int | None = None
     ) -> AsyncIterator[LinkExtraction]:
         """
         Fetch messages, extract links, yield LinkExtraction objects.

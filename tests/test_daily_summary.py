@@ -1,5 +1,5 @@
 """Tests for the Daily Summary worker (v4.1)."""
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 

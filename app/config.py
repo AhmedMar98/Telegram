@@ -9,11 +9,9 @@ from __future__ import annotations
 import secrets
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 # Project root (one level above /app)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -114,6 +112,11 @@ class Settings(BaseSettings):
     web_admin_username: str = "admin"
     web_admin_password: str = "change-me"
 
+    # --- SaaS mode ---
+    # When true, every /api request must present X-API-Key (single-tenant
+    # fallback is disabled).
+    saas_mode: bool = False
+
     # --- Oracle deploy ---
     oracle_host: str = ""
     oracle_user: str = "ubuntu"
@@ -122,7 +125,7 @@ class Settings(BaseSettings):
 
     # --- Derived helpers ---
     @property
-    def monitor_channels_list(self) -> List[str]:
+    def monitor_channels_list(self) -> list[str]:
         if not self.tg_monitor_channels.strip():
             return []
         return [c.strip() for c in self.tg_monitor_channels.split(",") if c.strip()]

@@ -1,26 +1,19 @@
 """API routes — FastAPI routers for REST endpoints + web panel."""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import (
     Account,
-    AuditEvent,
-    ClassificationLog,
-    LLMProviderState,
     Link,
     LinkCategory,
     LinkStatus,
-    VitalityCheck,
+    LLMProviderState,
 )
 from ..search.hybrid import HybridSearch
 
@@ -34,7 +27,7 @@ api_router = APIRouter(prefix="/api/v1")
 templates = Jinja2Templates(directory="app/web/templates")
 
 # Shared search engine (initialized lazily)
-_search_engine: Optional[HybridSearch] = None
+_search_engine: HybridSearch | None = None
 
 
 def get_search_engine() -> HybridSearch:
@@ -93,8 +86,8 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 @router.get("/links", response_class=HTMLResponse)
 async def links_page(
     request: Request,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     """Browse all links with optional filters."""
@@ -156,8 +149,8 @@ async def tenants_page(request: Request, db: Session = Depends(get_db)):
 
 @api_router.get("/links")
 async def list_links(
-    category: Optional[str] = None,
-    alive: Optional[bool] = None,
+    category: str | None = None,
+    alive: bool | None = None,
     limit: int = Query(50, le=500),
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -226,7 +219,7 @@ async def trigger_vitality_check(link_id: int, db: Session = Depends(get_db)):
 @api_router.get("/search")
 async def api_search(
     q: str = Query(..., min_length=1),
-    category: Optional[str] = None,
+    category: str | None = None,
     alive_only: bool = False,
     limit: int = Query(20, le=100),
 ):

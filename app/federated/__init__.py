@@ -29,9 +29,9 @@ class FederatedModelUpdate:
     """A local model update (gradient or weight delta) from one worker."""
     worker_id: str
     round_num: int
-    weights_delta: Optional[Dict[str, List[float]]] = None
+    weights_delta: dict[str, list[float]] | None = None
     num_samples: int = 0
-    metrics: Dict[str, float] = None  # type: ignore
+    metrics: dict[str, float] = None  # type: ignore
 
 
 class BaseFederatedAggregator(ABC):
@@ -43,7 +43,7 @@ class BaseFederatedAggregator(ABC):
         ...
 
     @abstractmethod
-    async def get_global_weights(self) -> Dict[str, List[float]]:
+    async def get_global_weights(self) -> dict[str, list[float]]:
         """Get the current aggregated model weights."""
         ...
 
@@ -64,9 +64,9 @@ class LocalStubAggregator(BaseFederatedAggregator):
     """
 
     def __init__(self) -> None:
-        self._updates: List[FederatedModelUpdate] = []
+        self._updates: list[FederatedModelUpdate] = []
         self._round = 0
-        self._global_weights: Dict[str, List[float]] = {}
+        self._global_weights: dict[str, list[float]] = {}
         logger.info("[federated] using LocalStubAggregator (no real FL)")
 
     async def submit_update(self, update: FederatedModelUpdate) -> None:
@@ -76,7 +76,7 @@ class LocalStubAggregator(BaseFederatedAggregator):
             update.worker_id, update.round_num, update.num_samples,
         )
 
-    async def get_global_weights(self) -> Dict[str, List[float]]:
+    async def get_global_weights(self) -> dict[str, list[float]]:
         return self._global_weights
 
     async def start_round(self, min_workers: int = 2) -> int:
@@ -88,7 +88,7 @@ class LocalStubAggregator(BaseFederatedAggregator):
 
 
 # Singleton
-_aggregator: Optional[BaseFederatedAggregator] = None
+_aggregator: BaseFederatedAggregator | None = None
 
 
 def get_federated_aggregator() -> BaseFederatedAggregator:

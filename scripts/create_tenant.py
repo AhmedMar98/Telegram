@@ -32,7 +32,7 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("\nUsage:")
     print(f"  curl -H 'X-API-Key: {api_key[:20]}...' \\")
-    print(f"       https://your-host/api/v1/links")
+    print("       https://your-host/api/v1/links")
     print("\nTo activate SaaS mode (require API key on every request):")
     print("  echo 'SAAS_MODE=true' >> .env")
 

@@ -9,14 +9,11 @@ Uses prometheus_client (pure-Python, no extra infra required).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Response
 from loguru import logger
 
 from ..database import SessionLocal
-from ..models import Link, LinkStatus, LLMProviderState, SemanticCache
-
+from ..models import Link, LLMProviderState, SemanticCache
 
 router = APIRouter()
 
@@ -140,7 +137,7 @@ def record_vitality(result: str) -> None:
         m["links_vitality_checked_total"].labels(result=result).inc()
 
 
-def record_llm_call(provider: str, status: str, latency_seconds: Optional[float] = None) -> None:
+def record_llm_call(provider: str, status: str, latency_seconds: float | None = None) -> None:
     m = _init_metrics()
     if m:
         m["llm_calls_total"].labels(provider=provider, status=status).inc()

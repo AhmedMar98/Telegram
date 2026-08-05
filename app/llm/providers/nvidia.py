@@ -16,8 +16,6 @@ Get a key from: https://build.nvidia.com/ → "Get API Key"
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 import httpx
 from loguru import logger
 
@@ -40,10 +38,10 @@ class NVIDIAProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 1024,
         temperature: float = 0.6,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         """
         Send a chat completion to NVIDIA Integrate API.
 

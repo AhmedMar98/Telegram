@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from typing import List, Optional
 
 from loguru import logger
 
@@ -33,10 +32,10 @@ class ZAIProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         # Prefer CLI (works in environments with z-ai-web-dev-sdk installed)
         if self._cli_path:
             return await self._chat_via_cli(messages, max_tokens, temperature)
@@ -46,8 +45,8 @@ class ZAIProvider(BaseLLMProvider):
         return None
 
     async def _chat_via_cli(
-        self, messages: List[dict], max_tokens: int, temperature: float
-    ) -> Optional[LLMResponse]:
+        self, messages: list[dict], max_tokens: int, temperature: float
+    ) -> LLMResponse | None:
         """Invoke the z-ai CLI with a JSON payload."""
         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
         cmd = [self._cli_path, "llm", "--prompt", prompt, "--max-tokens", str(max_tokens)]
@@ -70,7 +69,7 @@ class ZAIProvider(BaseLLMProvider):
             except json.JSONDecodeError:
                 pass
             return LLMResponse(text=text, provider=self.name, model=self.model)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[zai] CLI timeout")
             return None
         except Exception as e:
@@ -78,8 +77,8 @@ class ZAIProvider(BaseLLMProvider):
             return None
 
     async def _chat_via_http(
-        self, messages: List[dict], max_tokens: int, temperature: float
-    ) -> Optional[LLMResponse]:
+        self, messages: list[dict], max_tokens: int, temperature: float
+    ) -> LLMResponse | None:
         """Direct HTTP fallback (assumes Z.AI OpenAI-compatible endpoint)."""
         import httpx
         try:

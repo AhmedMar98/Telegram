@@ -9,14 +9,12 @@ In-memory fallback when DB tables aren't available (e.g. during unit tests).
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from loguru import logger
 from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import LLMProviderState
-
 
 # Cooldown after a rate-limit hit
 DEFAULT_COOLDOWN_SEC = 60
@@ -83,9 +81,8 @@ class QuotaTracker:
                     db.add(state)
                 state.cooldown_until = datetime.utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
                 state.last_error = "rate_limited"
-                if quota is not None:
-                    if quota.reset_at is not None:
-                        state.quota_resets_at = quota.reset_at
+                if quota is not None and quota.reset_at is not None:
+                    state.quota_resets_at = quota.reset_at
                 db.commit()
         self._try_db(_db_op)
         logger.info("[quota] {} rate-limited, cooldown {}s", provider, DEFAULT_COOLDOWN_SEC)

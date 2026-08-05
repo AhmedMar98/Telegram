@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, time, timedelta
-from typing import List
+from datetime import datetime, timedelta
 
 from loguru import logger
 from sqlalchemy import func, select
@@ -25,8 +24,6 @@ from ..database import SessionLocal
 from ..models import (
     DailySummary,
     Link,
-    LinkStatus,
-    LLMProviderState,
 )
 
 
@@ -50,7 +47,7 @@ class DailySummaryWorker:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=sleep_sec)
                 return  # stop signal received
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             try:
                 await self.generate_and_store()

@@ -1,8 +1,6 @@
 """Groq provider — fastest free inference (LPU), OpenAI-compatible API."""
 from __future__ import annotations
 
-from typing import List, Optional
-
 import httpx
 from loguru import logger
 
@@ -25,10 +23,10 @@ class GroqProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         if not self.is_available:
             return None
         headers = {
@@ -71,7 +69,7 @@ class GroqProvider(BaseLLMProvider):
             return None
 
     @staticmethod
-    def _parse_quota(headers) -> Optional[QuotaInfo]:
+    def _parse_quota(headers) -> QuotaInfo | None:
         """Groq returns x-ratelimit-* headers."""
         try:
             return QuotaInfo(
@@ -83,7 +81,7 @@ class GroqProvider(BaseLLMProvider):
             return None
 
 
-def _int(v) -> Optional[int]:
+def _int(v) -> int | None:
     if v is None:
         return None
     try:

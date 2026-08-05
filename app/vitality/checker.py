@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import random
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 import httpx
 from loguru import logger
@@ -25,7 +25,6 @@ from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import Link, LinkStatus, VitalityCheck
-
 
 # Defaults
 DEFAULT_DELAY_MIN = 5 * 60   # 5 minutes
@@ -41,10 +40,10 @@ USER_AGENT = (
 @dataclass
 class VitalityResult:
     alive: bool
-    http_status: Optional[int]
-    response_time_ms: Optional[int]
-    error: Optional[str] = None
-    final_url: Optional[str] = None
+    http_status: int | None
+    response_time_ms: int | None
+    error: str | None = None
+    final_url: str | None = None
 
 
 class VitalityChecker:
@@ -62,44 +61,76 @@ class VitalityChecker:
         self._stop = asyncio.Event()
 
     async def check_url(self, url: str) -> VitalityResult:
-        """Check a single URL. Returns VitalityResult."""
+        """Check a single URL. Returns VitalityResult.
+
+        SSL verification is enabled by default. If a host presents a bad cert
+        we retry once with verification disabled but tag the result with
+        error="tls_bypassed" so downstream consumers can distinguish it from
+        a normal alive result.
+        """
         if not url:
             return VitalityResult(alive=False, http_status=None, response_time_ms=None,
                                   error="empty_url")
         headers = {"User-Agent": USER_AGENT}
         t0 = asyncio.get_event_loop().time()
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=self.timeout,
-                headers=headers,
-                verify=False,  # some Telegram-related certs are sketchy
-            ) as client:
-                # Try HEAD first (lighter); fall back to GET if 405
-                try:
-                    r = await client.head(url)
-                    if r.status_code in (405, 403, 501):
-                        r = await client.get(url)
-                except httpx.HTTPError:
-                    r = await client.get(url)
-
-                elapsed = int((asyncio.get_event_loop().time() - t0) * 1000)
-                alive = 200 <= r.status_code < 400
-                return VitalityResult(
-                    alive=alive,
-                    http_status=r.status_code,
-                    response_time_ms=elapsed,
-                    final_url=str(r.url),
-                )
+            result = await self._probe(url, headers, verify=True)
+            if result is not None:
+                return result
         except httpx.TimeoutException:
             return VitalityResult(alive=False, http_status=None,
                                   response_time_ms=None, error="timeout")
-        except httpx.ConnectError as e:
-            return VitalityResult(alive=False, http_status=None,
-                                  response_time_ms=None, error=f"connect_error: {e}")
+        except (httpx.ConnectError, ssl.SSLError) as e:
+            # Fall through to the insecure retry below for TLS errors only.
+            if not isinstance(e, ssl.SSLError) and "SSL" not in str(e):
+                return VitalityResult(alive=False, http_status=None,
+                                      response_time_ms=None,
+                                      error=f"connect_error: {e}")
         except Exception as e:
             return VitalityResult(alive=False, http_status=None,
                                   response_time_ms=None, error=str(e))
+
+        # TLS retry — some Telegram-adjacent hosts present self-signed certs.
+        # We record the bypass explicitly so callers can flag these results.
+        try:
+            result = await self._probe(url, headers, verify=False)
+            if result is None:
+                return VitalityResult(alive=False, http_status=None,
+                                      response_time_ms=None,
+                                      error="probe_failed")
+            # Preserve alive/http_status but tag the TLS bypass.
+            result.error = (result.error + "; tls_bypassed") if result.error else "tls_bypassed"
+            return result
+        except Exception as e:
+            return VitalityResult(alive=False, http_status=None,
+                                  response_time_ms=int((asyncio.get_event_loop().time() - t0) * 1000),
+                                  error=f"tls_retry_failed: {e}")
+
+    async def _probe(self, url: str, headers: dict, verify: bool) -> VitalityResult | None:
+        """Actual HTTP probe. Returns VitalityResult on completion; None if unreachable."""
+        t0 = asyncio.get_event_loop().time()
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=self.timeout,
+            headers=headers,
+            verify=verify,
+        ) as client:
+            # Try HEAD first (lighter); fall back to GET on 405/403/501 or HTTP errors.
+            try:
+                r = await client.head(url)
+                if r.status_code in (405, 403, 501):
+                    r = await client.get(url)
+            except httpx.HTTPError:
+                r = await client.get(url)
+
+            elapsed = int((asyncio.get_event_loop().time() - t0) * 1000)
+            alive = 200 <= r.status_code < 400
+            return VitalityResult(
+                alive=alive,
+                http_status=r.status_code,
+                response_time_ms=elapsed,
+                final_url=str(r.url),
+            )
 
     async def check_link(self, link: Link, db=None) -> VitalityResult:
         """Check a Link ORM object and persist the result."""
@@ -168,11 +199,13 @@ class VitalityChecker:
                                 fresh.id, fresh.url[:60],
                                 "alive" if result.alive else "dead",
                                 result.http_status or result.error)
-                # Human-like delay between checks
-                delay = random.randint(self.delay_min, self.delay_max)
-                # For tests/dev we don't actually want 5-10min waits —
-                # the loop caller can override by setting shorter delays.
-                await asyncio.sleep(min(delay, 5))  # cap at 5s for responsiveness
+                # Human-like delay between checks.
+                # random used here for pacing only, not for security — S311 safe.
+                delay = random.randint(self.delay_min, self.delay_max)  # noqa: S311
+                # NOTE: this loop currently caps the delay at 5s so the runner
+                # stays responsive during dev/tests. Configure delay_min/delay_max
+                # to a smaller range for production if you want the full jitter.
+                await asyncio.sleep(min(delay, 5))
 
     def stop(self) -> None:
         self._stop.set()

@@ -17,18 +17,15 @@ import hashlib
 import secrets
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import Header, HTTPException, Request
 from loguru import logger
-from sqlalchemy import select
 
 from .database import SessionLocal
 from .models import Tenant
 
-
 # ContextVar propagates tenant_id across async calls in the same request
-_current_tenant: ContextVar[Optional["TenantContext"]] = ContextVar(
+_current_tenant: ContextVar[TenantContext | None] = ContextVar(
     "_current_tenant", default=None
 )
 
@@ -41,7 +38,7 @@ class TenantContext:
     plan: str
 
     @classmethod
-    def default(cls) -> "TenantContext":
+    def default(cls) -> TenantContext:
         """Fallback for single-tenant deployments (no API key required)."""
         return cls(tenant_id=1, slug="default", plan="free")
 
@@ -95,7 +92,7 @@ def create_tenant(name: str, slug: str, plan: str = "free") -> tuple[Tenant, str
         return tenant, plaintext
 
 
-def resolve_tenant_by_api_key(api_key: str) -> Optional[TenantContext]:
+def resolve_tenant_by_api_key(api_key: str) -> TenantContext | None:
     """Look up tenant by API key. Returns None if not found / inactive."""
     if not api_key or not api_key.startswith("lip_"):
         return None
@@ -120,17 +117,17 @@ def resolve_tenant_by_api_key(api_key: str) -> Optional[TenantContext]:
 
 async def tenant_dependency(
     request: Request,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
 ) -> TenantContext:
     """
     FastAPI dependency: extract tenant from X-API-Key header.
 
     For backward compatibility, requests without X-API-Key default to
-    tenant_id=1 (single-tenant mode). When SaaS_MODE=true env is set,
+    tenant_id=1 (single-tenant mode). When settings.saas_mode is true,
     missing API key returns 401.
     """
-    import os
-    saas_mode = os.environ.get("SAAS_MODE", "false").lower() == "true"
+    from .config import get_settings
+    saas_mode = get_settings().saas_mode
 
     if x_api_key:
         ctx = resolve_tenant_by_api_key(x_api_key)

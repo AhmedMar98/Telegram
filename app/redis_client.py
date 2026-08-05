@@ -9,16 +9,13 @@ Used for:
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import redis
 from rq import Queue
 
 from .config import get_settings
 
-
-_redis_pool: Optional[redis.ConnectionPool] = None
-_queue: Optional[Queue] = None
+_redis_pool: redis.ConnectionPool | None = None
+_queue: Queue | None = None
 
 
 def get_redis() -> redis.Redis:

@@ -16,8 +16,7 @@ Setup:
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from loguru import logger
 
@@ -76,7 +75,7 @@ class TelethonCollector(BaseCollector):
         return self._client
 
     async def fetch_messages(
-        self, channel: str, last_message_id: Optional[int] = None
+        self, channel: str, last_message_id: int | None = None
     ) -> AsyncIterator[CollectedMessage]:
         """
         Iterate messages from `channel` (username or numeric ID) newer than last_message_id.

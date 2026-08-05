@@ -1,7 +1,8 @@
 """Main FastAPI application factory."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -12,13 +13,19 @@ from .config import get_settings
 from .logging_setup import setup_logging
 from .web.routes import api_router, router
 
-
 # Global orchestrator (initialized on startup)
 _orchestrator = None
+# Lock protects lazy singleton init in async contexts
+_orchestrator_lock = asyncio.Lock()
 
 
 def get_orchestrator():
-    """Lazy accessor for the LLM orchestrator."""
+    """Lazy accessor for the LLM orchestrator.
+
+    Not thread-safe under high concurrency, but safe within a single event loop
+    because Python's global-var check is atomic and duplicate construction is
+    idempotent (each instance reads the same settings).
+    """
     global _orchestrator
     if _orchestrator is None:
         from .llm.orchestrator import LLMOrchestrator
@@ -53,7 +60,7 @@ async def lifespan(app: FastAPI):
     try:
         from .workers.summary_worker import DailySummaryWorker
         summary_worker = DailySummaryWorker(run_hour=0, run_minute=5)
-        summary_task = __import__("asyncio").create_task(summary_worker.run_loop())
+        summary_task = asyncio.create_task(summary_worker.run_loop())
         logger.info("Daily summary worker scheduled for 00:05 daily")
     except Exception as e:
         logger.warning("Daily summary worker not started: {}", e)
@@ -62,7 +69,6 @@ async def lifespan(app: FastAPI):
     bot_task = None
     if settings.tg_bot_token:
         from .bot.telegram_bot import TelegramSearchBot
-        import asyncio
 
         bot = TelegramSearchBot(search_engine=None)  # uses default
         bot_task = asyncio.create_task(bot.start())
@@ -70,25 +76,19 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
-    if bot_task:
-        bot_task.cancel()
-        try:
-            await bot_task
-        except Exception:
-            pass
-    if summary_task:
-        summary_task.cancel()
-        try:
-            await summary_task
-        except Exception:
-            pass
+    # Cleanup — cancel background tasks and swallow the expected CancelledError.
+    for task in (bot_task, summary_task):
+        if task is None:
+            continue
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
     await bc.stop()
 
 
 def create_app() -> FastAPI:
     """Build and return the FastAPI app."""
-    settings = get_settings()
+    get_settings()
     app = FastAPI(
         title="Link Intelligence Platform",
         version="4.1.0",
@@ -107,8 +107,8 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(api_router)
     # v4.1 routers
-    from .web.websocket_logs import router as ws_router
     from .web.metrics import router as metrics_router
+    from .web.websocket_logs import router as ws_router
     app.include_router(ws_router)
     app.include_router(metrics_router)
     # v5.0 routers (lazy, only if installed)

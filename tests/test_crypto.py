@@ -4,7 +4,6 @@ import pytest
 from app.crypto import (
     CryptoError,
     decrypt,
-    derive_account_hmac,
     encrypt,
     generate_aes_key,
     generate_hmac_key,

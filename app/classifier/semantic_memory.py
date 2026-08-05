@@ -16,7 +16,6 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
 
 from loguru import logger
 from sqlalchemy import select
@@ -43,8 +42,8 @@ class SemanticMemory:
         self.threshold = threshold
 
     def find_similar(
-        self, embedding: List[float], top_k: int = 5
-    ) -> Optional[SemanticHit]:
+        self, embedding: list[float], top_k: int = 5
+    ) -> SemanticHit | None:
         """
         Search the cache for the most similar embedding above the threshold.
 
@@ -65,7 +64,7 @@ class SemanticMemory:
         if not rows:
             return None
 
-        best: Optional[SemanticHit] = None
+        best: SemanticHit | None = None
         best_sim = 0.0
         for row in rows:
             try:
@@ -99,7 +98,7 @@ class SemanticMemory:
         self,
         url: str,
         url_hash: str,
-        embedding: List[float],
+        embedding: list[float],
         category: str,
         tier: str,
         confidence: float,
@@ -154,11 +153,11 @@ class SemanticMemory:
             logger.debug("[semantic-memory] mark_used failed: {}", e)
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity (0..1 for normalized vectors, can go to -1)."""
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:
