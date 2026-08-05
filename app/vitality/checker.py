@@ -17,7 +17,6 @@ import asyncio
 import random
 import ssl
 from dataclasses import dataclass
-from datetime import datetime
 
 import httpx
 from loguru import logger
@@ -25,6 +24,7 @@ from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import Link, LinkStatus, VitalityCheck
+from ..timeutil import utcnow
 
 # Defaults
 DEFAULT_DELAY_MIN = 5 * 60   # 5 minutes
@@ -137,7 +137,7 @@ class VitalityChecker:
         result = await self.check_url(link.url)
         link.http_status = result.http_status
         link.alive = result.alive
-        link.last_checked_at = datetime.utcnow()
+        link.last_checked_at = utcnow()
         link.status = LinkStatus.ALIVE.value if result.alive else LinkStatus.DEAD.value
 
         if db is not None:

@@ -20,6 +20,7 @@ from sqlalchemy import select, text
 
 from ..database import SessionLocal, engine
 from ..models import Link
+from ..timeutil import utcnow
 
 
 @dataclass
@@ -129,10 +130,10 @@ class HybridSearch:
                 stmt = stmt.where(Link.category == category)
             if alive_only:
                 stmt = stmt.where(Link.alive.is_(True))
-            links = {l.id: l for l in db.scalars(stmt)}
+            links = {row.id: row for row in db.scalars(stmt)}
 
         results: list[SearchResult] = []
-        now = datetime.utcnow()
+        now = utcnow()
         for link_id, link in links.items():
             fts_score = fts_ids.get(link_id, 0.0)
             sem_score = semantic_ids.get(link_id, 0.0)

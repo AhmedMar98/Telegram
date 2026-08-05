@@ -166,7 +166,7 @@ async def list_links(
         "total": total,
         "offset": offset,
         "limit": limit,
-        "items": [_link_to_dict(l) for l in links],
+        "items": [_link_to_dict(link) for link in links],
     }
 
 
@@ -292,21 +292,21 @@ async def record_click(link_id: int, db: Session = Depends(get_db)):
     return {"click_count": link.click_count}
 
 
-def _link_to_dict(l: Link) -> dict:
+def _link_to_dict(link: Link) -> dict:
     return {
-        "id": l.id,
-        "url": l.url,
-        "title": l.title,
-        "description": l.description,
-        "category": l.category,
-        "status": l.status,
-        "classification_tier": l.classification_tier,
-        "confidence": l.confidence,
-        "alive": l.alive,
-        "http_status": l.http_status,
-        "source_channel": l.source_channel,
-        "discovered_at": l.discovered_at.isoformat() if l.discovered_at else None,
-        "last_checked_at": l.last_checked_at.isoformat() if l.last_checked_at else None,
-        "click_count": l.click_count,
-        "search_hit_count": l.search_hit_count,
+        "id": link.id,
+        "url": link.url,
+        "title": link.title,
+        "description": link.description,
+        "category": link.category,
+        "status": link.status,
+        "classification_tier": link.classification_tier,
+        "confidence": link.confidence,
+        "alive": link.alive,
+        "http_status": link.http_status,
+        "source_channel": link.source_channel,
+        "discovered_at": link.discovered_at.isoformat() if link.discovered_at else None,
+        "last_checked_at": link.last_checked_at.isoformat() if link.last_checked_at else None,
+        "click_count": link.click_count,
+        "search_hit_count": link.search_hit_count,
     }

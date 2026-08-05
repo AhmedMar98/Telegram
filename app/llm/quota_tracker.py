@@ -8,13 +8,14 @@ In-memory fallback when DB tables aren't available (e.g. during unit tests).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from loguru import logger
 from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import LLMProviderState
+from ..timeutil import utcnow
 
 # Cooldown after a rate-limit hit
 DEFAULT_COOLDOWN_SEC = 60
@@ -42,7 +43,7 @@ class QuotaTracker:
 
     def update_success(self, provider: str, quota=None) -> None:
         """Record a successful call; update quota from headers if available."""
-        self._memory.setdefault(provider, {})["last_success"] = datetime.utcnow()
+        self._memory.setdefault(provider, {})["last_success"] = utcnow()
         self._memory[provider]["cooldown_until"] = None
 
         def _db_op():
@@ -54,7 +55,7 @@ class QuotaTracker:
                 state.is_healthy = True
                 state.requests_today = (state.requests_today or 0) + 1
                 state.requests_total = (state.requests_total or 0) + 1
-                state.last_success_at = datetime.utcnow()
+                state.last_success_at = utcnow()
                 state.cooldown_until = None
                 state.last_error = None
                 if quota is not None:
@@ -70,7 +71,7 @@ class QuotaTracker:
     def update_rate_limited(self, provider: str, quota=None) -> None:
         """Mark provider as rate-limited; apply cooldown."""
         self._memory.setdefault(provider, {})["cooldown_until"] = (
-            datetime.utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
+            utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
         )
 
         def _db_op():
@@ -79,7 +80,7 @@ class QuotaTracker:
                 if state is None:
                     state = LLMProviderState(name=provider)
                     db.add(state)
-                state.cooldown_until = datetime.utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
+                state.cooldown_until = utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
                 state.last_error = "rate_limited"
                 if quota is not None and quota.reset_at is not None:
                     state.quota_resets_at = quota.reset_at
@@ -90,7 +91,7 @@ class QuotaTracker:
     def update_failure(self, provider: str, error: str) -> None:
         """Record a non-rate-limit failure."""
         self._memory.setdefault(provider, {})["cooldown_until"] = (
-            datetime.utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
+            utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
         )
 
         def _db_op():
@@ -100,7 +101,7 @@ class QuotaTracker:
                     state = LLMProviderState(name=provider)
                     db.add(state)
                 state.last_error = error[:500]
-                state.cooldown_until = datetime.utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
+                state.cooldown_until = utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
                 db.commit()
         self._try_db(_db_op)
 
@@ -109,7 +110,7 @@ class QuotaTracker:
         # Check memory first (fast path)
         mem_state = self._memory.get(provider, {})
         mem_cd = mem_state.get("cooldown_until")
-        if mem_cd is not None and mem_cd > datetime.utcnow():
+        if mem_cd is not None and mem_cd > utcnow():
             return True
 
         def _db_op():
@@ -119,7 +120,7 @@ class QuotaTracker:
                     return False
                 if state.cooldown_until is None:
                     return False
-                return state.cooldown_until > datetime.utcnow()
+                return state.cooldown_until > utcnow()
         result = self._try_db(_db_op)
         return result if result is not None else False
 
@@ -129,7 +130,7 @@ class QuotaTracker:
             with self.db_factory() as db:
                 stmt = select(LLMProviderState).where(
                     LLMProviderState.cooldown_until.is_(None) |
-                    (LLMProviderState.cooldown_until <= datetime.utcnow())
+                    (LLMProviderState.cooldown_until <= utcnow())
                 )
                 return [r.name for r in db.scalars(stmt)]
         result = self._try_db(_db_op)

@@ -14,6 +14,7 @@ from loguru import logger
 
 from ..database import SessionLocal
 from ..models import Link, LLMProviderState, SemanticCache
+from ..timeutil import utcnow
 
 router = APIRouter()
 
@@ -32,7 +33,6 @@ def _init_metrics():
             Counter,
             Gauge,
             Histogram,
-            generate_latest,
         )
     except ImportError:
         logger.warning("prometheus_client not installed; /metrics disabled")
@@ -172,9 +172,11 @@ def _refresh_gauges() -> None:
             )
             m["semantic_cache_entries"].set(db.query(SemanticCache).count())
 
+            now = utcnow()
             for p in db.query(LLMProviderState).all():
+                in_cooldown = p.cooldown_until is not None and p.cooldown_until > now
                 m["llm_provider_healthy"].labels(provider=p.name).set(
-                    1 if p.is_healthy and not (p.cooldown_until and p.cooldown_until > __import__("datetime").datetime.utcnow()) else 0
+                    1 if p.is_healthy and not in_cooldown else 0
                 )
     except Exception as e:
         logger.debug("[metrics] gauge refresh failed: {}", e)

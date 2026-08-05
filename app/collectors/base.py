@@ -12,14 +12,15 @@ import asyncio
 import random
 import re
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncIterator, Iterable
 from urllib.parse import urlparse
 
 from loguru import logger
 
 from ..config import get_settings
+from ..timeutil import utcnow
 
 # ============================================================
 # Regex patterns
@@ -42,7 +43,7 @@ class LinkExtraction:
     url: str
     source_channel: str
     source_message_id: int | None = None
-    discovered_at: datetime = field(default_factory=datetime.utcnow)
+    discovered_at: datetime = field(default_factory=utcnow)
     # Raw text around the link (helps classification)
     context: str = ""
 
