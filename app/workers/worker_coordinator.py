@@ -20,13 +20,14 @@ import json
 import os
 import socket
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from loguru import logger
 from sqlalchemy import update
 
 from ..database import SessionLocal
 from ..models import WorkerRegistry
+from ..timeutil import utcnow
 
 HEARTBEAT_INTERVAL_SEC = 30
 LOCK_TTL_SEC = 120  # Redis lock expires after 2 min if worker dies
@@ -64,8 +65,8 @@ class WorkerCoordinator:
                 existing.hostname = socket.gethostname()
                 existing.pid = os.getpid()
                 existing.channels_assigned = json.dumps(channels)
-                existing.started_at = datetime.utcnow()
-                existing.last_heartbeat_at = datetime.utcnow()
+                existing.started_at = utcnow()
+                existing.last_heartbeat_at = utcnow()
                 existing.stopped_at = None
             else:
                 db.add(WorkerRegistry(
@@ -76,7 +77,7 @@ class WorkerCoordinator:
                     status="active",
                     channels_assigned=json.dumps(channels),
                     links_collected=0,
-                    last_heartbeat_at=datetime.utcnow(),
+                    last_heartbeat_at=utcnow(),
                 ))
             db.commit()
         logger.info("[worker] registered: id={} channels={}", self.worker_id, channels)
@@ -99,7 +100,7 @@ class WorkerCoordinator:
             db.execute(
                 update(WorkerRegistry)
                 .where(WorkerRegistry.worker_id == self.worker_id)
-                .values(status="stopped", stopped_at=datetime.utcnow())
+                .values(status="stopped", stopped_at=utcnow())
             )
             db.commit()
         # Release all Redis locks held by this worker
@@ -113,7 +114,7 @@ class WorkerCoordinator:
                     db.execute(
                         update(WorkerRegistry)
                         .where(WorkerRegistry.worker_id == self.worker_id)
-                        .values(last_heartbeat_at=datetime.utcnow(), status="active")
+                        .values(last_heartbeat_at=utcnow(), status="active")
                     )
                     db.commit()
             except Exception as e:
@@ -198,7 +199,7 @@ class WorkerCoordinator:
     @staticmethod
     def cleanup_dead_workers() -> int:
         """Mark workers without recent heartbeats as 'dead'. Returns count."""
-        cutoff = datetime.utcnow() - timedelta(seconds=DEAD_WORKER_THRESHOLD_SEC)
+        cutoff = utcnow() - timedelta(seconds=DEAD_WORKER_THRESHOLD_SEC)
         with SessionLocal() as db:
             result = db.execute(
                 update(WorkerRegistry)
@@ -206,7 +207,7 @@ class WorkerCoordinator:
                     WorkerRegistry.status == "active",
                     WorkerRegistry.last_heartbeat_at < cutoff,
                 )
-                .values(status="dead", stopped_at=datetime.utcnow())
+                .values(status="dead", stopped_at=utcnow())
             )
             db.commit()
             count = result.rowcount or 0

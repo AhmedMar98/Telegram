@@ -14,9 +14,10 @@ starlette==0.41.3
 # --- Telegram ---
 telethon==1.37.0
 cryptg==0.4.0
-# Bot API alternative. 3.15.5 is unavailable on PyPI; the 3.15.x line
-# is API-stable, so pin the range instead of the exact patch.
-aiogram>=3.15.0,<3.16
+# Bot API alternative. aiogram 3.15.x caps pydantic<2.10, which
+# conflicts with our pydantic==2.10.4 pin. 3.16.0+ relaxed that
+# constraint, so require at least 3.16.
+aiogram>=3.16
 
 # --- Database ---
 sqlalchemy==2.0.36

@@ -9,11 +9,12 @@ from __future__ import annotations
 import asyncio
 import random
 import string
-from datetime import datetime, timedelta
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import timedelta
 
 from loguru import logger
 
+from ..timeutil import utcnow
 from .base import BaseCollector, CollectedMessage
 
 # Sample templates for realistic test data
@@ -69,7 +70,7 @@ class MockCollector(BaseCollector):
                 channel=channel,
                 message_id=start_id + i,
                 text=text,
-                timestamp=datetime.utcnow() - timedelta(minutes=i * 3),
+                timestamp=utcnow() - timedelta(minutes=i * 3),
                 has_media=random.random() > 0.7,
             )
             # Simulate network latency

@@ -56,7 +56,7 @@ class TelegramSearchBot:
             logger.warning("TG_BOT_TOKEN not set; search bot disabled")
             return
         try:
-            from aiogram import Bot, Dispatcher, F
+            from aiogram import Bot, Dispatcher
             from aiogram.filters import Command
             from aiogram.types import Message
         except ImportError:
@@ -140,11 +140,11 @@ class TelegramSearchBot:
                 await m.answer("No popular links yet.")
                 return
             lines = ["🔥 <b>Top 10 popular</b>:\n"]
-            for i, l in enumerate(links, 1):
-                title = (l.title or l.url)[:60]
+            for i, link in enumerate(links, 1):
+                title = (link.title or link.url)[:60]
                 lines.append(
-                    f"{i}. <a href=\"{l.url}\">{_escape(title)}</a> "
-                    f"(👥 {l.click_count} clicks)\n"
+                    f'{i}. <a href="{link.url}">{_escape(title)}</a> '
+                    f"(👥 {link.click_count} clicks)\n"
                 )
             await m.answer("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
@@ -159,10 +159,10 @@ class TelegramSearchBot:
                 await m.answer("No alive links yet.")
                 return
             lines = ["✅ <b>Recent alive links</b>:\n"]
-            for i, l in enumerate(links, 1):
-                title = (l.title or l.url)[:60]
+            for i, link in enumerate(links, 1):
+                title = (link.title or link.url)[:60]
                 lines.append(
-                    f"{i}. <a href=\"{l.url}\">{_escape(title)}</a>\n   📂 {l.category}\n"
+                    f'{i}. <a href="{link.url}">{_escape(title)}</a>\n   📂 {link.category}\n'
                 )
             await m.answer("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 

@@ -15,13 +15,13 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
 
 from loguru import logger
 from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import SemanticCache
+from ..timeutil import utcnow
 
 
 @dataclass
@@ -147,7 +147,7 @@ class SemanticMemory:
                 row = db.get(SemanticCache, cache_id)
                 if row:
                     row.used_count = (row.used_count or 0) + 1
-                    row.last_used_at = datetime.utcnow()
+                    row.last_used_at = utcnow()
                     db.commit()
         except Exception as e:
             logger.debug("[semantic-memory] mark_used failed: {}", e)

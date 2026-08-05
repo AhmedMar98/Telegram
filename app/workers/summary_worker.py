@@ -25,6 +25,7 @@ from ..models import (
     DailySummary,
     Link,
 )
+from ..timeutil import utcnow
 
 
 class DailySummaryWorker:
@@ -64,7 +65,7 @@ class DailySummaryWorker:
     async def generate_and_store(self, date_str: str | None = None) -> DailySummary:
         """Generate summary for the given date (default: yesterday)."""
         if date_str is None:
-            date_str = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_str = (utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         logger.info("[daily-summary] generating for {}", date_str)
 
@@ -80,26 +81,26 @@ class DailySummaryWorker:
             ).all()
 
             total_new = len(new_links)
-            total_alive = sum(1 for l in new_links if l.alive)
-            total_dead = sum(1 for l in new_links if l.alive is False)
+            total_alive = sum(1 for link in new_links if link.alive)
+            total_dead = sum(1 for link in new_links if link.alive is False)
 
             # Top links by engagement (clicks + search hits)
             top_links = sorted(
                 new_links,
-                key=lambda l: (l.click_count or 0) + (l.search_hit_count or 0),
+                key=lambda link: (link.click_count or 0) + (link.search_hit_count or 0),
                 reverse=True,
             )[:10]
             top_links_json = json.dumps([
                 {
-                    "id": l.id,
-                    "url": l.url,
-                    "title": l.title,
-                    "category": l.category,
-                    "alive": l.alive,
-                    "clicks": l.click_count or 0,
-                    "search_hits": l.search_hit_count or 0,
+                    "id": link.id,
+                    "url": link.url,
+                    "title": link.title,
+                    "category": link.category,
+                    "alive": link.alive,
+                    "clicks": link.click_count or 0,
+                    "search_hits": link.search_hit_count or 0,
                 }
-                for l in top_links
+                for link in top_links
             ], ensure_ascii=False)
 
             # Category breakdown
@@ -149,11 +150,11 @@ class DailySummaryWorker:
             lines.append(f"  • {cat}: {count}")
         if top_links:
             lines.append("\n<b>🔥 Top links:</b>")
-            for i, l in enumerate(top_links[:5], 1):
-                title = (l.get("title") or l["url"])[:60]
+            for i, item in enumerate(top_links[:5], 1):
+                title = (item.get("title") or item["url"])[:60]
                 lines.append(
-                    f"{i}. <a href=\"{l['url']}\">{_esc(title)}</a> "
-                    f"(👥 {l.get('clicks', 0)})"
+                    f'{i}. <a href="{item["url"]}">{_esc(title)}</a> '
+                    f"(👥 {item.get('clicks', 0)})"
                 )
         return "\n".join(lines)
 

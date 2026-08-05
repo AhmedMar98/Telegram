@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime
 
 from loguru import logger
 
@@ -20,6 +19,7 @@ from ..collectors.base import make_collector
 from ..database import SessionLocal
 from ..models import Account, Channel, Link, LinkStatus
 from ..tenant import get_current_tenant
+from ..timeutil import utcnow
 
 
 def url_hash(url: str) -> str:
@@ -92,7 +92,7 @@ async def collect_once() -> int:
                         status=LinkStatus.NEW.value,
                         source_channel=channel_name,
                         source_message_id=link_ext.source_message_id,
-                        discovered_at=link_ext.discovered_at or datetime.utcnow(),
+                        discovered_at=link_ext.discovered_at or utcnow(),
                     )
                     db.add(new_link)
                     db.commit()
@@ -105,13 +105,15 @@ async def collect_once() -> int:
                         pass
                     logger.debug("[collect] new link #{}: {}", new_link.id, link_ext.url[:80])
 
-                    # Update channel's last_message_id
+                    # Update channel's last_message_id.
+                    # (Channel has no last_seen_at column — the previous code
+                    # set it as a plain Python attr and it was never persisted;
+                    # dropped.)
                     ch = db.query(Channel).filter(
                         Channel.channel_username == channel_name
                     ).first()
                     if ch and link_ext.source_message_id:
                         ch.last_message_id = max(ch.last_message_id or 0, link_ext.source_message_id)
-                        ch.last_seen_at = datetime.utcnow()
                         db.commit()
         except Exception as e:
             logger.exception("[collect] error on channel {}: {}", channel_name, e)

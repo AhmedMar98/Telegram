@@ -17,6 +17,21 @@ exclude = ["alembic/versions", ".venv", "build", "dist"]
 select = ["E", "F", "W", "I", "N", "B", "UP", "SIM"]
 ignore = ["E501"]  # line length handled by formatter
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends/Header/Query/Body/Cookie/File/Form/Path/Security are
+# designed to be called at function-definition time; muting B008 for them.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Header",
+    "fastapi.Query",
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Path",
+    "fastapi.Security",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 
