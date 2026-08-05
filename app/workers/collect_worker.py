@@ -15,17 +15,40 @@ import hashlib
 from datetime import datetime
 
 from loguru import logger
-from sqlalchemy import select
 
 from ..collectors.base import make_collector
 from ..database import SessionLocal
-from ..models import Channel, Link, LinkStatus
+from ..models import Account, Channel, Link, LinkStatus
 from ..tenant import get_current_tenant
 
 
 def url_hash(url: str) -> str:
     """SHA-256 of normalized URL."""
     return hashlib.sha256(url.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _ensure_default_account(db) -> int:
+    """Return the id of a usable Account row, creating a placeholder if none exist.
+
+    Channel rows carry a FK to accounts.id; without this seed the very first
+    call would fail with `FOREIGN KEY constraint failed`.
+    """
+    acc = db.query(Account).order_by(Account.id.asc()).first()
+    if acc is not None:
+        return acc.id
+    acc = Account(
+        name="main",
+        api_id_enc="",
+        api_hash_enc="",
+        phone_enc="",
+        is_active=True,
+        is_main=True,
+    )
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+    logger.info("[collect] seeded default account id={}", acc.id)
+    return acc.id
 
 
 async def collect_once() -> int:
@@ -40,12 +63,13 @@ async def collect_once() -> int:
 
     for channel_name in settings_channels:
         with SessionLocal() as db:
-            # Upsert channel row
+            # Upsert channel row — bind to the first available account.
+            default_account_id = _ensure_default_account(db)
             ch = db.query(Channel).filter(
                 Channel.channel_username == channel_name
             ).first()
             if ch is None:
-                ch = Channel(channel_username=channel_name, account_id=1)
+                ch = Channel(channel_username=channel_name, account_id=default_account_id)
                 db.add(ch)
                 db.commit()
             last_id = ch.last_message_id or 0

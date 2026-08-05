@@ -6,14 +6,11 @@ without Stripe configured (free-tier single-tenant mode).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from loguru import logger
 
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Subscription, Tenant
-
 
 # Plan limits (requests per billing period)
 PLAN_LIMITS = {
@@ -50,8 +47,8 @@ class StripeClient:
             import stripe  # type: ignore
             stripe.api_key = self.api_key
             self._client = stripe
-        except ImportError:
-            raise RuntimeError("stripe package not installed: pip install stripe")
+        except ImportError as e:
+            raise RuntimeError("stripe package not installed: pip install stripe") from e
         return self._client
 
     def create_checkout_session(

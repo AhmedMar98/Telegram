@@ -14,8 +14,9 @@ starlette==0.41.3
 # --- Telegram ---
 telethon==1.37.0
 cryptg==0.4.0
-# Bot API alternative
-aiogram==3.15.5
+# Bot API alternative. 3.15.5 is unavailable on PyPI; the 3.15.x line
+# is API-stable, so pin the range instead of the exact patch.
+aiogram>=3.15.0,<3.16
 
 # --- Database ---
 sqlalchemy==2.0.36
@@ -45,7 +46,7 @@ pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
 # --- Utilities ---
-httpx==0.28.1
+# (httpx already pinned above under LLM providers — do not repeat here.)
 tenacity==9.0.0
 python-dateutil==2.9.0
 loguru==0.7.3

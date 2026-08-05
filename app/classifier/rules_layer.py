@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 from urllib.parse import urlparse
 
 from ..models import LinkCategory
@@ -42,13 +41,15 @@ _RULES: list[tuple[re.Pattern, LinkCategory, float, str]] = [
     (re.compile(r"t(?:elegram)?\.me/(?!joinchat|\+)", re.I), LinkCategory.TELEGRAM, 0.85, "tg_public_link"),
     (re.compile(r"telegram\.org/", re.I),         LinkCategory.TELEGRAM, 0.70, "tg_official"),
 
-    # Settings / config files
-    (re.compile(r"\.(json|yaml|yml|toml|ini|conf|env|config|properties)\b", re.I),
+    # Settings / config files. Only match extensions that end the URL path or
+    # come immediately before a query/fragment — avoids false hits like
+    # `www.jsonapi.com`.
+    (re.compile(r"\.(json|yaml|yml|toml|ini|conf|env|config|properties)(?:$|[?#])", re.I),
      LinkCategory.SETTING, 0.95, "config_file_ext"),
     (re.compile(r"/settings?/|/config/", re.I),   LinkCategory.SETTING, 0.80, "config_path"),
 
-    # Direct file downloads (must come before generic)
-    (re.compile(r"\.(pdf|zip|rar|7z|tar|gz|mp4|mkv|mp3|wav|apk|xlsx?|docx?|pptx?|epub|mobi)\b", re.I),
+    # Direct file downloads — same terminal-boundary constraint.
+    (re.compile(r"\.(pdf|zip|rar|7z|tar|gz|mp4|mkv|mp3|wav|apk|xlsx?|docx?|pptx?|epub|mobi)(?:$|[?#])", re.I),
      LinkCategory.FILE, 0.95, "file_download_ext"),
     (re.compile(r"/download/|/files?/|/uploads?/", re.I),
      LinkCategory.FILE, 0.75, "file_path"),
@@ -69,7 +70,7 @@ _RULES: list[tuple[re.Pattern, LinkCategory, float, str]] = [
 ]
 
 
-def classify_with_rules(url: str, context: str = "") -> Optional[RuleResult]:
+def classify_with_rules(url: str, context: str = "") -> RuleResult | None:
     """
     Try to classify the URL with rule patterns.
 
@@ -87,7 +88,7 @@ def classify_with_rules(url: str, context: str = "") -> Optional[RuleResult]:
     return None
 
 
-def host_hint(url: str) -> Optional[LinkCategory]:
+def host_hint(url: str) -> LinkCategory | None:
     """Use host TLD as a weak hint when no rule matches."""
     try:
         host = urlparse(url).netloc.lower()

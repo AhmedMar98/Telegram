@@ -10,18 +10,15 @@ Anti-spam guarantees:
 """
 from __future__ import annotations
 
-import asyncio
 import time
 from collections import defaultdict
-from typing import Optional
 
 from loguru import logger
 
 from ..config import get_settings
 from ..database import SessionLocal
-from ..models import Link, LinkStatus
+from ..models import Link
 from ..search.hybrid import HybridSearch
-
 
 # Per-user rate limit
 MAX_CMD_PER_MIN = 10
@@ -31,7 +28,7 @@ RATE_WINDOW_SEC = 60
 class TelegramSearchBot:
     """aiogram 3.x bot for searching the link database."""
 
-    def __init__(self, search_engine: Optional[HybridSearch] = None) -> None:
+    def __init__(self, search_engine: HybridSearch | None = None) -> None:
         self.settings = get_settings()
         self.token = self.settings.tg_bot_token
         self.search = search_engine or HybridSearch()
@@ -77,7 +74,8 @@ class TelegramSearchBot:
                 "/search &lt;query&gt; — hybrid search (text + semantic)\n"
                 "/stats — database statistics\n"
                 "/popular — top 10 popular links\n"
-                "/alive — recent alive links\n"
+                "/alive — recent alive links\n",
+                parse_mode="HTML",
             )
 
         @self._dp.message(Command("search"))
@@ -110,22 +108,26 @@ class TelegramSearchBot:
 
         @self._dp.message(Command("stats"))
         async def cmd_stats(m: Message) -> None:
+            from sqlalchemy import func, select
             with SessionLocal() as db:
                 total = db.query(Link).count()
                 alive = db.query(Link).filter(Link.alive.is_(True)).count()
                 dead = db.query(Link).filter(Link.alive.is_(False)).count()
-                cats = db.execute(
-                    Link.__table__.select().with_only_columns(
-                        Link.category, Link.__table__.c.id
-                    )
-                )
-            txt = (
-                "📊 <b>Database Stats</b>\n\n"
-                f"🔗 Total links: <b>{total}</b>\n"
-                f"✅ Alive: <b>{alive}</b>\n"
-                f"❌ Dead: <b>{dead}</b>\n"
-            )
-            await m.answer(txt, parse_mode="HTML")
+                cat_rows = db.execute(
+                    select(Link.category, func.count(Link.id))
+                    .where(Link.archived.is_(False))
+                    .group_by(Link.category)
+                ).all()
+            lines = [
+                "📊 <b>Database Stats</b>\n",
+                f"🔗 Total links: <b>{total}</b>",
+                f"✅ Alive: <b>{alive}</b>",
+                f"❌ Dead: <b>{dead}</b>\n",
+                "<b>📂 By category:</b>",
+            ]
+            for cat, cnt in sorted(cat_rows, key=lambda x: -x[1]):
+                lines.append(f"  • {cat}: {cnt}")
+            await m.answer("\n".join(lines), parse_mode="HTML")
 
         @self._dp.message(Command("popular"))
         async def cmd_popular(m: Message) -> None:

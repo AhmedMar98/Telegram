@@ -21,7 +21,6 @@ from pydantic import BaseModel
 from ..tenant import TenantContext, tenant_dependency
 from .stripe_client import StripeClient, check_tenant_quota, increment_tenant_usage
 
-
 router = APIRouter(prefix="/api/v1/billing")
 
 
@@ -51,7 +50,7 @@ async def create_checkout(
         )
     except Exception as e:
         logger.exception("[billing] checkout failed")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     return result
 
 
