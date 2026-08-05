@@ -1,5 +1,4 @@
 """Tests for Semantic Memory (v4.1)."""
-import json
 
 import pytest
 

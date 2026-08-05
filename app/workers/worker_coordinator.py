@@ -15,19 +15,18 @@ that the existing TelethonCollector uses.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import socket
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 from loguru import logger
-from sqlalchemy import select, update
+from sqlalchemy import update
 
 from ..database import SessionLocal
 from ..models import WorkerRegistry
-
 
 HEARTBEAT_INTERVAL_SEC = 30
 LOCK_TTL_SEC = 120  # Redis lock expires after 2 min if worker dies
@@ -37,10 +36,10 @@ DEAD_WORKER_THRESHOLD_SEC = 300  # 5 min without heartbeat = dead
 class WorkerCoordinator:
     """Coordinates distributed collectors via DB + Redis."""
 
-    def __init__(self, account_name: str, worker_id: Optional[str] = None) -> None:
+    def __init__(self, account_name: str, worker_id: str | None = None) -> None:
         self.account_name = account_name
         self.worker_id = worker_id or self._generate_worker_id()
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
     @staticmethod
@@ -54,7 +53,7 @@ class WorkerCoordinator:
     # Lifecycle
     # ============================================================
 
-    async def register(self, channels: List[str]) -> None:
+    async def register(self, channels: list[str]) -> None:
         """Register this worker in the DB."""
         with SessionLocal() as db:
             existing = db.query(WorkerRegistry).filter(
@@ -93,10 +92,8 @@ class WorkerCoordinator:
         self._stop.set()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
             self._heartbeat_task = None
         with SessionLocal() as db:
             db.execute(
@@ -218,7 +215,7 @@ class WorkerCoordinator:
             return count
 
     @staticmethod
-    def list_active_workers() -> List[WorkerRegistry]:
+    def list_active_workers() -> list[WorkerRegistry]:
         with SessionLocal() as db:
             return db.query(WorkerRegistry).filter(
                 WorkerRegistry.status.in_(["active", "idle"])

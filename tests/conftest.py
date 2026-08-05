@@ -23,8 +23,8 @@ def _clear_llm_provider_state():
     yield
     # After test: clean up any persisted state
     try:
-        from app.database import SessionLocal, engine
-        from app.models import Base, LLMProviderState
+        from app.database import SessionLocal
+        from app.models import LLMProviderState
         # Reset provider state
         with SessionLocal() as db:
             db.query(LLMProviderState).delete()
@@ -42,7 +42,7 @@ def settings():
 @pytest.fixture
 def db_session():
     """Fresh in-memory SQLite session per test."""
-    from app.database import SessionLocal, engine, init_db
+    from app.database import SessionLocal, engine
     from app.models import Base
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

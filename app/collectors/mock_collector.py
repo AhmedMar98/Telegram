@@ -10,12 +10,11 @@ import asyncio
 import random
 import string
 from datetime import datetime, timedelta
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator
 
 from loguru import logger
 
 from .base import BaseCollector, CollectedMessage
-
 
 # Sample templates for realistic test data
 _SAMPLE_TEMPLATES = [
@@ -49,7 +48,7 @@ class MockCollector(BaseCollector):
     name = "mock"
 
     async def fetch_messages(
-        self, channel: str, last_message_id: Optional[int] = None
+        self, channel: str, last_message_id: int | None = None
     ) -> AsyncIterator[CollectedMessage]:
         """Generate 5-15 fake messages per call."""
         count = random.randint(5, 15)

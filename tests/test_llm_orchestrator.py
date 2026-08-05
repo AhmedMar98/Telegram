@@ -1,6 +1,4 @@
 """Tests for the LLM orchestrator failover logic."""
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -8,7 +6,6 @@ from app.llm.orchestrator import LLMOrchestrator
 from app.llm.providers import (
     BaseLLMProvider,
     LLMResponse,
-    QuotaInfo,
 )
 
 

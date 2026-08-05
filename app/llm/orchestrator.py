@@ -15,29 +15,27 @@ Embeddings:
 from __future__ import annotations
 
 import time
-from typing import List, Optional
 
 from loguru import logger
 
 from .providers import (
+    AnyscaleProvider,
     BaseLLMProvider,
+    CloudflareProvider,
+    # v5.0 additional providers
+    CohereProvider,
     GeminiProvider,
     GroqProvider,
     HuggingFaceProvider,
     LLMResponse,
-    OpenRouterProvider,
-    ZAIProvider,
-    # v5.0 additional providers
-    CohereProvider,
     MistralProvider,
-    TogetherProvider,
-    AnyscaleProvider,
-    CloudflareProvider,
     # v5.1 NVIDIA Integrate API
     NVIDIAProvider,
+    OpenRouterProvider,
+    TogetherProvider,
+    ZAIProvider,
 )
 from .quota_tracker import QuotaTracker
-
 
 # Provider priority — cheapest/fastest first
 # v5.1: expanded to 11 providers (NVIDIA added)
@@ -59,7 +57,7 @@ DEFAULT_PRIORITY = [
 class LLMOrchestrator:
     """Multi-provider router with failover + quota tracking."""
 
-    def __init__(self, providers: Optional[List[BaseLLMProvider]] = None) -> None:
+    def __init__(self, providers: list[BaseLLMProvider] | None = None) -> None:
         if providers is None:
             providers = self._default_providers()
         self.providers: dict[str, BaseLLMProvider] = {p.name: p for p in providers}
@@ -67,10 +65,10 @@ class LLMOrchestrator:
         self.tracker = QuotaTracker()
         # Lazy-loaded embedding model
         self._embedder = None
-        self._embed_dim: Optional[int] = None
+        self._embed_dim: int | None = None
 
     @staticmethod
-    def _default_providers() -> List[BaseLLMProvider]:
+    def _default_providers() -> list[BaseLLMProvider]:
         return [
             GroqProvider(),
             GeminiProvider(),
@@ -85,7 +83,7 @@ class LLMOrchestrator:
             ZAIProvider(),
         ]
 
-    def available_providers(self) -> List[str]:
+    def available_providers(self) -> list[str]:
         """List providers with credentials configured AND not in cooldown."""
         return [
             name for name in self.priority
@@ -94,17 +92,17 @@ class LLMOrchestrator:
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         """Try each provider in priority order until one succeeds."""
         candidates = self.available_providers()
         if not candidates:
             logger.warning("[orchestrator] no available LLM providers")
             return None
 
-        last_error: Optional[str] = None
+        last_error: str | None = None
         for name in candidates:
             provider = self.providers[name]
             t0 = time.perf_counter()
@@ -182,7 +180,7 @@ class LLMOrchestrator:
             self._embedder = False
         return self._embedder
 
-    def embed(self, text: str) -> Optional[List[float]]:
+    def embed(self, text: str) -> list[float] | None:
         """Return a 384-dim embedding of `text`, or None if unavailable."""
         emb = self._ensure_embedder()
         if emb is False or not text:
@@ -195,7 +193,7 @@ class LLMOrchestrator:
             return None
 
     @property
-    def embed_dim(self) -> Optional[int]:
+    def embed_dim(self) -> int | None:
         return self._embed_dim
 
     async def health_check_all(self) -> dict[str, bool]:

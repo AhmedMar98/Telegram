@@ -1,11 +1,10 @@
 """Tests for the search module (text + semantic)."""
 import asyncio
-import json
 
 import pytest
 
 from app.database import SessionLocal, engine
-from app.models import Base, Link, LinkEmbedding, LinkStatus
+from app.models import Base, Link, LinkStatus
 from app.search.hybrid import HybridSearch
 
 

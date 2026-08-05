@@ -4,15 +4,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
 
 
 @dataclass
 class QuotaInfo:
     """Quota info parsed from provider response headers."""
-    limit: Optional[int] = None
-    remaining: Optional[int] = None
-    reset_at: Optional[datetime] = None
+    limit: int | None = None
+    remaining: int | None = None
+    reset_at: datetime | None = None
     # Raw header dict for debugging
     raw_headers: dict = field(default_factory=dict)
 
@@ -23,11 +22,11 @@ class LLMResponse:
     text: str
     provider: str
     model: str
-    quota: Optional[QuotaInfo] = None
-    latency_ms: Optional[int] = None
-    tokens_in: Optional[int] = None
-    tokens_out: Optional[int] = None
-    error: Optional[str] = None
+    quota: QuotaInfo | None = None
+    latency_ms: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    error: str | None = None
 
 
 class BaseLLMProvider(ABC):
@@ -45,10 +44,10 @@ class BaseLLMProvider(ABC):
     @abstractmethod
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         """Send a chat completion request. Returns None on failure."""
         ...
 

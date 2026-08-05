@@ -13,7 +13,6 @@ import hmac
 import os
 import secrets
 from base64 import b64decode, b64encode
-from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -51,7 +50,7 @@ def derive_account_hmac(account_id: str) -> bytes:
 # AES-256-GCM
 # ============================================================
 
-def encrypt(plaintext: str, associated_data: Optional[bytes] = None) -> str:
+def encrypt(plaintext: str, associated_data: bytes | None = None) -> str:
     """
     Encrypt a string with AES-256-GCM.
 
@@ -67,7 +66,7 @@ def encrypt(plaintext: str, associated_data: Optional[bytes] = None) -> str:
     return b64encode(nonce + ct).decode("ascii")
 
 
-def decrypt(blob: str, associated_data: Optional[bytes] = None) -> str:
+def decrypt(blob: str, associated_data: bytes | None = None) -> str:
     """Decrypt a base64 blob produced by `encrypt`. Empty input returns empty string."""
     if not blob:
         return ""

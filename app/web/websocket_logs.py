@@ -8,13 +8,11 @@ connections and registers them in a global set.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from datetime import datetime
-from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
-
 
 router = APIRouter()
 
@@ -23,7 +21,7 @@ class LogBroadcaster:
     """In-memory pub/sub for log lines, broadcast to all WS clients."""
 
     def __init__(self) -> None:
-        self._clients: Set[WebSocket] = set()
+        self._clients: set[WebSocket] = set()
         self._queue: asyncio.Queue = None  # lazy init
         self._task: asyncio.Task = None
         self._sink_id: int | None = None
@@ -62,10 +60,8 @@ class LogBroadcaster:
             self._sink_id = None
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
     async def add_client(self, ws: WebSocket) -> None:

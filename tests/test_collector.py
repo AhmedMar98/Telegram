@@ -1,5 +1,4 @@
 """Tests for the mock collector + URL extraction."""
-import asyncio
 
 import pytest
 

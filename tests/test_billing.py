@@ -1,5 +1,4 @@
 """Tests for the billing module (v5.0 Stripe integration)."""
-from unittest.mock import MagicMock, patch
 
 import pytest
 

@@ -12,10 +12,8 @@ FTS5 virtual table is created lazily on first search.
 from __future__ import annotations
 
 import math
-import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
 
 from loguru import logger
 from sqlalchemy import select, text
@@ -28,11 +26,11 @@ from ..models import Link
 class SearchResult:
     link_id: int
     url: str
-    title: Optional[str]
-    description: Optional[str]
+    title: str | None
+    description: str | None
     category: str
     status: str
-    alive: Optional[bool]
+    alive: bool | None
     score: float
     score_breakdown: dict
 
@@ -97,10 +95,10 @@ class HybridSearch:
     async def search(
         self,
         query: str,
-        category: Optional[str] = None,
+        category: str | None = None,
         alive_only: bool = False,
         limit: int = 20,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """Run hybrid search and return ranked results."""
         if not query.strip():
             return []
@@ -133,7 +131,7 @@ class HybridSearch:
                 stmt = stmt.where(Link.alive.is_(True))
             links = {l.id: l for l in db.scalars(stmt)}
 
-        results: List[SearchResult] = []
+        results: list[SearchResult] = []
         now = datetime.utcnow()
         for link_id, link in links.items():
             fts_score = fts_ids.get(link_id, 0.0)
@@ -194,11 +192,12 @@ class HybridSearch:
             logger.warning("FTS search failed: {}", e)
             return {}
 
-    def _semantic_search(self, query_vec: List[float], limit: int = 50) -> dict[int, float]:
+    def _semantic_search(self, query_vec: list[float], limit: int = 50) -> dict[int, float]:
         """Use sqlite-vec for KNN over link embeddings."""
         try:
-            import sqlite_vec  # type: ignore
             import json
+
+            import sqlite_vec  # type: ignore
             with engine.raw_connection() as raw_conn:
                 # Ensure extension loaded
                 try:
@@ -218,7 +217,7 @@ class HybridSearch:
                     [json.dumps(query_vec)],
                 )
                 # KNN join against link_embeddings
-                rows = cur.execute(f"""
+                rows = cur.execute("""
                     SELECT le.link_id, vec_distance_cosine(le.embedding, tqv.embedding) AS dist
                     FROM link_embeddings le
                     JOIN tmp_query_vec tqv
@@ -239,7 +238,7 @@ class HybridSearch:
             logger.warning("Semantic search failed: {}", e)
             return {}
 
-    def _semantic_search_python(self, query_vec: List[float], limit: int) -> list[tuple[int, float]]:
+    def _semantic_search_python(self, query_vec: list[float], limit: int) -> list[tuple[int, float]]:
         """Pure-Python fallback: scan all embeddings and rank by cosine similarity."""
         import json
         results = []
@@ -277,11 +276,11 @@ class HybridSearch:
         return min(1.0, math.log10(total + 1) / 2.0)
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two vectors."""
     if len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:

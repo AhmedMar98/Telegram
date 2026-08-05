@@ -3,8 +3,6 @@ Vitality worker — wrapper around VitalityChecker that runs as a service.
 """
 from __future__ import annotations
 
-import asyncio
-
 from loguru import logger
 
 from ..vitality.checker import VitalityChecker

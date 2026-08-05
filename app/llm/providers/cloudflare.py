@@ -6,8 +6,6 @@ neurons/day. Supports models like llama-3.1-8b-instruct, mistral-7b-instruct.
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 import httpx
 from loguru import logger
 
@@ -32,10 +30,10 @@ class CloudflareProvider(BaseLLMProvider):
 
     async def chat(
         self,
-        messages: List[dict],
+        messages: list[dict],
         max_tokens: int = 500,
         temperature: float = 0.2,
-    ) -> Optional[LLMResponse]:
+    ) -> LLMResponse | None:
         if not self.is_available:
             return None
         url = self.BASE_URL.format(account_id=self.account_id, model=self.model)

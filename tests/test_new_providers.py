@@ -1,7 +1,6 @@
 """Tests for the 5 new LLM providers (v5.0)."""
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from app.llm.providers import (

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Optional
 
 from sqlalchemy import (
     JSON,
@@ -87,10 +86,10 @@ class Account(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_main: Mapped[bool] = mapped_column(Boolean, default=False)
-    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
-    channels: Mapped[list["Channel"]] = relationship(back_populates="account")
+    channels: Mapped[list[Channel]] = relationship(back_populates="account")
 
     def __repr__(self) -> str:
         return f"<Account {self.name} main={self.is_main}>"
@@ -104,12 +103,12 @@ class Channel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     channel_username: Mapped[str] = mapped_column(String(255), nullable=False)
-    channel_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    last_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
-    account: Mapped["Account"] = relationship(back_populates="channels")
+    account: Mapped[Account] = relationship(back_populates="channels")
 
     __table_args__ = (
         UniqueConstraint("account_id", "channel_username", name="uq_account_channel"),
@@ -125,27 +124,27 @@ class Link(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, default=1, index=True)  # v4.1 multi-tenant
     url: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     url_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     category: Mapped[str] = mapped_column(String(32), default=LinkCategory.UNKNOWN.value)
     status: Mapped[str] = mapped_column(String(16), default=LinkStatus.NEW.value)
-    classification_tier: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    classification_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Source tracking
-    source_channel: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    source_account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    source_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_channel: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
     # Vitality
-    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    alive: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    alive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Metadata (JSON — varies per category)
-    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
     # Counts
     click_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -154,8 +153,8 @@ class Link(Base):
     # Soft delete
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    classification_logs: Mapped[list["ClassificationLog"]] = relationship(back_populates="link")
-    vitality_checks: Mapped[list["VitalityCheck"]] = relationship(back_populates="link")
+    classification_logs: Mapped[list[ClassificationLog]] = relationship(back_populates="link")
+    vitality_checks: Mapped[list[VitalityCheck]] = relationship(back_populates="link")
 
     __table_args__ = (
         Index("ix_links_category_status", "category", "status"),
@@ -190,13 +189,13 @@ class ClassificationLog(Base):
     tier: Mapped[str] = mapped_column(String(16), nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    rule_matched: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    llm_provider: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    llm_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rule_matched: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    llm_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    llm_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     semantic_reused: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
-    link: Mapped["Link"] = relationship(back_populates="classification_logs")
+    link: Mapped[Link] = relationship(back_populates="classification_logs")
 
 
 class VitalityCheck(Base):
@@ -207,12 +206,12 @@ class VitalityCheck(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     link_id: Mapped[int] = mapped_column(ForeignKey("links.id"), nullable=False, index=True)
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alive: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    response_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    link: Mapped["Link"] = relationship(back_populates="vitality_checks")
+    link: Mapped[Link] = relationship(back_populates="vitality_checks")
 
 
 class LLMProviderState(Base):
@@ -224,12 +223,12 @@ class LLMProviderState(Base):
     is_healthy: Mapped[bool] = mapped_column(Boolean, default=True)
     requests_today: Mapped[int] = mapped_column(Integer, default=0)
     requests_total: Mapped[int] = mapped_column(Integer, default=0)
-    quota_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    quota_remaining: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    quota_resets_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    quota_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quota_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quota_resets_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AuditEvent(Base):
@@ -240,8 +239,8 @@ class AuditEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     actor: Mapped[str] = mapped_column(String(64), nullable=False)
-    target: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    target: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
@@ -269,7 +268,7 @@ class SemanticCache(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     used_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # ============================================================
@@ -329,9 +328,9 @@ class WorkerRegistry(Base):
     status: Mapped[str] = mapped_column(String(16), default="starting")  # starting|active|idle|stopping|dead
     channels_assigned: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     links_collected: Mapped[int] = mapped_column(Integer, default=0)
-    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # ============================================================
@@ -345,10 +344,10 @@ class Subscription(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
-    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
     status: Mapped[str] = mapped_column(String(32), default="active")  # active|past_due|canceled
-    current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     requests_this_period: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
