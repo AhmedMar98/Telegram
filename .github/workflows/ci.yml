@@ -71,10 +71,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Run Bandit security scan
-        uses: tj-actions/bandit@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          targets: app/
-          severity_level: medium
-          confidence_level: medium
-          options: "-lll -iiii"  # only high-severity / high-confidence
+          python-version: "3.11"
+      - name: Install bandit
+        run: pip install bandit
+      # -lll = only HIGH severity, -iii = only HIGH confidence.
+      # Running bandit directly (was tj-actions/bandit@v7 — that action
+      # no longer exists on the marketplace).
+      - name: Run Bandit security scan
+        run: bandit -r app/ -lll -iii
