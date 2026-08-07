@@ -4,6 +4,7 @@ Centralized configuration using pydantic-settings.
 All secrets come from environment variables or a local .env file.
 NEVER hardcode secrets in source code.
 """
+
 from __future__ import annotations
 
 import secrets

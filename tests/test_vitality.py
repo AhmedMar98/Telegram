@@ -1,4 +1,5 @@
 """Tests for the vitality checker."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

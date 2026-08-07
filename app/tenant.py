@@ -11,6 +11,7 @@ tenant isolation at the ORM layer:
 For production multi-tenant SaaS, migrate to PostgreSQL where RLS is enforced
 at the database level (cannot be bypassed by app bugs).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -25,14 +26,13 @@ from .database import SessionLocal
 from .models import Tenant
 
 # ContextVar propagates tenant_id across async calls in the same request
-_current_tenant: ContextVar[TenantContext | None] = ContextVar(
-    "_current_tenant", default=None
-)
+_current_tenant: ContextVar[TenantContext | None] = ContextVar("_current_tenant", default=None)
 
 
 @dataclass
 class TenantContext:
     """The current tenant, propagated via ContextVar."""
+
     tenant_id: int
     slug: str
     plan: str
@@ -59,6 +59,7 @@ def reset_current_tenant() -> None:
 # ============================================================
 # API key management
 # ============================================================
+
 
 def hash_api_key(plaintext: str) -> str:
     """SHA-256 hash of an API key (we never store plaintext)."""
@@ -98,10 +99,14 @@ def resolve_tenant_by_api_key(api_key: str) -> TenantContext | None:
         return None
     key_hash = hash_api_key(api_key)
     with SessionLocal() as db:
-        tenant = db.query(Tenant).filter(
-            Tenant.api_key_hash == key_hash,
-            Tenant.is_active.is_(True),
-        ).first()
+        tenant = (
+            db.query(Tenant)
+            .filter(
+                Tenant.api_key_hash == key_hash,
+                Tenant.is_active.is_(True),
+            )
+            .first()
+        )
         if tenant is None:
             return None
         return TenantContext(
@@ -115,6 +120,7 @@ def resolve_tenant_by_api_key(api_key: str) -> TenantContext | None:
 # FastAPI dependency
 # ============================================================
 
+
 async def tenant_dependency(
     request: Request,
     x_api_key: str | None = Header(None, alias="X-API-Key"),
@@ -127,6 +133,7 @@ async def tenant_dependency(
     missing API key returns 401.
     """
     from .config import get_settings
+
     saas_mode = get_settings().saas_mode
 
     if x_api_key:
@@ -148,6 +155,7 @@ async def tenant_dependency(
 # ============================================================
 # Tenant-scoped query helper
 # ============================================================
+
 
 def tenant_filter(model_cls, query):
     """Apply WHERE tenant_id = current_tenant.id to a SQLAlchemy query."""

@@ -5,6 +5,7 @@ Uses SQLite by default (no Docker). sqlite-vec extension is loaded
 for semantic vector search. FTS5 (full-text search) is bundled with
 Python's sqlite3 module.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,7 +29,8 @@ def _sqlite_pragma_on_connect(dbapi_conn, _record):
 def _load_sqlite_vec(dbapi_conn, _record):
     """Load sqlite-vec extension for vector search."""
     try:
-        import sqlite_vec  # type: ignore
+        import sqlite_vec
+
         dbapi_conn.enable_load_extension(True)
         sqlite_vec.load(dbapi_conn)
         dbapi_conn.enable_load_extension(False)
@@ -44,7 +46,7 @@ def _make_engine():
 
     # Normalize relative SQLite paths to absolute (resolve against cwd, not DATA_DIR)
     if url.startswith("sqlite:///./"):
-        rel = url[len("sqlite:///./"):]
+        rel = url[len("sqlite:///./") :]
         abs_path = (Path.cwd() / rel).resolve()
         # Ensure parent dir exists
         abs_path.parent.mkdir(parents=True, exist_ok=True)

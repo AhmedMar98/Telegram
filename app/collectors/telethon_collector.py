@@ -14,6 +14,7 @@ Setup:
     4. First run: Telethon will prompt for a login code sent to your Telegram.
        After successful login, a <session_name>.session file is created and reused.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -42,9 +43,7 @@ class TelethonCollector(BaseCollector):
             from telethon import TelegramClient
             from telethon.errors import FloodWaitError
         except ImportError as e:
-            raise RuntimeError(
-                "telethon not installed. Run: pip install telethon cryptg"
-            ) from e
+            raise RuntimeError("telethon not installed. Run: pip install telethon cryptg") from e
 
         s = self.settings
         if not s.tg_api_id or not s.tg_api_hash:
@@ -63,15 +62,18 @@ class TelethonCollector(BaseCollector):
         self._FloodWaitError = FloodWaitError
 
         if not self._started:
-            logger.info("Starting Telethon client (session={}, phone={})",
-                        s.tg_session_name, s.tg_phone)
+            logger.info(
+                "Starting Telethon client (session={}, phone={})", s.tg_session_name, s.tg_phone
+            )
             await self._client.start(phone=s.tg_phone)
             self._started = True
             me = await self._client.get_me()
-            logger.info("Telethon login OK: id={}, name={}, username={}",
-                        me.id,
-                        f"{me.first_name or ''} {me.last_name or ''}".strip(),
-                        me.username)
+            logger.info(
+                "Telethon login OK: id={}, name={}, username={}",
+                me.id,
+                f"{me.first_name or ''} {me.last_name or ''}".strip(),
+                me.username,
+            )
         return self._client
 
     async def fetch_messages(
@@ -111,7 +113,7 @@ class TelethonCollector(BaseCollector):
                     timestamp=msg.date.replace(tzinfo=None),
                     has_media=msg.media is not None,
                 )
-        except self._FloodWaitError as fw:  # type: ignore
+        except self._FloodWaitError as fw:
             await self.handle_flood_wait(fw.seconds)
             # Retry once after flood wait
             async for msg in client.iter_messages(entity, min_id=last_message_id or 0, limit=50):

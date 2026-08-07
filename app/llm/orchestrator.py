@@ -12,6 +12,7 @@ Embeddings:
     Uses sentence-transformers (all-MiniLM-L6-v2, 384-dim) for local, free
     semantic embeddings. Used by the classifier's semantic memory.
 """
+
 from __future__ import annotations
 
 import time
@@ -40,17 +41,17 @@ from .quota_tracker import QuotaTracker
 # Provider priority — cheapest/fastest first
 # v5.1: expanded to 11 providers (NVIDIA added)
 DEFAULT_PRIORITY = [
-    "groq",        # LPU, fastest
-    "gemini",      # generous free tier
+    "groq",  # LPU, fastest
+    "gemini",  # generous free tier
     "cloudflare",  # edge network, fast
-    "nvidia",      # NVIDIA Integrate API (glm-5.2, deepseek-v4-pro, etc.)
+    "nvidia",  # NVIDIA Integrate API (glm-5.2, deepseek-v4-pro, etc.)
     "openrouter",  # many free models
-    "mistral",     # direct API
-    "together",    # open-source models
-    "anyscale",    # Llama fine-tunes
-    "cohere",      # Command R
-    "huggingface", # slower but free
-    "zai",         # fallback
+    "mistral",  # direct API
+    "together",  # open-source models
+    "anyscale",  # Llama fine-tunes
+    "cohere",  # Command R
+    "huggingface",  # slower but free
+    "zai",  # fallback
 ]
 
 
@@ -86,7 +87,8 @@ class LLMOrchestrator:
     def available_providers(self) -> list[str]:
         """List providers with credentials configured AND not in cooldown."""
         return [
-            name for name in self.priority
+            name
+            for name in self.priority
             if self.providers[name].is_available and not self.tracker.is_in_cooldown(name)
         ]
 
@@ -128,6 +130,7 @@ class LLMOrchestrator:
                 logger.info("[orchestrator] {} rate-limited, failover", name)
                 try:
                     from ..web.metrics import record_llm_call
+
                     record_llm_call(provider=name, status="rate_limited")
                 except Exception:
                     pass
@@ -138,6 +141,7 @@ class LLMOrchestrator:
                 last_error = response.error
                 try:
                     from ..web.metrics import record_llm_call
+
                     record_llm_call(provider=name, status="error")
                 except Exception:
                     pass
@@ -145,13 +149,20 @@ class LLMOrchestrator:
 
             # Success
             self.tracker.update_success(name, response.quota)
-            logger.debug("[orchestrator] {} ok ({}ms, {} in / {} out)",
-                         name, latency_ms, response.tokens_in, response.tokens_out)
+            logger.debug(
+                "[orchestrator] {} ok ({}ms, {} in / {} out)",
+                name,
+                latency_ms,
+                response.tokens_in,
+                response.tokens_out,
+            )
             # v4.1 Prometheus metrics
             try:
                 from ..web.metrics import record_llm_call
-                record_llm_call(provider=name, status="success",
-                                latency_seconds=latency_ms / 1000.0)
+
+                record_llm_call(
+                    provider=name, status="success", latency_seconds=latency_ms / 1000.0
+                )
             except Exception:
                 pass
             return response
@@ -168,7 +179,8 @@ class LLMOrchestrator:
         if self._embedder is not None:
             return self._embedder
         try:
-            from sentence_transformers import SentenceTransformer  # type: ignore
+            from sentence_transformers import SentenceTransformer
+
             logger.info("Loading embedding model: all-MiniLM-L6-v2")
             self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
             self._embed_dim = self._embedder.get_sentence_embedding_dimension()

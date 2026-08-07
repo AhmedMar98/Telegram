@@ -15,6 +15,7 @@ This is non-trivial infrastructure. This module provides:
 
 Production-grade FL would use Flower (https://flower.dev) or PySyft.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -26,6 +27,7 @@ from loguru import logger
 @dataclass
 class FederatedModelUpdate:
     """A local model update (gradient or weight delta) from one worker."""
+
     worker_id: str
     round_num: int
     weights_delta: dict[str, list[float]] | None = None
@@ -72,7 +74,9 @@ class LocalStubAggregator(BaseFederatedAggregator):
         self._updates.append(update)
         logger.debug(
             "[federated] received update from {} (round={}, samples={})",
-            update.worker_id, update.round_num, update.num_samples,
+            update.worker_id,
+            update.round_num,
+            update.num_samples,
         )
 
     async def get_global_weights(self) -> dict[str, list[float]]:
@@ -81,8 +85,7 @@ class LocalStubAggregator(BaseFederatedAggregator):
     async def start_round(self, min_workers: int = 2) -> int:
         self._round += 1
         self._updates.clear()
-        logger.info("[federated] starting round {} (min_workers={})",
-                    self._round, min_workers)
+        logger.info("[federated] starting round {} (min_workers={})", self._round, min_workers)
         return self._round
 
 

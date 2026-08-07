@@ -6,6 +6,7 @@ when a provider returns rate-limit (429) or repeated errors.
 
 In-memory fallback when DB tables aren't available (e.g. during unit tests).
 """
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -66,12 +67,13 @@ class QuotaTracker:
                     if quota.reset_at is not None:
                         state.quota_resets_at = quota.reset_at
                 db.commit()
+
         self._try_db(_db_op)
 
     def update_rate_limited(self, provider: str, quota=None) -> None:
         """Mark provider as rate-limited; apply cooldown."""
-        self._memory.setdefault(provider, {})["cooldown_until"] = (
-            utcnow() + timedelta(seconds=DEFAULT_COOLDOWN_SEC)
+        self._memory.setdefault(provider, {})["cooldown_until"] = utcnow() + timedelta(
+            seconds=DEFAULT_COOLDOWN_SEC
         )
 
         def _db_op():
@@ -85,13 +87,14 @@ class QuotaTracker:
                 if quota is not None and quota.reset_at is not None:
                     state.quota_resets_at = quota.reset_at
                 db.commit()
+
         self._try_db(_db_op)
         logger.info("[quota] {} rate-limited, cooldown {}s", provider, DEFAULT_COOLDOWN_SEC)
 
     def update_failure(self, provider: str, error: str) -> None:
         """Record a non-rate-limit failure."""
-        self._memory.setdefault(provider, {})["cooldown_until"] = (
-            utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
+        self._memory.setdefault(provider, {})["cooldown_until"] = utcnow() + timedelta(
+            seconds=ERROR_COOLDOWN_SEC
         )
 
         def _db_op():
@@ -103,6 +106,7 @@ class QuotaTracker:
                 state.last_error = error[:500]
                 state.cooldown_until = utcnow() + timedelta(seconds=ERROR_COOLDOWN_SEC)
                 db.commit()
+
         self._try_db(_db_op)
 
     def is_in_cooldown(self, provider: str) -> bool:
@@ -121,17 +125,20 @@ class QuotaTracker:
                 if state.cooldown_until is None:
                     return False
                 return state.cooldown_until > utcnow()
+
         result = self._try_db(_db_op)
         return result if result is not None else False
 
     def list_healthy(self) -> list[str]:
         """Return list of provider names not in cooldown and healthy."""
+
         def _db_op():
             with self.db_factory() as db:
                 stmt = select(LLMProviderState).where(
-                    LLMProviderState.cooldown_until.is_(None) |
-                    (LLMProviderState.cooldown_until <= utcnow())
+                    LLMProviderState.cooldown_until.is_(None)
+                    | (LLMProviderState.cooldown_until <= utcnow())
                 )
                 return [r.name for r in db.scalars(stmt)]
+
         result = self._try_db(_db_op)
         return result if result is not None else list(self._memory.keys())

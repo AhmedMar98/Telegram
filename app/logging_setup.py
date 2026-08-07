@@ -1,6 +1,7 @@
 """
 Loguru logging setup with rich console sink + rotating file sink.
 """
+
 from __future__ import annotations
 
 import sys
@@ -20,7 +21,7 @@ def setup_logging() -> None:
         level="DEBUG" if settings.app_debug else "INFO",
         colorize=True,
         format="<green>{time:HH:mm:ss}</green> | <level>{level:<7}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        "<cyan>{name}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     )
     # File (rotating)
     logger.add(

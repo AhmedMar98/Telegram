@@ -4,6 +4,7 @@ Cloudflare Workers AI provider — runs LLMs on Cloudflare's edge network.
 Uses Cloudflare's REST API for Workers AI. Free tier includes 10,000
 neurons/day. Supports models like llama-3.1-8b-instruct, mistral-7b-instruct.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -51,8 +52,9 @@ class CloudflareProvider(BaseLLMProvider):
             async with httpx.AsyncClient(timeout=45) as client:
                 r = await client.post(url, headers=headers, json=payload)
             if r.status_code == 429:
-                return LLMResponse(text="", provider=self.name, model=self.model,
-                                   error="rate_limited")
+                return LLMResponse(
+                    text="", provider=self.name, model=self.model, error="rate_limited"
+                )
             if r.status_code != 200:
                 logger.warning("[cloudflare] HTTP {}: {}", r.status_code, r.text[:200])
                 return None

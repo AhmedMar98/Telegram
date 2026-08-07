@@ -4,6 +4,7 @@ Stripe billing client — wraps Stripe Checkout + Webhooks.
 Lazily imports the `stripe` Python package so the platform runs even
 without Stripe configured (free-tier single-tenant mode).
 """
+
 from __future__ import annotations
 
 from loguru import logger
@@ -14,8 +15,8 @@ from ..models import Subscription, Tenant
 
 # Plan limits (requests per billing period)
 PLAN_LIMITS = {
-    "free": 1_000,         # 1k API requests / month
-    "pro": 100_000,        # 100k / month
+    "free": 1_000,  # 1k API requests / month
+    "pro": 100_000,  # 100k / month
     "enterprise": 1_000_000,  # 1M / month
 }
 
@@ -44,7 +45,8 @@ class StripeClient:
         if not self.is_configured:
             raise RuntimeError("Stripe not configured (STRIPE_API_KEY missing)")
         try:
-            import stripe  # type: ignore
+            import stripe
+
             stripe.api_key = self.api_key
             self._client = stripe
         except ImportError as e:
@@ -52,7 +54,11 @@ class StripeClient:
         return self._client
 
     def create_checkout_session(
-        self, tenant_id: int, plan: str, success_url: str, cancel_url: str,
+        self,
+        tenant_id: int,
+        plan: str,
+        success_url: str,
+        cancel_url: str,
     ) -> dict:
         """Create a Stripe Checkout session for upgrading to `plan`."""
         stripe = self._ensure_client()
@@ -65,9 +71,7 @@ class StripeClient:
             if tenant is None:
                 raise ValueError(f"Tenant {tenant_id} not found")
             # Reuse existing customer if we have one
-            sub = db.query(Subscription).filter(
-                Subscription.tenant_id == tenant_id
-            ).first()
+            sub = db.query(Subscription).filter(Subscription.tenant_id == tenant_id).first()
             customer_id = sub.stripe_customer_id if sub else None
 
         params = {
@@ -86,9 +90,7 @@ class StripeClient:
     def construct_webhook_event(self, payload: bytes, signature: str):
         """Verify + parse a Stripe webhook event."""
         stripe = self._ensure_client()
-        return stripe.Webhook.construct_event(
-            payload, signature, self.webhook_secret
-        )
+        return stripe.Webhook.construct_event(payload, signature, self.webhook_secret)
 
     def handle_webhook_event(self, event) -> None:
         """Persist subscription changes to DB."""
@@ -101,9 +103,7 @@ class StripeClient:
             if not tenant_id:
                 return
             with SessionLocal() as db:
-                sub = db.query(Subscription).filter(
-                    Subscription.tenant_id == tenant_id
-                ).first()
+                sub = db.query(Subscription).filter(Subscription.tenant_id == tenant_id).first()
                 if sub is None:
                     sub = Subscription(tenant_id=tenant_id)
                     db.add(sub)
@@ -115,9 +115,11 @@ class StripeClient:
         elif etype in ("customer.subscription.updated", "customer.subscription.created"):
             sub_id = data.get("id")
             with SessionLocal() as db:
-                sub = db.query(Subscription).filter(
-                    Subscription.stripe_subscription_id == sub_id
-                ).first()
+                sub = (
+                    db.query(Subscription)
+                    .filter(Subscription.stripe_subscription_id == sub_id)
+                    .first()
+                )
                 if sub is None:
                     return
                 sub.status = data.get("status", "active")
@@ -134,18 +136,19 @@ class StripeClient:
                 # Reset usage counter on new period
                 if data.get("current_period_end"):
                     import datetime as _dt
-                    sub.current_period_end = _dt.datetime.fromtimestamp(
-                        data["current_period_end"]
-                    )
+
+                    sub.current_period_end = _dt.datetime.fromtimestamp(data["current_period_end"])
                     sub.requests_this_period = 0
                 db.commit()
 
         elif etype == "customer.subscription.deleted":
             sub_id = data.get("id")
             with SessionLocal() as db:
-                sub = db.query(Subscription).filter(
-                    Subscription.stripe_subscription_id == sub_id
-                ).first()
+                sub = (
+                    db.query(Subscription)
+                    .filter(Subscription.stripe_subscription_id == sub_id)
+                    .first()
+                )
                 if sub:
                     sub.status = "canceled"
                     sub.plan = "free"
@@ -159,15 +162,14 @@ class StripeClient:
 # Usage enforcement
 # ============================================================
 
+
 def check_tenant_quota(tenant_id: int) -> tuple[bool, int, int]:
     """
     Returns (allowed, used, limit).
     If allowed=False, tenant exceeded their plan's request quota.
     """
     with SessionLocal() as db:
-        sub = db.query(Subscription).filter(
-            Subscription.tenant_id == tenant_id
-        ).first()
+        sub = db.query(Subscription).filter(Subscription.tenant_id == tenant_id).first()
         if sub is None:
             # No subscription row → free tier
             return True, 0, PLAN_LIMITS["free"]
@@ -180,9 +182,7 @@ def check_tenant_quota(tenant_id: int) -> tuple[bool, int, int]:
 def increment_tenant_usage(tenant_id: int) -> None:
     """Increment the request counter for the current billing period."""
     with SessionLocal() as db:
-        sub = db.query(Subscription).filter(
-            Subscription.tenant_id == tenant_id
-        ).first()
+        sub = db.query(Subscription).filter(Subscription.tenant_id == tenant_id).first()
         if sub is None:
             # Auto-create free-tier subscription row
             sub = Subscription(tenant_id=tenant_id, plan="free", status="active")

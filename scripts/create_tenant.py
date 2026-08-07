@@ -1,4 +1,5 @@
 """Create a new tenant (SaaS multi-tenant setup)."""
+
 import argparse
 import sys
 from pathlib import Path

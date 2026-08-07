@@ -1,4 +1,5 @@
 """API routes — FastAPI routers for REST endpoints + web panel."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -34,6 +35,7 @@ def get_search_engine() -> HybridSearch:
     global _search_engine
     if _search_engine is None:
         from ..main import get_orchestrator
+
         orch = get_orchestrator()
         _search_engine = HybridSearch(llm_orchestrator=orch)
     return _search_engine
@@ -43,6 +45,7 @@ def get_search_engine() -> HybridSearch:
 # Web pages
 # ============================================================
 
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: Session = Depends(get_db)):
     """Main dashboard with KPIs."""
@@ -50,15 +53,18 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     alive = db.query(Link).filter(Link.alive.is_(True)).count()
     dead = db.query(Link).filter(Link.alive.is_(False)).count()
     new = db.query(Link).filter(Link.status == LinkStatus.NEW.value).count()
-    classified = db.query(Link).filter(
-        Link.status.in_([LinkStatus.CLASSIFIED.value, LinkStatus.ALIVE.value, LinkStatus.DEAD.value])
-    ).count()
+    classified = (
+        db.query(Link)
+        .filter(
+            Link.status.in_(
+                [LinkStatus.CLASSIFIED.value, LinkStatus.ALIVE.value, LinkStatus.DEAD.value]
+            )
+        )
+        .count()
+    )
 
     # Category breakdown
-    cat_rows = db.execute(
-        select(Link.category, func.count(Link.id))
-        .group_by(Link.category)
-    ).all()
+    cat_rows = db.execute(select(Link.category, func.count(Link.id)).group_by(Link.category)).all()
     categories = {cat: count for cat, count in cat_rows}
 
     # LLM providers
@@ -135,6 +141,7 @@ async def logs_page(request: Request):
 async def tenants_page(request: Request, db: Session = Depends(get_db)):
     """Multi-tenant management panel."""
     from ..models import Tenant
+
     tenants = db.query(Tenant).all()
     return templates.TemplateResponse(
         request=request,
@@ -146,6 +153,7 @@ async def tenants_page(request: Request, db: Session = Depends(get_db)):
 # ============================================================
 # REST API
 # ============================================================
+
 
 @api_router.get("/links")
 async def list_links(
@@ -178,9 +186,12 @@ async def get_link(link_id: int, db: Session = Depends(get_db)):
     item = _link_to_dict(link)
     item["classification_logs"] = [
         {
-            "tier": log.tier, "category": log.category,
-            "confidence": log.confidence, "rule_matched": log.rule_matched,
-            "llm_provider": log.llm_provider, "semantic_reused": log.semantic_reused,
+            "tier": log.tier,
+            "category": log.category,
+            "confidence": log.confidence,
+            "rule_matched": log.rule_matched,
+            "llm_provider": log.llm_provider,
+            "semantic_reused": log.semantic_reused,
             "created_at": log.created_at.isoformat() if log.created_at else None,
         }
         for log in link.classification_logs
@@ -205,6 +216,7 @@ async def trigger_vitality_check(link_id: int, db: Session = Depends(get_db)):
     if link is None:
         raise HTTPException(404, "Link not found")
     from ..vitality.checker import VitalityChecker
+
     checker = VitalityChecker(delay_min=0, delay_max=0)
     result = await checker.check_link(link, db=db)
     return {

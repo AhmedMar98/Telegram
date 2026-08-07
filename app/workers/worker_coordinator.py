@@ -12,6 +12,7 @@ When multiple userbot workers run on different machines, they must:
 This module is NOT a separate process — it's a thin coordination layer
 that the existing TelethonCollector uses.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,9 +58,9 @@ class WorkerCoordinator:
     async def register(self, channels: list[str]) -> None:
         """Register this worker in the DB."""
         with SessionLocal() as db:
-            existing = db.query(WorkerRegistry).filter(
-                WorkerRegistry.worker_id == self.worker_id
-            ).first()
+            existing = (
+                db.query(WorkerRegistry).filter(WorkerRegistry.worker_id == self.worker_id).first()
+            )
             if existing:
                 existing.status = "active"
                 existing.hostname = socket.gethostname()
@@ -69,16 +70,18 @@ class WorkerCoordinator:
                 existing.last_heartbeat_at = utcnow()
                 existing.stopped_at = None
             else:
-                db.add(WorkerRegistry(
-                    worker_id=self.worker_id,
-                    account_name=self.account_name,
-                    hostname=socket.gethostname(),
-                    pid=os.getpid(),
-                    status="active",
-                    channels_assigned=json.dumps(channels),
-                    links_collected=0,
-                    last_heartbeat_at=utcnow(),
-                ))
+                db.add(
+                    WorkerRegistry(
+                        worker_id=self.worker_id,
+                        account_name=self.account_name,
+                        hostname=socket.gethostname(),
+                        pid=os.getpid(),
+                        status="active",
+                        channels_assigned=json.dumps(channels),
+                        links_collected=0,
+                        last_heartbeat_at=utcnow(),
+                    )
+                )
             db.commit()
         logger.info("[worker] registered: id={} channels={}", self.worker_id, channels)
 
@@ -147,6 +150,7 @@ class WorkerCoordinator:
         """
         try:
             from ..redis_client import get_redis
+
             r = get_redis()
             key = f"channel_lock:{channel}"
             # SET NX EX: only set if not exists, auto-expire after TTL
@@ -170,6 +174,7 @@ class WorkerCoordinator:
         """Release the Redis lock for `channel`."""
         try:
             from ..redis_client import get_redis
+
             r = get_redis()
             key = f"channel_lock:{channel}"
             # Only delete if we own it
@@ -184,6 +189,7 @@ class WorkerCoordinator:
         """Best-effort: release all locks owned by this worker."""
         try:
             from ..redis_client import get_redis
+
             r = get_redis()
             for key in r.scan_iter("channel_lock:*"):
                 owner = r.get(key)
@@ -218,6 +224,6 @@ class WorkerCoordinator:
     @staticmethod
     def list_active_workers() -> list[WorkerRegistry]:
         with SessionLocal() as db:
-            return db.query(WorkerRegistry).filter(
-                WorkerRegistry.status.in_(["active", "idle"])
-            ).all()
+            return (
+                db.query(WorkerRegistry).filter(WorkerRegistry.status.in_(["active", "idle"])).all()
+            )

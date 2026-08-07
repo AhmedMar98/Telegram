@@ -5,6 +5,7 @@ Delegates to app.llm.orchestrator for provider routing + failover.
 Uses semantic memory (cached embeddings) to reuse previous answers
 when a similar URL was already classified (similarity > 0.92).
 """
+
 from __future__ import annotations
 
 import json
@@ -70,7 +71,7 @@ def _parse_llm_json(raw: str) -> dict | None:
     if start == -1 or end == -1 or end <= start:
         return None
     try:
-        return json.loads(raw[start:end + 1])
+        return json.loads(raw[start : end + 1])
     except json.JSONDecodeError:
         return None
 
@@ -84,8 +85,8 @@ async def classify_with_llm(
     """Use the LLM orchestrator to classify a URL."""
     user_msg = (
         f"URL: {url}\nContext: {context[:500]}"
-        if not deep else
-        DEEP_PROMPT.format(url=url, context=context[:500])
+        if not deep
+        else DEEP_PROMPT.format(url=url, context=context[:500])
     )
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},

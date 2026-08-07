@@ -12,6 +12,7 @@ Endpoints:
 
 All endpoints except /webhook require X-API-Key (tenant auth).
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response

@@ -7,18 +7,16 @@ from app.collectors.mock_collector import MockCollector
 
 
 def test_extract_urls_basic():
-    urls = list(BaseCollector.extract_urls(
-        "Check https://example.com and https://t.me/joinchat/abc now"
-    ))
+    urls = list(
+        BaseCollector.extract_urls("Check https://example.com and https://t.me/joinchat/abc now")
+    )
     assert "https://example.com" in urls
     assert "https://t.me/joinchat/abc" in urls
     assert len(urls) == 2
 
 
 def test_extract_urls_dedup():
-    urls = list(BaseCollector.extract_urls(
-        "https://example.com https://example.com"
-    ))
+    urls = list(BaseCollector.extract_urls("https://example.com https://example.com"))
     assert urls == ["https://example.com"]
 
 
@@ -68,6 +66,8 @@ async def test_mock_collector_respects_stop():
 def test_make_collector_returns_mock_when_no_credentials():
     """With TG_MOCK_MODE=true, factory returns MockCollector."""
     from app.collectors.base import make_collector
+
     c = make_collector()
     from app.collectors.mock_collector import MockCollector
+
     assert isinstance(c, MockCollector)

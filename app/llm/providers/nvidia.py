@@ -14,6 +14,7 @@ Auth: Bearer nvapi-<key>
 
 Get a key from: https://build.nvidia.com/ → "Get API Key"
 """
+
 from __future__ import annotations
 
 import httpx
@@ -76,8 +77,9 @@ class NVIDIAProvider(BaseLLMProvider):
             async with httpx.AsyncClient(timeout=90) as client:
                 r = await client.post(self.BASE_URL, headers=headers, json=payload)
             if r.status_code == 429:
-                return LLMResponse(text="", provider=self.name, model=self.model,
-                                   error="rate_limited")
+                return LLMResponse(
+                    text="", provider=self.name, model=self.model, error="rate_limited"
+                )
             if r.status_code == 401:
                 logger.warning("[nvidia] invalid API key")
                 return None

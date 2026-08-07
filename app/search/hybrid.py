@@ -9,6 +9,7 @@ Score = α·fts_score + β·semantic_score + γ·recency_boost + δ·popularity_
 
 FTS5 virtual table is created lazily on first search.
 """
+
 from __future__ import annotations
 
 import math
@@ -64,23 +65,27 @@ class HybridSearch:
             try:
                 # Create FTS5 table without contentless external-content linking
                 # (simpler + more robust against schema changes)
-                conn.execute(text(f"""
+                conn.execute(
+                    text(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS {self.FTS_TABLE}
                     USING fts5(
                         link_id UNINDEXED,
                         url, title, description, category,
                         tokenize='unicode61'
                     )
-                """))
+                """)
+                )
                 conn.commit()
                 # Populate from links table (idempotent via NOT EXISTS check)
                 try:
-                    conn.execute(text(f"""
+                    conn.execute(
+                        text(f"""
                         INSERT INTO {self.FTS_TABLE}(rowid, link_id, url, title, description, category)
                         SELECT id, id, url, COALESCE(title,''), COALESCE(description,''), category
                         FROM links
                         WHERE id NOT IN (SELECT link_id FROM {self.FTS_TABLE} WHERE link_id IS NOT NULL)
-                    """))
+                    """)
+                    )
                     conn.commit()
                 except Exception:
                     pass  # OK if empty or already populated
@@ -145,22 +150,24 @@ class HybridSearch:
                 + W_RECENCY * recency
                 + W_POPULARITY * popularity
             )
-            results.append(SearchResult(
-                link_id=link.id,
-                url=link.url,
-                title=link.title,
-                description=link.description,
-                category=link.category,
-                status=link.status,
-                alive=link.alive,
-                score=round(total, 4),
-                score_breakdown={
-                    "fts": round(fts_score, 4),
-                    "semantic": round(sem_score, 4),
-                    "recency": round(recency, 4),
-                    "popularity": round(popularity, 4),
-                },
-            ))
+            results.append(
+                SearchResult(
+                    link_id=link.id,
+                    url=link.url,
+                    title=link.title,
+                    description=link.description,
+                    category=link.category,
+                    status=link.status,
+                    alive=link.alive,
+                    score=round(total, 4),
+                    score_breakdown={
+                        "fts": round(fts_score, 4),
+                        "semantic": round(sem_score, 4),
+                        "recency": round(recency, 4),
+                        "popularity": round(popularity, 4),
+                    },
+                )
+            )
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
@@ -176,13 +183,16 @@ class HybridSearch:
             with engine.connect() as conn:
                 # Sanitize query: wrap terms in quotes to prevent injection
                 safe_q = " ".join(f'"{t}"' for t in query.split() if t)
-                rows = conn.execute(text(f"""
+                rows = conn.execute(
+                    text(f"""
                     SELECT link_id, bm25({self.FTS_TABLE}) AS score
                     FROM {self.FTS_TABLE}
                     WHERE {self.FTS_TABLE} MATCH :q
                     ORDER BY score
                     LIMIT :limit
-                """), {"q": safe_q, "limit": limit}).all()
+                """),
+                    {"q": safe_q, "limit": limit},
+                ).all()
                 if not rows:
                     return {}
                 # Convert bm25 (negative, lower=better) → 0-1 (higher=better)
@@ -198,7 +208,8 @@ class HybridSearch:
         try:
             import json
 
-            import sqlite_vec  # type: ignore
+            import sqlite_vec
+
             with engine.raw_connection() as raw_conn:
                 # Ensure extension loaded
                 try:
@@ -211,21 +222,26 @@ class HybridSearch:
                 # Create a temp vec table for the query vector
                 cur = raw_conn.cursor()
                 dim = len(query_vec)
-                cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS tmp_query_vec USING vec0(embedding float[{dim}])")
+                cur.execute(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS tmp_query_vec USING vec0(embedding float[{dim}])"
+                )
                 cur.execute("DELETE FROM tmp_query_vec")
                 cur.execute(
                     "INSERT INTO tmp_query_vec(rowid, embedding) VALUES (1, ?)",
                     [json.dumps(query_vec)],
                 )
                 # KNN join against link_embeddings
-                rows = cur.execute("""
+                rows = cur.execute(
+                    """
                     SELECT le.link_id, vec_distance_cosine(le.embedding, tqv.embedding) AS dist
                     FROM link_embeddings le
                     JOIN tmp_query_vec tqv
                     WHERE le.embedding MATCH ?
                       AND k = :k
                     ORDER BY dist
-                """, [json.dumps(query_vec)]).fetchall()
+                """,
+                    [json.dumps(query_vec)],
+                ).fetchall()
                 # Also fall back to JSON-based scan if vec table not set up
                 if not rows:
                     rows = self._semantic_search_python(query_vec, limit)
@@ -239,12 +255,16 @@ class HybridSearch:
             logger.warning("Semantic search failed: {}", e)
             return {}
 
-    def _semantic_search_python(self, query_vec: list[float], limit: int) -> list[tuple[int, float]]:
+    def _semantic_search_python(
+        self, query_vec: list[float], limit: int
+    ) -> list[tuple[int, float]]:
         """Pure-Python fallback: scan all embeddings and rank by cosine similarity."""
         import json
+
         results = []
         with SessionLocal() as db:
             from ..models import LinkEmbedding
+
             rows = db.query(LinkEmbedding).all()
             for row in rows:
                 try:

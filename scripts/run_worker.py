@@ -1,4 +1,5 @@
 """Run a single worker: collect / classify / vitality / all."""
+
 import argparse
 import asyncio
 import sys
@@ -12,15 +13,19 @@ from app.logging_setup import setup_logging
 async def run_worker(name: str) -> None:
     if name == "collect":
         from app.workers.collect_worker import run_loop
+
         await run_loop(interval_sec=60)
     elif name == "classify":
         from app.workers.classify_worker import run_loop
+
         await run_loop(interval_sec=30)
     elif name == "vitality":
         from app.workers.vitality_worker import run_loop
+
         await run_loop()
     elif name == "all":
         from app.run_all import main
+
         await main()
     else:
         print(f"Unknown worker: {name}")

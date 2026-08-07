@@ -1,4 +1,5 @@
 """Mistral AI provider — OpenAI-compatible API."""
+
 from __future__ import annotations
 
 import httpx
@@ -43,8 +44,9 @@ class MistralProvider(BaseLLMProvider):
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(self.BASE_URL, headers=headers, json=payload)
             if r.status_code == 429:
-                return LLMResponse(text="", provider=self.name, model=self.model,
-                                   error="rate_limited")
+                return LLMResponse(
+                    text="", provider=self.name, model=self.model, error="rate_limited"
+                )
             if r.status_code != 200:
                 logger.warning("[mistral] HTTP {}: {}", r.status_code, r.text[:200])
                 return None

@@ -1,4 +1,5 @@
 """Google Gemini provider via the google-generativeai SDK."""
+
 from __future__ import annotations
 
 from loguru import logger
@@ -24,7 +25,8 @@ class GeminiProvider(BaseLLMProvider):
         if self._client is not None:
             return self._client
         try:
-            import google.generativeai as genai  # type: ignore
+            import google.generativeai as genai
+
             genai.configure(api_key=self.api_key)
             self._client = genai.GenerativeModel(self.model)
         except ImportError:
@@ -55,6 +57,7 @@ class GeminiProvider(BaseLLMProvider):
         try:
             # SDK is synchronous — run in thread pool
             import anyio
+
             response = await anyio.to_thread.run_sync(
                 lambda: client.generate_content(
                     prompt,

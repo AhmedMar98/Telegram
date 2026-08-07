@@ -1,4 +1,5 @@
 """Tests for the search module (text + semantic)."""
+
 import asyncio
 
 import pytest
@@ -19,36 +20,49 @@ def setup_db():
 
 def _seed_links():
     with SessionLocal() as db:
-        db.add_all([
-            Link(
-                url="https://t.me/joinchat/python_devs",
-                url_hash="h1", title="Python developers group",
-                description="Telegram group for Python devs",
-                category="telegram", status=LinkStatus.ALIVE.value,
-                alive=True, click_count=10,
-            ),
-            Link(
-                url="https://example.com/python-tutorial.pdf",
-                url_hash="h2", title="Python tutorial PDF",
-                description="Learn Python from scratch",
-                category="file", status=LinkStatus.ALIVE.value,
-                alive=True, click_count=5,
-            ),
-            Link(
-                url="https://github.com/user/python-repo",
-                url_hash="h3", title="Awesome Python repo",
-                description="Curated list of Python packages",
-                category="tool", status=LinkStatus.ALIVE.value,
-                alive=True, click_count=20,
-            ),
-            Link(
-                url="https://example.com/unrelated-news",
-                url_hash="h4", title="Breaking news today",
-                description="Latest headlines from around the world",
-                category="news", status=LinkStatus.ALIVE.value,
-                alive=True,
-            ),
-        ])
+        db.add_all(
+            [
+                Link(
+                    url="https://t.me/joinchat/python_devs",
+                    url_hash="h1",
+                    title="Python developers group",
+                    description="Telegram group for Python devs",
+                    category="telegram",
+                    status=LinkStatus.ALIVE.value,
+                    alive=True,
+                    click_count=10,
+                ),
+                Link(
+                    url="https://example.com/python-tutorial.pdf",
+                    url_hash="h2",
+                    title="Python tutorial PDF",
+                    description="Learn Python from scratch",
+                    category="file",
+                    status=LinkStatus.ALIVE.value,
+                    alive=True,
+                    click_count=5,
+                ),
+                Link(
+                    url="https://github.com/user/python-repo",
+                    url_hash="h3",
+                    title="Awesome Python repo",
+                    description="Curated list of Python packages",
+                    category="tool",
+                    status=LinkStatus.ALIVE.value,
+                    alive=True,
+                    click_count=20,
+                ),
+                Link(
+                    url="https://example.com/unrelated-news",
+                    url_hash="h4",
+                    title="Breaking news today",
+                    description="Latest headlines from around the world",
+                    category="news",
+                    status=LinkStatus.ALIVE.value,
+                    alive=True,
+                ),
+            ]
+        )
         db.commit()
 
 

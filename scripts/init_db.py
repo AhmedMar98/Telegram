@@ -1,4 +1,5 @@
 """Initialize the database — creates all tables + seeds a default account."""
+
 import sys
 from pathlib import Path
 
@@ -43,7 +44,9 @@ def main() -> None:
     logger.info("")
     logger.info("Next steps:")
     logger.info("  1. Copy .env.example to .env and fill in credentials")
-    logger.info("  2. (Optional) Create a tenant: python scripts/create_tenant.py --name 'X' --slug x")
+    logger.info(
+        "  2. (Optional) Create a tenant: python scripts/create_tenant.py --name 'X' --slug x"
+    )
     logger.info("  3. Run: python scripts/run_worker.py collect")
     logger.info("  4. Run: python scripts/run_worker.py classify")
     logger.info("  5. Run: python scripts/run_web.py")

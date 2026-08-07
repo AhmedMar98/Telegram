@@ -1,4 +1,5 @@
 """HuggingFace Inference API provider."""
+
 from __future__ import annotations
 
 import httpx
