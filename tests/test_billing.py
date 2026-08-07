@@ -15,6 +15,7 @@ from app.models import Subscription, Tenant
 def patch_session_local(db_session):
     """Patch SessionLocal in stripe_client to use the test session."""
     import app.billing.stripe_client as sc
+
     original = sc.SessionLocal
     sc.SessionLocal = lambda: _Ctx(db_session)
     yield
@@ -24,8 +25,10 @@ def patch_session_local(db_session):
 class _Ctx:
     def __init__(self, session):
         self.session = session
+
     def __enter__(self):
         return self.session
+
     def __exit__(self, *args):
         return False
 
@@ -33,6 +36,7 @@ class _Ctx:
 # ============================================================
 # Plan limits
 # ============================================================
+
 
 def test_plan_limits_defined():
     assert PLAN_LIMITS["free"] == 1_000
@@ -43,6 +47,7 @@ def test_plan_limits_defined():
 # ============================================================
 # Quota checking
 # ============================================================
+
 
 def test_check_quota_no_subscription_returns_free_limits(db_session):
     """A tenant with no subscription row gets free-tier limits."""
@@ -57,10 +62,14 @@ def test_check_quota_with_subscription(db_session):
     db_session.add(Tenant(name="T", slug="t1", api_key_hash="h", plan="pro"))
     db_session.commit()
     tenant_id = db_session.query(Tenant).first().id
-    db_session.add(Subscription(
-        tenant_id=tenant_id, plan="pro", status="active",
-        requests_this_period=50_000,
-    ))
+    db_session.add(
+        Subscription(
+            tenant_id=tenant_id,
+            plan="pro",
+            status="active",
+            requests_this_period=50_000,
+        )
+    )
     db_session.commit()
 
     allowed, used, limit = check_tenant_quota(tenant_id)
@@ -74,10 +83,14 @@ def test_check_quota_exceeded(db_session):
     db_session.add(Tenant(name="T", slug="t2", api_key_hash="h", plan="free"))
     db_session.commit()
     tenant_id = db_session.query(Tenant).first().id
-    db_session.add(Subscription(
-        tenant_id=tenant_id, plan="free", status="active",
-        requests_this_period=PLAN_LIMITS["free"],
-    ))
+    db_session.add(
+        Subscription(
+            tenant_id=tenant_id,
+            plan="free",
+            status="active",
+            requests_this_period=PLAN_LIMITS["free"],
+        )
+    )
     db_session.commit()
 
     allowed, used, limit = check_tenant_quota(tenant_id)
@@ -87,6 +100,7 @@ def test_check_quota_exceeded(db_session):
 # ============================================================
 # Usage increment
 # ============================================================
+
 
 def test_increment_usage_creates_subscription_row(db_session):
     """If no subscription row exists, increment creates one."""
@@ -105,10 +119,14 @@ def test_increment_usage_increments_existing(db_session):
     db_session.add(Tenant(name="T", slug="t4", api_key_hash="h", plan="pro"))
     db_session.commit()
     tenant_id = db_session.query(Tenant).first().id
-    db_session.add(Subscription(
-        tenant_id=tenant_id, plan="pro", status="active",
-        requests_this_period=10,
-    ))
+    db_session.add(
+        Subscription(
+            tenant_id=tenant_id,
+            plan="pro",
+            status="active",
+            requests_this_period=10,
+        )
+    )
     db_session.commit()
 
     increment_tenant_usage(tenant_id)
@@ -122,6 +140,7 @@ def test_increment_usage_increments_existing(db_session):
 # ============================================================
 # StripeClient
 # ============================================================
+
 
 def test_stripe_client_not_configured_without_key():
     """Without STRIPE_API_KEY, is_configured=False."""

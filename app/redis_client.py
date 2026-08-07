@@ -7,6 +7,7 @@ Used for:
     - Rate-limit counters
     - Caching LLM responses
 """
+
 from __future__ import annotations
 
 import redis
@@ -23,9 +24,7 @@ def get_redis() -> redis.Redis:
     global _redis_pool
     if _redis_pool is None:
         settings = get_settings()
-        _redis_pool = redis.ConnectionPool.from_url(
-            settings.redis_url, decode_responses=True
-        )
+        _redis_pool = redis.ConnectionPool.from_url(settings.redis_url, decode_responses=True)
     return redis.Redis(connection_pool=_redis_pool)
 
 

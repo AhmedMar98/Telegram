@@ -68,3 +68,4 @@ alembic/__pycache__/
 
 # Frontend build
 node_modules/
+.mypy_cache/

@@ -11,6 +11,7 @@ def setup_db(db_session):
     """Use the shared in-memory DB session."""
     # Patch SessionLocal to return db_session for the duration of the test
     import app.classifier.semantic_memory as sm
+
     original = sm.SessionLocal
     sm.SessionLocal = lambda: _CtxMgr(db_session)
     yield
@@ -19,10 +20,13 @@ def setup_db(db_session):
 
 class _CtxMgr:
     """Wrap a session so it can be used as a context manager."""
+
     def __init__(self, session):
         self.session = session
+
     def __enter__(self):
         return self.session
+
     def __exit__(self, *args):
         return False
 
@@ -99,8 +103,14 @@ def test_find_similar_misses_below_threshold(db_session):
 def test_find_similar_increments_used_count(db_session):
     mem = SemanticMemory(threshold=0.5)
     vec = [1.0, 0.0, 0.0]
-    mem.store(url="https://a.com", url_hash="ha", embedding=vec,
-              category="other", tier="rules", confidence=0.5)
+    mem.store(
+        url="https://a.com",
+        url_hash="ha",
+        embedding=vec,
+        category="other",
+        tier="rules",
+        confidence=0.5,
+    )
     mem.find_similar(vec)
     mem.find_similar(vec)
     # Cache row should have used_count=2
@@ -113,10 +123,22 @@ def test_store_updates_existing_url(db_session):
     mem = SemanticMemory()
     vec1 = [1.0, 0.0]
     vec2 = [0.5, 0.5]
-    mem.store(url="https://x.com", url_hash="hx", embedding=vec1,
-              category="other", tier="rules", confidence=0.5)
-    mem.store(url="https://x.com", url_hash="hx", embedding=vec2,
-              category="tool", tier="llm", confidence=0.9)
+    mem.store(
+        url="https://x.com",
+        url_hash="hx",
+        embedding=vec1,
+        category="other",
+        tier="rules",
+        confidence=0.5,
+    )
+    mem.store(
+        url="https://x.com",
+        url_hash="hx",
+        embedding=vec2,
+        category="tool",
+        tier="llm",
+        confidence=0.9,
+    )
     rows = db_session.query(SemanticCache).filter_by(url_hash="hx").all()
     assert len(rows) == 1  # updated, not duplicated
     assert rows[0].category == "tool"

@@ -1,4 +1,5 @@
 """Main FastAPI application factory."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ def get_orchestrator():
     global _orchestrator
     if _orchestrator is None:
         from .llm.orchestrator import LLMOrchestrator
+
         _orchestrator = LLMOrchestrator()
     return _orchestrator
 
@@ -42,11 +44,13 @@ async def lifespan(app: FastAPI):
 
     # Init DB
     from .database import init_db
+
     init_db()
     logger.info("Database initialized")
 
     # v4.1 Start WebSocket log broadcaster
     from .web.websocket_logs import get_broadcaster
+
     bc = get_broadcaster()
     await bc.start()
 
@@ -59,6 +63,7 @@ async def lifespan(app: FastAPI):
     summary_task = None
     try:
         from .workers.summary_worker import DailySummaryWorker
+
         summary_worker = DailySummaryWorker(run_hour=0, run_minute=5)
         summary_task = asyncio.create_task(summary_worker.run_loop())
         logger.info("Daily summary worker scheduled for 00:05 daily")
@@ -109,11 +114,13 @@ def create_app() -> FastAPI:
     # v4.1 routers
     from .web.metrics import router as metrics_router
     from .web.websocket_logs import router as ws_router
+
     app.include_router(ws_router)
     app.include_router(metrics_router)
     # v5.0 routers (lazy, only if installed)
     try:
         from .billing.routes import router as billing_router
+
         app.include_router(billing_router)
     except ImportError:
         pass
@@ -124,8 +131,11 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": "4.1.0",
             "features": [
-                "semantic_memory", "multi_tenant", "daily_summary",
-                "websocket_logs", "prometheus_metrics",
+                "semantic_memory",
+                "multi_tenant",
+                "daily_summary",
+                "websocket_logs",
+                "prometheus_metrics",
             ],
         }
 

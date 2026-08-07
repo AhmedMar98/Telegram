@@ -7,6 +7,7 @@ For production, run each worker as a separate process:
     python scripts/run_worker.py vitality
     python scripts/run_web.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ async def main() -> None:
 
     # Init DB
     from .database import init_db
+
     init_db()
 
     # Start workers as background tasks
@@ -39,6 +41,7 @@ async def main() -> None:
     # Start web server
     if settings.app_host:
         import uvicorn
+
         config = uvicorn.Config(
             "app.main:app",
             host=settings.app_host,

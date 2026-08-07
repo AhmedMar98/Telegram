@@ -1,4 +1,5 @@
 """Common base class + types for LLM providers."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -9,6 +10,7 @@ from datetime import datetime
 @dataclass
 class QuotaInfo:
     """Quota info parsed from provider response headers."""
+
     limit: int | None = None
     remaining: int | None = None
     reset_at: datetime | None = None
@@ -19,6 +21,7 @@ class QuotaInfo:
 @dataclass
 class LLMResponse:
     """Normalized response from any LLM provider."""
+
     text: str
     provider: str
     model: str

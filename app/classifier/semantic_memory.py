@@ -10,6 +10,7 @@ Flow:
 This saves ~4% of LLM calls (the tier that benefits most is when similar
 Telegram invite links are repeatedly collected across channels).
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ from ..timeutil import utcnow
 @dataclass
 class SemanticHit:
     """A semantic memory cache hit."""
+
     url: str
     category: str
     tier: str
@@ -41,9 +43,7 @@ class SemanticMemory:
     def __init__(self, threshold: float = 0.92) -> None:
         self.threshold = threshold
 
-    def find_similar(
-        self, embedding: list[float], top_k: int = 5
-    ) -> SemanticHit | None:
+    def find_similar(self, embedding: list[float], top_k: int = 5) -> SemanticHit | None:
         """
         Search the cache for the most similar embedding above the threshold.
 
@@ -55,8 +55,14 @@ class SemanticMemory:
 
         with SessionLocal() as db:
             rows = db.execute(
-                select(SemanticCache.id, SemanticCache.url, SemanticCache.embedding_json,
-                       SemanticCache.category, SemanticCache.tier, SemanticCache.confidence)
+                select(
+                    SemanticCache.id,
+                    SemanticCache.url,
+                    SemanticCache.embedding_json,
+                    SemanticCache.category,
+                    SemanticCache.tier,
+                    SemanticCache.confidence,
+                )
                 .order_by(SemanticCache.last_used_at.desc().nullsfirst())
                 .limit(500)
             ).all()
@@ -86,7 +92,10 @@ class SemanticMemory:
         if best is not None and best.similarity >= self.threshold:
             logger.debug(
                 "[semantic-memory] HIT: sim={:.4f} (≥{}) url={} → {}",
-                best.similarity, self.threshold, best.url[:60], best.category,
+                best.similarity,
+                self.threshold,
+                best.url[:60],
+                best.category,
             )
             self._mark_used(best.cache_id)
             return best
@@ -107,9 +116,7 @@ class SemanticMemory:
         if not embedding:
             return
         with SessionLocal() as db:
-            existing = db.query(SemanticCache).filter(
-                SemanticCache.url_hash == url_hash
-            ).first()
+            existing = db.query(SemanticCache).filter(SemanticCache.url_hash == url_hash).first()
             if existing:
                 # Update embedding in case the URL's surrounding text changed
                 existing.embedding_json = json.dumps(embedding)
@@ -118,14 +125,16 @@ class SemanticMemory:
                 existing.confidence = confidence
                 db.commit()
                 return
-            db.add(SemanticCache(
-                url_hash=url_hash,
-                url=url,
-                embedding_json=json.dumps(embedding),
-                category=category,
-                tier=tier,
-                confidence=confidence,
-            ))
+            db.add(
+                SemanticCache(
+                    url_hash=url_hash,
+                    url=url,
+                    embedding_json=json.dumps(embedding),
+                    category=category,
+                    tier=tier,
+                    confidence=confidence,
+                )
+            )
             db.commit()
 
     def stats(self) -> dict:

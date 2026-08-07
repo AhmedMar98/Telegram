@@ -8,6 +8,7 @@ For each monitored channel:
     4. Insert new links with status=NEW
     5. Update last_message_id
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,9 +66,7 @@ async def collect_once() -> int:
         with SessionLocal() as db:
             # Upsert channel row — bind to the first available account.
             default_account_id = _ensure_default_account(db)
-            ch = db.query(Channel).filter(
-                Channel.channel_username == channel_name
-            ).first()
+            ch = db.query(Channel).filter(Channel.channel_username == channel_name).first()
             if ch is None:
                 ch = Channel(channel_username=channel_name, account_id=default_account_id)
                 db.add(ch)
@@ -78,7 +77,9 @@ async def collect_once() -> int:
             async for link_ext in collector.collect_links(channel_name, last_message_id=last_id):
                 with SessionLocal() as db:
                     # Check if link already exists
-                    existing = db.query(Link).filter(Link.url_hash == url_hash(link_ext.url)).first()
+                    existing = (
+                        db.query(Link).filter(Link.url_hash == url_hash(link_ext.url)).first()
+                    )
                     if existing:
                         continue  # dedup
 
@@ -100,6 +101,7 @@ async def collect_once() -> int:
                     # v4.1 metrics
                     try:
                         from ..web.metrics import record_link_collected
+
                         record_link_collected()
                     except Exception:
                         pass
@@ -109,11 +111,11 @@ async def collect_once() -> int:
                     # (Channel has no last_seen_at column — the previous code
                     # set it as a plain Python attr and it was never persisted;
                     # dropped.)
-                    ch = db.query(Channel).filter(
-                        Channel.channel_username == channel_name
-                    ).first()
+                    ch = db.query(Channel).filter(Channel.channel_username == channel_name).first()
                     if ch and link_ext.source_message_id:
-                        ch.last_message_id = max(ch.last_message_id or 0, link_ext.source_message_id)
+                        ch.last_message_id = max(
+                            ch.last_message_id or 0, link_ext.source_message_id
+                        )
                         db.commit()
         except Exception as e:
             logger.exception("[collect] error on channel {}: {}", channel_name, e)
@@ -124,6 +126,7 @@ async def collect_once() -> int:
 
 def _get_settings_channels() -> list[str]:
     from ..config import get_settings
+
     return get_settings().monitor_channels_list
 
 

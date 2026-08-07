@@ -9,6 +9,7 @@ Per-link flow:
     5. Record Prometheus metrics
     6. Release lock
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +62,7 @@ async def classify_once(orchestrator: LLMOrchestrator) -> int:
                     context=fresh.title or "",
                 )
                 latency = time.perf_counter() - t0
-                pipeline.db = db  # type: ignore
+                pipeline.db = db
                 pipeline.apply_to_link(fresh, result)
                 db.commit()
                 classified += 1
@@ -69,6 +70,7 @@ async def classify_once(orchestrator: LLMOrchestrator) -> int:
                 # v4.1 metrics
                 try:
                     from ..web.metrics import record_classified, record_semantic_hit
+
                     record_classified(tier=result.tier.value, latency_seconds=latency)
                     if result.semantic_reused:
                         record_semantic_hit(hit=True)
@@ -79,24 +81,35 @@ async def classify_once(orchestrator: LLMOrchestrator) -> int:
 
                 logger.info(
                     "[classify] #{} → {} ({}, {}, reuse={})",
-                    fresh.id, result.category.value,
-                    result.tier.value, round(result.confidence, 2),
+                    fresh.id,
+                    result.category.value,
+                    result.tier.value,
+                    round(result.confidence, 2),
                     result.semantic_reused,
                 )
 
                 # Embedding for semantic search (separate from cache)
                 if orchestrator is not None and not result.semantic_reused:
-                    text = " ".join(filter(None, [
-                        fresh.url, fresh.title or "", fresh.description or "",
-                    ]))
+                    text = " ".join(
+                        filter(
+                            None,
+                            [
+                                fresh.url,
+                                fresh.title or "",
+                                fresh.description or "",
+                            ],
+                        )
+                    )
                     vec = orchestrator.embed(text)
                     if vec is not None:
-                        db.add(LinkEmbedding(
-                            link_id=fresh.id,
-                            embedding_json=json.dumps(vec),
-                            model_name="all-MiniLM-L6-v2",
-                            dim=len(vec),
-                        ))
+                        db.add(
+                            LinkEmbedding(
+                                link_id=fresh.id,
+                                embedding_json=json.dumps(vec),
+                                model_name="all-MiniLM-L6-v2",
+                                dim=len(vec),
+                            )
+                        )
                         db.commit()
             except Exception as e:
                 logger.exception("[classify] error on link #{}: {}", fresh.id, e)

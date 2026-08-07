@@ -1,4 +1,5 @@
 """OpenRouter provider — unified gateway for many free models."""
+
 from __future__ import annotations
 
 import httpx
@@ -47,11 +48,13 @@ class OpenRouterProvider(BaseLLMProvider):
                 r = await client.post(self.BASE_URL, headers=headers, json=payload)
             quota = self._parse_quota(r.headers)
             if r.status_code != 200:
-                logger.warning("[openrouter] HTTP {}: {}",
-                               r.status_code, r.text[:200])
+                logger.warning("[openrouter] HTTP {}: {}", r.status_code, r.text[:200])
                 return LLMResponse(
-                    text="", provider=self.name, model=self.model,
-                    quota=quota, error=f"HTTP {r.status_code}: {r.text[:200]}",
+                    text="",
+                    provider=self.name,
+                    model=self.model,
+                    quota=quota,
+                    error=f"HTTP {r.status_code}: {r.text[:200]}",
                 )
             data = r.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")

@@ -1,4 +1,5 @@
 """Tests for crypto module — AES-256-GCM + HMAC."""
+
 import pytest
 
 from app.crypto import (

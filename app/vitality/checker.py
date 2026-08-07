@@ -11,6 +11,7 @@ Telegram-specific URLs (t.me/joinchat/...) are checked by attempting
 to resolve the entity via the bot API (not userbot) — this avoids
 sending spam while still detecting dead invites.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,7 @@ from ..models import Link, LinkStatus, VitalityCheck
 from ..timeutil import utcnow
 
 # Defaults
-DEFAULT_DELAY_MIN = 5 * 60   # 5 minutes
+DEFAULT_DELAY_MIN = 5 * 60  # 5 minutes
 DEFAULT_DELAY_MAX = 10 * 60  # 10 minutes
 DEFAULT_TIMEOUT = 8.0
 USER_AGENT = (
@@ -69,8 +70,9 @@ class VitalityChecker:
         a normal alive result.
         """
         if not url:
-            return VitalityResult(alive=False, http_status=None, response_time_ms=None,
-                                  error="empty_url")
+            return VitalityResult(
+                alive=False, http_status=None, response_time_ms=None, error="empty_url"
+            )
         headers = {"User-Agent": USER_AGENT}
         t0 = asyncio.get_event_loop().time()
         try:
@@ -78,33 +80,41 @@ class VitalityChecker:
             if result is not None:
                 return result
         except httpx.TimeoutException:
-            return VitalityResult(alive=False, http_status=None,
-                                  response_time_ms=None, error="timeout")
+            return VitalityResult(
+                alive=False, http_status=None, response_time_ms=None, error="timeout"
+            )
         except (httpx.ConnectError, ssl.SSLError) as e:
             # Fall through to the insecure retry below for TLS errors only.
             if not isinstance(e, ssl.SSLError) and "SSL" not in str(e):
-                return VitalityResult(alive=False, http_status=None,
-                                      response_time_ms=None,
-                                      error=f"connect_error: {e}")
+                return VitalityResult(
+                    alive=False,
+                    http_status=None,
+                    response_time_ms=None,
+                    error=f"connect_error: {e}",
+                )
         except Exception as e:
-            return VitalityResult(alive=False, http_status=None,
-                                  response_time_ms=None, error=str(e))
+            return VitalityResult(
+                alive=False, http_status=None, response_time_ms=None, error=str(e)
+            )
 
         # TLS retry — some Telegram-adjacent hosts present self-signed certs.
         # We record the bypass explicitly so callers can flag these results.
         try:
             result = await self._probe(url, headers, verify=False)
             if result is None:
-                return VitalityResult(alive=False, http_status=None,
-                                      response_time_ms=None,
-                                      error="probe_failed")
+                return VitalityResult(
+                    alive=False, http_status=None, response_time_ms=None, error="probe_failed"
+                )
             # Preserve alive/http_status but tag the TLS bypass.
             result.error = (result.error + "; tls_bypassed") if result.error else "tls_bypassed"
             return result
         except Exception as e:
-            return VitalityResult(alive=False, http_status=None,
-                                  response_time_ms=int((asyncio.get_event_loop().time() - t0) * 1000),
-                                  error=f"tls_retry_failed: {e}")
+            return VitalityResult(
+                alive=False,
+                http_status=None,
+                response_time_ms=int((asyncio.get_event_loop().time() - t0) * 1000),
+                error=f"tls_retry_failed: {e}",
+            )
 
     async def _probe(self, url: str, headers: dict, verify: bool) -> VitalityResult | None:
         """Actual HTTP probe. Returns VitalityResult on completion; None if unreachable."""
@@ -141,18 +151,21 @@ class VitalityChecker:
         link.status = LinkStatus.ALIVE.value if result.alive else LinkStatus.DEAD.value
 
         if db is not None:
-            db.add(VitalityCheck(
-                link_id=link.id,
-                http_status=result.http_status,
-                alive=result.alive,
-                response_time_ms=result.response_time_ms,
-                error=result.error,
-            ))
+            db.add(
+                VitalityCheck(
+                    link_id=link.id,
+                    http_status=result.http_status,
+                    alive=result.alive,
+                    response_time_ms=result.response_time_ms,
+                    error=result.error,
+                )
+            )
             db.commit()
 
         # v4.1 Prometheus metrics
         try:
             from ..web.metrics import record_vitality
+
             record_vitality(result="alive" if result.alive else "dead")
         except Exception:
             pass
@@ -195,10 +208,13 @@ class VitalityChecker:
                     if fresh is None:
                         continue
                     result = await self.check_link(fresh, db=db)
-                    logger.info("[vitality] #{} {} → {} ({})",
-                                fresh.id, fresh.url[:60],
-                                "alive" if result.alive else "dead",
-                                result.http_status or result.error)
+                    logger.info(
+                        "[vitality] #{} {} → {} ({})",
+                        fresh.id,
+                        fresh.url[:60],
+                        "alive" if result.alive else "dead",
+                        result.http_status or result.error,
+                    )
                 # Human-like delay between checks.
                 # random used here for pacing only, not for security — S311 safe.
                 delay = random.randint(self.delay_min, self.delay_max)  # noqa: S311

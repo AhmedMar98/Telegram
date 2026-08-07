@@ -1,4 +1,5 @@
 """Tests for the NVIDIA Integrate API provider (v5.1)."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -33,11 +34,16 @@ async def test_nvidia_success():
     with patch("httpx.AsyncClient") as mock_cls:
         client = AsyncMock()
         client.__aenter__.return_value = client
-        client.post = AsyncMock(return_value=_mock_response(200, {
-            "choices": [{"message": {"content": "telegram"}}],
-            "usage": {"prompt_tokens": 15, "completion_tokens": 1},
-            "model": "mistralai/mistral-nemotron",
-        }))
+        client.post = AsyncMock(
+            return_value=_mock_response(
+                200,
+                {
+                    "choices": [{"message": {"content": "telegram"}}],
+                    "usage": {"prompt_tokens": 15, "completion_tokens": 1},
+                    "model": "mistralai/mistral-nemotron",
+                },
+            )
+        )
         mock_cls.return_value = client
         r = await p.chat([{"role": "user", "content": "classify"}])
     assert r is not None
@@ -69,9 +75,7 @@ async def test_nvidia_401_returns_none():
     with patch("httpx.AsyncClient") as mock_cls:
         client = AsyncMock()
         client.__aenter__.return_value = client
-        client.post = AsyncMock(return_value=_mock_response(401, {
-            "detail": "Invalid API key"
-        }))
+        client.post = AsyncMock(return_value=_mock_response(401, {"detail": "Invalid API key"}))
         mock_cls.return_value = client
         r = await p.chat([{"role": "user", "content": "hi"}])
     assert r is None
@@ -114,9 +118,12 @@ async def test_nvidia_thinking_mode_appends_chat_template_kwargs():
 
     async def fake_post(url, headers=None, json=None):
         captured_payload.update(json)
-        return _mock_response(200, {
-            "choices": [{"message": {"content": "answer"}}],
-        })
+        return _mock_response(
+            200,
+            {
+                "choices": [{"message": {"content": "answer"}}],
+            },
+        )
 
     with patch("httpx.AsyncClient") as mock_cls:
         client = AsyncMock()
@@ -135,6 +142,7 @@ async def test_nvidia_thinking_mode_appends_chat_template_kwargs():
 def test_orchestrator_priority_includes_nvidia():
     """v5.1 orchestrator should have nvidia in DEFAULT_PRIORITY."""
     from app.llm.orchestrator import DEFAULT_PRIORITY
+
     assert "nvidia" in DEFAULT_PRIORITY
     # Total should be 11 providers now
     assert len(DEFAULT_PRIORITY) == 11
@@ -142,6 +150,7 @@ def test_orchestrator_priority_includes_nvidia():
 
 def test_orchestrator_instantiates_nvidia():
     from app.llm.orchestrator import LLMOrchestrator
+
     orch = LLMOrchestrator()
     assert "nvidia" in orch.providers
     assert isinstance(orch.providers["nvidia"], NVIDIAProvider)
@@ -150,4 +159,5 @@ def test_orchestrator_instantiates_nvidia():
 def test_nvidia_provider_class_imported_from_providers_package():
     """NVIDIAProvider should be importable from the providers package."""
     from app.llm.providers import NVIDIAProvider as ImportedNVIDIA
+
     assert ImportedNVIDIA is NVIDIADirect

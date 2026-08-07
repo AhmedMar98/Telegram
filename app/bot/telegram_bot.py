@@ -8,10 +8,12 @@ Anti-spam guarantees:
     - Bot NEVER proactively messages users or channels.
     - Rate-limited per user (max 10 commands/minute).
 """
+
 from __future__ import annotations
 
 import time
 from collections import defaultdict
+from typing import Any
 
 from loguru import logger
 
@@ -32,8 +34,10 @@ class TelegramSearchBot:
         self.settings = get_settings()
         self.token = self.settings.tg_bot_token
         self.search = search_engine or HybridSearch()
-        self._bot = None
-        self._dp = None
+        # aiogram Bot/Dispatcher are lazy-imported in start(); typed Any so the
+        # attributes aren't pinned to None for the rest of the class.
+        self._bot: Any = None
+        self._dp: Any = None
         self._user_cmd_log: dict[int, list[float]] = defaultdict(list)
 
     @property
@@ -80,7 +84,8 @@ class TelegramSearchBot:
 
         @self._dp.message(Command("search"))
         async def cmd_search(m: Message) -> None:
-            if not self._check_rate(m.from_user.id):
+            user = m.from_user
+            if user is None or not self._check_rate(user.id):
                 await m.answer("⏳ Too many requests. Wait a minute.")
                 return
             query = (m.text or "").replace("/search", "").strip()
@@ -109,6 +114,7 @@ class TelegramSearchBot:
         @self._dp.message(Command("stats"))
         async def cmd_stats(m: Message) -> None:
             from sqlalchemy import func, select
+
             with SessionLocal() as db:
                 total = db.query(Link).count()
                 alive = db.query(Link).filter(Link.alive.is_(True)).count()
@@ -132,10 +138,16 @@ class TelegramSearchBot:
         @self._dp.message(Command("popular"))
         async def cmd_popular(m: Message) -> None:
             with SessionLocal() as db:
-                links = db.query(Link).filter(
-                    Link.archived.is_(False),
-                    Link.alive.is_(True),
-                ).order_by(Link.click_count.desc()).limit(10).all()
+                links = (
+                    db.query(Link)
+                    .filter(
+                        Link.archived.is_(False),
+                        Link.alive.is_(True),
+                    )
+                    .order_by(Link.click_count.desc())
+                    .limit(10)
+                    .all()
+                )
             if not links:
                 await m.answer("No popular links yet.")
                 return
@@ -151,10 +163,16 @@ class TelegramSearchBot:
         @self._dp.message(Command("alive"))
         async def cmd_alive(m: Message) -> None:
             with SessionLocal() as db:
-                links = db.query(Link).filter(
-                    Link.alive.is_(True),
-                    Link.archived.is_(False),
-                ).order_by(Link.last_checked_at.desc()).limit(10).all()
+                links = (
+                    db.query(Link)
+                    .filter(
+                        Link.alive.is_(True),
+                        Link.archived.is_(False),
+                    )
+                    .order_by(Link.last_checked_at.desc())
+                    .limit(10)
+                    .all()
+                )
             if not links:
                 await m.answer("No alive links yet.")
                 return

@@ -6,6 +6,7 @@ It does NOT classify, send, or persist (beyond handing off the data).
 
 Human-like behavior is enforced here so all implementations inherit it.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,6 +71,7 @@ class CollectedMessage:
 # Base collector
 # ============================================================
 
+
 class BaseCollector(ABC):
     """
     Abstract base class for all collectors.
@@ -88,13 +90,16 @@ class BaseCollector(ABC):
         self._stop = asyncio.Event()
 
     @abstractmethod
-    async def fetch_messages(
+    def fetch_messages(
         self, channel: str, last_message_id: int | None = None
     ) -> AsyncIterator[CollectedMessage]:
-        """Yield messages from a channel newer than last_message_id."""
+        """Yield messages from a channel newer than last_message_id.
+
+        Declared as a plain ``def`` returning an ``AsyncIterator`` (the
+        recommended typing idiom for an abstract async generator); concrete
+        subclasses implement it as ``async def`` with ``yield``.
+        """
         ...
-        # Make this an async generator
-        yield  # pragma: no cover
 
     async def collect_links(
         self, channel: str, last_message_id: int | None = None
@@ -151,6 +156,7 @@ class BaseCollector(ABC):
     def _is_within_active_hours(self) -> bool:
         """Check if current hour is within the active window."""
         from datetime import datetime as _dt
+
         hour = _dt.now().hour
         start = self.settings.collect_active_hours_start
         end = self.settings.collect_active_hours_end
@@ -165,7 +171,9 @@ class BaseCollector(ABC):
         total = wait_seconds + jitter
         logger.warning(
             "FloodWait: sleeping {}s ({}s requested + {}s jitter) before retrying",
-            total, wait_seconds, jitter,
+            total,
+            wait_seconds,
+            jitter,
         )
         await asyncio.sleep(total)
 

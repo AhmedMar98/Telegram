@@ -5,6 +5,7 @@ Tries (in order):
     1. Node CLI: z-ai-web-dev-sdk (if installed via npm)
     2. Direct HTTP API (if ZAI_API_KEY is set)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,6 +49,9 @@ class ZAIProvider(BaseLLMProvider):
         self, messages: list[dict], max_tokens: int, temperature: float
     ) -> LLMResponse | None:
         """Invoke the z-ai CLI with a JSON payload."""
+        # _chat_via_cli is only reached when self._cli_path is set (see chat()),
+        # but assert it so the list is typed list[str], not list[str | None].
+        assert self._cli_path is not None
         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
         cmd = [self._cli_path, "llm", "--prompt", prompt, "--max-tokens", str(max_tokens)]
         try:
@@ -81,6 +85,7 @@ class ZAIProvider(BaseLLMProvider):
     ) -> LLMResponse | None:
         """Direct HTTP fallback (assumes Z.AI OpenAI-compatible endpoint)."""
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(

@@ -10,6 +10,7 @@ Classification pipeline — orchestrates all tiers in order:
 Each tier logs a ClassificationLog entry. The pipeline stops at the
 first tier that returns a confident result (confidence >= threshold).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -51,8 +52,9 @@ TIER_METADATA_MIN = 0.65
 class ClassificationPipeline:
     """Orchestrates tiered classification with semantic memory."""
 
-    def __init__(self, llm_orchestrator=None, db_session=None,
-                 semantic_memory: SemanticMemory | None = None) -> None:
+    def __init__(
+        self, llm_orchestrator=None, db_session=None, semantic_memory: SemanticMemory | None = None
+    ) -> None:
         self.llm = llm_orchestrator
         self.db = db_session
         # Semantic memory is optional but recommended when LLM is configured
@@ -70,12 +72,18 @@ class ClassificationPipeline:
                 if hit is not None:
                     logger.info(
                         "[classify] semantic-memory HIT: {} → {} (sim={:.4f})",
-                        url[:60], hit.category, hit.similarity,
+                        url[:60],
+                        hit.category,
+                        hit.similarity,
                     )
                     # Store under this URL hash too (so future exact matches are instant)
                     self.memory.store(
-                        url=url, url_hash=url_hash, embedding=embedding,
-                        category=hit.category, tier=hit.tier, confidence=hit.confidence,
+                        url=url,
+                        url_hash=url_hash,
+                        embedding=embedding,
+                        category=hit.category,
+                        tier=hit.tier,
+                        confidence=hit.confidence,
                     )
                     return ClassificationResult(
                         category=LinkCategory(hit.category),
@@ -88,8 +96,12 @@ class ClassificationPipeline:
         # Tier 1: Rules
         rule_res = classify_with_rules(url, context)
         if rule_res and rule_res.confidence >= TIER_RULES_MIN:
-            logger.debug("[classify] rules hit: {} → {} ({})",
-                         url[:60], rule_res.category.value, rule_res.confidence)
+            logger.debug(
+                "[classify] rules hit: {} → {} ({})",
+                url[:60],
+                rule_res.category.value,
+                rule_res.confidence,
+            )
             result = ClassificationResult(
                 category=rule_res.category,
                 confidence=rule_res.confidence,
@@ -102,8 +114,12 @@ class ClassificationPipeline:
         # Tier 2: Metadata (HTTP fetch)
         meta = await fetch_metadata(url)
         if meta and meta.confidence >= TIER_METADATA_MIN:
-            logger.debug("[classify] metadata hit: {} → {} ({})",
-                         url[:60], meta.category.value, meta.confidence)
+            logger.debug(
+                "[classify] metadata hit: {} → {} ({})",
+                url[:60],
+                meta.category.value,
+                meta.confidence,
+            )
             result = ClassificationResult(
                 category=meta.category,
                 confidence=meta.confidence,
@@ -117,12 +133,11 @@ class ClassificationPipeline:
         # Tier 3: LLM (if orchestrator configured)
         if self.llm is None:
             # No LLM available → fall back to whatever we have
-            cat = (meta.category if meta else
-                   (rule_res.category if rule_res else LinkCategory.OTHER))
-            conf = (meta.confidence if meta else
-                    (rule_res.confidence if rule_res else 0.30))
+            cat = meta.category if meta else (rule_res.category if rule_res else LinkCategory.OTHER)
+            conf = meta.confidence if meta else (rule_res.confidence if rule_res else 0.30)
             result = ClassificationResult(
-                category=cat, confidence=conf,
+                category=cat,
+                confidence=conf,
                 tier=ClassificationTier.METADATA if meta else ClassificationTier.RULES,
                 title=meta.title if meta else None,
                 description=meta.description if meta else None,
@@ -131,8 +146,13 @@ class ClassificationPipeline:
 
         ai_res = await classify_with_llm(self.llm, url, context, deep=False)
         if ai_res and ai_res.confidence >= 0.6:
-            logger.debug("[classify] LLM hit: {} → {} ({}) via {}",
-                         url[:60], ai_res.category.value, ai_res.confidence, ai_res.provider)
+            logger.debug(
+                "[classify] LLM hit: {} → {} ({}) via {}",
+                url[:60],
+                ai_res.category.value,
+                ai_res.confidence,
+                ai_res.provider,
+            )
             result = ClassificationResult(
                 category=ai_res.category,
                 confidence=ai_res.confidence,
@@ -145,8 +165,12 @@ class ClassificationPipeline:
         # Tier 4: LLM deep (last resort)
         deep_res = await classify_with_llm(self.llm, url, context, deep=True)
         if deep_res:
-            logger.debug("[classify] LLM-deep hit: {} → {} ({})",
-                         url[:60], deep_res.category.value, deep_res.confidence)
+            logger.debug(
+                "[classify] LLM-deep hit: {} → {} ({})",
+                url[:60],
+                deep_res.category.value,
+                deep_res.confidence,
+            )
             result = ClassificationResult(
                 category=deep_res.category,
                 confidence=max(0.5, deep_res.confidence),
@@ -164,7 +188,10 @@ class ClassificationPipeline:
         )
 
     def _maybe_store_memory(
-        self, url: str, url_hash: str, context: str,
+        self,
+        url: str,
+        url_hash: str,
+        context: str,
         result: ClassificationResult,
     ) -> None:
         """Store the classification in semantic cache (best-effort)."""
@@ -174,7 +201,9 @@ class ClassificationPipeline:
             embedding = self.llm.embed(f"{url} {context}")
             if embedding:
                 self.memory.store(
-                    url=url, url_hash=url_hash, embedding=embedding,
+                    url=url,
+                    url_hash=url_hash,
+                    embedding=embedding,
                     category=result.category.value,
                     tier=result.tier.value,
                     confidence=result.confidence,

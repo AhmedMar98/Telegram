@@ -4,6 +4,7 @@ Mock collector — generates synthetic links for local development.
 Useful for testing the full pipeline (classifier → vitality → search → web)
 without a real Telegram account. Set TG_MOCK_MODE=true in .env to activate.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,8 +32,23 @@ _SAMPLE_TEMPLATES = [
     "https://t.me/+{rand} private invite (limited slots)",
 ]
 
-_WORDS = ["tech", "news", "movies", "study", "code", "design", "ai", "crypto",
-          "python", "telegram", "social", "media", "free", "pro", "vip"]
+_WORDS = [
+    "tech",
+    "news",
+    "movies",
+    "study",
+    "code",
+    "design",
+    "ai",
+    "crypto",
+    "python",
+    "telegram",
+    "social",
+    "media",
+    "free",
+    "pro",
+    "vip",
+]
 
 
 def _rand_token(n: int = 8) -> str:
@@ -54,8 +70,9 @@ class MockCollector(BaseCollector):
         """Generate 5-15 fake messages per call."""
         count = random.randint(5, 15)
         start_id = (last_message_id or 0) + 1
-        logger.info("[Mock] Generating {} messages for channel '{}' (start_id={})",
-                    count, channel, start_id)
+        logger.info(
+            "[Mock] Generating {} messages for channel '{}' (start_id={})", count, channel, start_id
+        )
 
         for i in range(count):
             if self._stop.is_set():

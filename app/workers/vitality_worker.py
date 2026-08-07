@@ -1,6 +1,7 @@
 """
 Vitality worker — wrapper around VitalityChecker that runs as a service.
 """
+
 from __future__ import annotations
 
 from loguru import logger

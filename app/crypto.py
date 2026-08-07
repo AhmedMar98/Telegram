@@ -6,6 +6,7 @@ Design:
     - Separate HMAC keys per account (derived from master HMAC key) for API auth.
     - Keys come from .env (never hardcoded).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,6 +51,7 @@ def derive_account_hmac(account_id: str) -> bytes:
 # AES-256-GCM
 # ============================================================
 
+
 def encrypt(plaintext: str, associated_data: bytes | None = None) -> str:
     """
     Encrypt a string with AES-256-GCM.
@@ -85,6 +87,7 @@ def decrypt(blob: str, associated_data: bytes | None = None) -> str:
 # HMAC signing (for inter-service API auth)
 # ============================================================
 
+
 def sign(message: bytes, account_id: str) -> str:
     """Sign a message with the per-account HMAC key. Returns hex digest."""
     key = derive_account_hmac(account_id)
@@ -100,6 +103,7 @@ def verify(message: bytes, account_id: str, signature: str) -> bool:
 # ============================================================
 # Helpers
 # ============================================================
+
 
 def generate_aes_key() -> str:
     """Generate a fresh 32-byte AES key as hex (for .env setup)."""

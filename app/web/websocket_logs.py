@@ -5,6 +5,7 @@ A custom loguru sink that, on every log line, pushes the formatted message
 to all connected WebSocket clients. The FastAPI endpoint /ws/logs accepts
 connections and registers them in a global set.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,8 +23,8 @@ class LogBroadcaster:
 
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
-        self._queue: asyncio.Queue = None  # lazy init
-        self._task: asyncio.Task = None
+        self._queue: asyncio.Queue | None = None  # lazy init
+        self._task: asyncio.Task | None = None
         self._sink_id: int | None = None
 
     async def start(self) -> None:
@@ -31,6 +32,7 @@ class LogBroadcaster:
         if self._task is not None:
             return
         self._queue = asyncio.Queue(maxsize=1000)
+
         # loguru sink must be sync (or async via wrapper)
         def _sink(message):
             try:
@@ -45,7 +47,7 @@ class LogBroadcaster:
                     "message": str(record["message"]),
                 }
                 # Non-blocking put; drop if queue full
-                if self._queue.qsize() < 950:
+                if self._queue is not None and self._queue.qsize() < 950:
                     self._queue.put_nowait(payload)
             except Exception:
                 pass  # never let logging crash
@@ -76,6 +78,7 @@ class LogBroadcaster:
 
     async def _broadcast_loop(self) -> None:
         """Continuously drain the queue and send to all WS clients."""
+        assert self._queue is not None  # set in start() before this task is created
         while True:
             payload = await self._queue.get()
             text = json.dumps(payload, ensure_ascii=False)
@@ -103,7 +106,7 @@ def get_broadcaster() -> LogBroadcaster:
 @router.websocket("/ws/logs")
 async def ws_logs(websocket: WebSocket) -> None:
     """Live log stream. Clients receive JSON lines like:
-        {"time":"12:34:56","level":"INFO","name":"app.collectors","message":"..."}
+    {"time":"12:34:56","level":"INFO","name":"app.collectors","message":"..."}
     """
     bc = get_broadcaster()
     await bc.add_client(websocket)

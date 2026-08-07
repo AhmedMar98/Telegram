@@ -1,4 +1,5 @@
 """Tests for Multi-tenant support (v4.1)."""
+
 import pytest
 
 from app.tenant import (
@@ -68,12 +69,11 @@ def test_create_tenant_and_resolve_roundtrip(db_session):
     """Create a tenant → resolve it by API key."""
     # Patch SessionLocal to use the test session
     import app.tenant as tenant_mod
+
     original = tenant_mod.SessionLocal
     tenant_mod.SessionLocal = lambda: _Ctx(db_session)
     try:
-        tenant, plaintext_key = create_tenant(
-            name="Test Corp", slug="test-corp", plan="pro"
-        )
+        tenant, plaintext_key = create_tenant(name="Test Corp", slug="test-corp", plan="pro")
         assert tenant.id > 0
         assert tenant.slug == "test-corp"
         assert plaintext_key.startswith("lip_test-corp_")
@@ -90,11 +90,13 @@ def test_create_tenant_and_resolve_roundtrip(db_session):
 
 def test_create_tenant_rejects_duplicate_slug(db_session):
     import app.tenant as tenant_mod
+
     original = tenant_mod.SessionLocal
     tenant_mod.SessionLocal = lambda: _Ctx(db_session)
     try:
         create_tenant(name="A", slug="dup", plan="free")
         import pytest
+
         with pytest.raises(ValueError, match="already exists"):
             create_tenant(name="B", slug="dup", plan="free")
     finally:
@@ -103,9 +105,12 @@ def test_create_tenant_rejects_duplicate_slug(db_session):
 
 class _Ctx:
     """Context manager wrapper around a session."""
+
     def __init__(self, session):
         self.session = session
+
     def __enter__(self):
         return self.session
+
     def __exit__(self, *args):
         return False

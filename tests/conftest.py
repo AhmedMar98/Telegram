@@ -1,4 +1,5 @@
 """Shared pytest fixtures."""
+
 import os
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ def _clear_llm_provider_state():
     try:
         from app.database import SessionLocal
         from app.models import LLMProviderState
+
         # Reset provider state
         with SessionLocal() as db:
             db.query(LLMProviderState).delete()
@@ -36,6 +38,7 @@ def _clear_llm_provider_state():
 @pytest.fixture(scope="session")
 def settings():
     from app.config import get_settings
+
     return get_settings()
 
 
@@ -44,6 +47,7 @@ def db_session():
     """Fresh in-memory SQLite session per test."""
     from app.database import SessionLocal, engine
     from app.models import Base
+
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()

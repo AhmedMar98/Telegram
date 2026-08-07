@@ -1,4 +1,5 @@
 """Groq provider — fastest free inference (LPU), OpenAI-compatible API."""
+
 from __future__ import annotations
 
 import httpx
@@ -47,8 +48,11 @@ class GroqProvider(BaseLLMProvider):
                 # Rate limit — caller should failover
                 logger.warning("[groq] rate limited")
                 return LLMResponse(
-                    text="", provider=self.name, model=self.model,
-                    quota=quota, error="rate_limited",
+                    text="",
+                    provider=self.name,
+                    model=self.model,
+                    quota=quota,
+                    error="rate_limited",
                 )
             if r.status_code != 200:
                 logger.warning("[groq] HTTP {}: {}", r.status_code, r.text[:200])

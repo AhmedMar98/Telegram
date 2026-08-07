@@ -1,4 +1,5 @@
 """Generate AES-256 + HMAC keys for .env setup."""
+
 import secrets
 
 

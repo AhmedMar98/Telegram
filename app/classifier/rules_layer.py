@@ -10,6 +10,7 @@ Fast, deterministic, free. Catches obvious patterns:
     - News outlets (common domains)
     - GitHub / GitLab / dev tools
 """
+
 from __future__ import annotations
 
 import re
@@ -32,41 +33,69 @@ class RuleResult:
 _RULES: list[tuple[re.Pattern, LinkCategory, float, str]] = [
     # WhatsApp
     (re.compile(r"chat\.whatsapp\.com/", re.I), LinkCategory.WHATSAPP, 0.98, "wa_group_invite"),
-    (re.compile(r"wa\.me/", re.I),                LinkCategory.WHATSAPP, 0.95, "wa_direct_link"),
-    (re.compile(r"api\.whatsapp\.com/", re.I),    LinkCategory.WHATSAPP, 0.93, "wa_api_link"),
-
+    (re.compile(r"wa\.me/", re.I), LinkCategory.WHATSAPP, 0.95, "wa_direct_link"),
+    (re.compile(r"api\.whatsapp\.com/", re.I), LinkCategory.WHATSAPP, 0.93, "wa_api_link"),
     # Telegram
-    (re.compile(r"t(?:elegram)?\.me/\+", re.I),   LinkCategory.TELEGRAM, 0.98, "tg_private_invite"),
+    (re.compile(r"t(?:elegram)?\.me/\+", re.I), LinkCategory.TELEGRAM, 0.98, "tg_private_invite"),
     (re.compile(r"t(?:elegram)?\.me/joinchat", re.I), LinkCategory.TELEGRAM, 0.98, "tg_joinchat"),
-    (re.compile(r"t(?:elegram)?\.me/(?!joinchat|\+)", re.I), LinkCategory.TELEGRAM, 0.85, "tg_public_link"),
-    (re.compile(r"telegram\.org/", re.I),         LinkCategory.TELEGRAM, 0.70, "tg_official"),
-
+    (
+        re.compile(r"t(?:elegram)?\.me/(?!joinchat|\+)", re.I),
+        LinkCategory.TELEGRAM,
+        0.85,
+        "tg_public_link",
+    ),
+    (re.compile(r"telegram\.org/", re.I), LinkCategory.TELEGRAM, 0.70, "tg_official"),
     # Settings / config files. Only match extensions that end the URL path or
     # come immediately before a query/fragment — avoids false hits like
     # `www.jsonapi.com`.
-    (re.compile(r"\.(json|yaml|yml|toml|ini|conf|env|config|properties)(?:$|[?#])", re.I),
-     LinkCategory.SETTING, 0.95, "config_file_ext"),
-    (re.compile(r"/settings?/|/config/", re.I),   LinkCategory.SETTING, 0.80, "config_path"),
-
+    (
+        re.compile(r"\.(json|yaml|yml|toml|ini|conf|env|config|properties)(?:$|[?#])", re.I),
+        LinkCategory.SETTING,
+        0.95,
+        "config_file_ext",
+    ),
+    (re.compile(r"/settings?/|/config/", re.I), LinkCategory.SETTING, 0.80, "config_path"),
     # Direct file downloads — same terminal-boundary constraint.
-    (re.compile(r"\.(pdf|zip|rar|7z|tar|gz|mp4|mkv|mp3|wav|apk|xlsx?|docx?|pptx?|epub|mobi)(?:$|[?#])", re.I),
-     LinkCategory.FILE, 0.95, "file_download_ext"),
-    (re.compile(r"/download/|/files?/|/uploads?/", re.I),
-     LinkCategory.FILE, 0.75, "file_path"),
-
+    (
+        re.compile(
+            r"\.(pdf|zip|rar|7z|tar|gz|mp4|mkv|mp3|wav|apk|xlsx?|docx?|pptx?|epub|mobi)(?:$|[?#])",
+            re.I,
+        ),
+        LinkCategory.FILE,
+        0.95,
+        "file_download_ext",
+    ),
+    (re.compile(r"/download/|/files?/|/uploads?/", re.I), LinkCategory.FILE, 0.75, "file_path"),
     # Dev tools
-    (re.compile(r"github\.com/|gitlab\.com/|bitbucket\.org/", re.I),
-     LinkCategory.TOOL, 0.92, "dev_repo"),
-    (re.compile(r"stackoverflow\.com/|dev\.to/|medium\.com/", re.I),
-     LinkCategory.TOOL, 0.85, "dev_knowledge"),
-
+    (
+        re.compile(r"github\.com/|gitlab\.com/|bitbucket\.org/", re.I),
+        LinkCategory.TOOL,
+        0.92,
+        "dev_repo",
+    ),
+    (
+        re.compile(r"stackoverflow\.com/|dev\.to/|medium\.com/", re.I),
+        LinkCategory.TOOL,
+        0.85,
+        "dev_knowledge",
+    ),
     # News
-    (re.compile(r"(?:cnn|bbc|reuters|aljazeera|nytimes|washingtonpost|bloomberg|techcrunch|theverge)\.com", re.I),
-     LinkCategory.NEWS, 0.90, "news_outlet"),
-
+    (
+        re.compile(
+            r"(?:cnn|bbc|reuters|aljazeera|nytimes|washingtonpost|bloomberg|techcrunch|theverge)\.com",
+            re.I,
+        ),
+        LinkCategory.NEWS,
+        0.90,
+        "news_outlet",
+    ),
     # Social
-    (re.compile(r"(?:twitter|x|instagram|tiktok|facebook|linkedin|youtube|snapchat)\.com", re.I),
-     LinkCategory.SOCIAL, 0.90, "social_platform"),
+    (
+        re.compile(r"(?:twitter|x|instagram|tiktok|facebook|linkedin|youtube|snapchat)\.com", re.I),
+        LinkCategory.SOCIAL,
+        0.90,
+        "social_platform",
+    ),
 ]
 
 

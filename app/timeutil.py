@@ -7,6 +7,7 @@ Python 3.12 deprecated ``datetime.utcnow()`` in favour of the timezone-aware
 helper that returns a naive UTC datetime — future-compatible without
 breaking the storage layer.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

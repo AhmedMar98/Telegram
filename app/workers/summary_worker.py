@@ -11,6 +11,7 @@ Runs at midnight (configurable), computes:
 Stores in DailySummary table and (optionally) broadcasts to subscribers
 via the Telegram bot's admin channel.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,8 @@ class DailySummaryWorker:
         """Sleep until next midnight, then run once; repeat."""
         logger.info(
             "[daily-summary] started; will run at {:02d}:{:02d} daily",
-            self.run_hour, self.run_minute,
+            self.run_hour,
+            self.run_minute,
         )
         while not self._stop.is_set():
             sleep_sec = self._seconds_until_next_run()
@@ -74,11 +76,15 @@ class DailySummaryWorker:
 
         with SessionLocal() as db:
             # New links discovered that day
-            new_links = db.query(Link).filter(
-                Link.discovered_at >= start_of_day,
-                Link.discovered_at < end_of_day,
-                Link.archived.is_(False),
-            ).all()
+            new_links = (
+                db.query(Link)
+                .filter(
+                    Link.discovered_at >= start_of_day,
+                    Link.discovered_at < end_of_day,
+                    Link.archived.is_(False),
+                )
+                .all()
+            )
 
             total_new = len(new_links)
             total_alive = sum(1 for link in new_links if link.alive)
@@ -90,18 +96,21 @@ class DailySummaryWorker:
                 key=lambda link: (link.click_count or 0) + (link.search_hit_count or 0),
                 reverse=True,
             )[:10]
-            top_links_json = json.dumps([
-                {
-                    "id": link.id,
-                    "url": link.url,
-                    "title": link.title,
-                    "category": link.category,
-                    "alive": link.alive,
-                    "clicks": link.click_count or 0,
-                    "search_hits": link.search_hit_count or 0,
-                }
-                for link in top_links
-            ], ensure_ascii=False)
+            top_links_json = json.dumps(
+                [
+                    {
+                        "id": link.id,
+                        "url": link.url,
+                        "title": link.title,
+                        "category": link.category,
+                        "alive": link.alive,
+                        "clicks": link.click_count or 0,
+                        "search_hits": link.search_hit_count or 0,
+                    }
+                    for link in top_links
+                ],
+                ensure_ascii=False,
+            )
 
             # Category breakdown
             cat_rows = db.execute(
@@ -114,9 +123,7 @@ class DailySummaryWorker:
             category_json = json.dumps(category_breakdown, ensure_ascii=False)
 
             # Upsert summary
-            summary = db.query(DailySummary).filter(
-                DailySummary.summary_date == date_str
-            ).first()
+            summary = db.query(DailySummary).filter(DailySummary.summary_date == date_str).first()
             if summary is None:
                 summary = DailySummary(summary_date=date_str)
                 db.add(summary)
@@ -131,7 +138,10 @@ class DailySummaryWorker:
 
         logger.info(
             "[daily-summary] {} created: new={} alive={} dead={}",
-            date_str, total_new, total_alive, total_dead,
+            date_str,
+            total_new,
+            total_alive,
+            total_dead,
         )
         return summary
 

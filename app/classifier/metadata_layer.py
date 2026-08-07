@@ -8,6 +8,7 @@ Uses HTTP HEAD/GET to fetch:
     - og:type (article, video, website, ...)
     - File extension from final URL
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,15 +33,15 @@ class MetadataResult:
 
 # Map content-type → category
 _CT_MAP = [
-    ("application/pdf",                  LinkCategory.FILE,    0.92),
-    ("application/zip",                  LinkCategory.FILE,    0.92),
-    ("application/octet-stream",         LinkCategory.FILE,    0.70),
-    ("image/",                           LinkCategory.FILE,    0.75),
-    ("video/",                           LinkCategory.FILE,    0.85),
-    ("audio/",                           LinkCategory.FILE,    0.85),
-    ("text/html",                        LinkCategory.NEWS,    0.55),  # weak default
-    ("application/json",                 LinkCategory.SETTING, 0.80),
-    ("text/plain",                       LinkCategory.OTHER,   0.40),
+    ("application/pdf", LinkCategory.FILE, 0.92),
+    ("application/zip", LinkCategory.FILE, 0.92),
+    ("application/octet-stream", LinkCategory.FILE, 0.70),
+    ("image/", LinkCategory.FILE, 0.75),
+    ("video/", LinkCategory.FILE, 0.85),
+    ("audio/", LinkCategory.FILE, 0.85),
+    ("text/html", LinkCategory.NEWS, 0.55),  # weak default
+    ("application/json", LinkCategory.SETTING, 0.80),
+    ("text/plain", LinkCategory.OTHER, 0.40),
 ]
 
 
@@ -74,9 +75,7 @@ async def fetch_metadata(url: str, timeout: float = 8.0) -> MetadataResult | Non
 
     Returns None if the URL is unreachable.
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; LinkIntelBot/1.0; +https://example.com/bot)"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; LinkIntelBot/1.0; +https://example.com/bot)"}
     try:
         async with httpx.AsyncClient(
             follow_redirects=True, timeout=timeout, headers=headers
@@ -90,8 +89,10 @@ async def fetch_metadata(url: str, timeout: float = 8.0) -> MetadataResult | Non
                     if cat_conf:
                         cat, conf = cat_conf
                         return MetadataResult(
-                            category=cat, confidence=conf,
-                            http_status=r.status_code, content_type=ct,
+                            category=cat,
+                            confidence=conf,
+                            http_status=r.status_code,
+                            content_type=ct,
                             final_url=str(r.url),
                         )
             except httpx.HTTPError:
@@ -117,23 +118,26 @@ async def fetch_metadata(url: str, timeout: float = 8.0) -> MetadataResult | Non
                 except Exception as e:
                     logger.debug("HTML parse failed for {}: {}", url, e)
 
-            cat = None
+            category: LinkCategory | None = None
             conf = 0.0
             ct_match = _categorize_by_content_type(ct)
             if ct_match:
-                cat, conf = ct_match
+                category, conf = ct_match
             else:
                 title_match = _categorize_by_html_title(title or "", description or "")
                 if title_match:
-                    cat, conf = title_match
+                    category, conf = title_match
 
-            if cat is None:
+            if category is None:
                 return None
 
             return MetadataResult(
-                category=cat, confidence=conf,
-                title=title, description=description,
-                http_status=r.status_code, content_type=ct,
+                category=category,
+                confidence=conf,
+                title=title,
+                description=description,
+                http_status=r.status_code,
+                content_type=ct,
                 final_url=str(r.url),
             )
     except httpx.TimeoutException:

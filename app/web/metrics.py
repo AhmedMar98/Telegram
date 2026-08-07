@@ -7,6 +7,7 @@ histograms measure latency distributions.
 
 Uses prometheus_client (pure-Python, no extra infra required).
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Response
@@ -161,15 +162,9 @@ def _refresh_gauges() -> None:
         return
     try:
         with SessionLocal() as db:
-            m["active_links"].set(
-                db.query(Link).filter(Link.archived.is_(False)).count()
-            )
-            m["alive_links"].set(
-                db.query(Link).filter(Link.alive.is_(True)).count()
-            )
-            m["dead_links"].set(
-                db.query(Link).filter(Link.alive.is_(False)).count()
-            )
+            m["active_links"].set(db.query(Link).filter(Link.archived.is_(False)).count())
+            m["alive_links"].set(db.query(Link).filter(Link.alive.is_(True)).count())
+            m["dead_links"].set(db.query(Link).filter(Link.alive.is_(False)).count())
             m["semantic_cache_entries"].set(db.query(SemanticCache).count())
 
             now = utcnow()
@@ -194,6 +189,7 @@ async def metrics_endpoint() -> Response:
         )
     _refresh_gauges()
     from prometheus_client import generate_latest
+
     return Response(
         generate_latest(m["registry"]),
         media_type="text/plain; version=0.0.4; charset=utf-8",
