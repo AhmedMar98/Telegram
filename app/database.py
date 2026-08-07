@@ -55,7 +55,18 @@ def _make_engine():
         pass  # in-memory, no path normalization
 
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    engine = create_engine(url, echo=False, future=True, connect_args=connect_args)
+    engine_kwargs: dict = {}
+    if url == "sqlite:///:memory:":
+        # An in-memory DB lives inside a single connection. The default pool
+        # hands out a separate connection (and therefore a separate, empty DB)
+        # per thread, so anything created on one thread is invisible to another
+        # — which breaks tests that drive the app through a TestClient worker
+        # thread. StaticPool keeps one shared connection for the whole process.
+        from sqlalchemy.pool import StaticPool
+
+        engine_kwargs["poolclass"] = StaticPool
+
+    engine = create_engine(url, echo=False, future=True, connect_args=connect_args, **engine_kwargs)
 
     if url.startswith("sqlite"):
         event.listen(engine, "connect", _load_sqlite_vec)
