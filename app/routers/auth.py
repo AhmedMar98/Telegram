@@ -16,17 +16,20 @@ from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
 from app.models import User, Workspace
-from app.schemas import ChangePasswordRequest, LoginRequest, RegisterRequest
+from app.schemas import ChangePasswordRequest, LoginRequest, RegisterRequest, SessionOut
 from app.security import (
     clear_login_failures,
     constant_time_equals,
     create_session,
+    current_session_id,
     hash_password,
     is_locked_out,
+    list_active_sessions,
     normalize_email,
     record_login_attempt,
     revoke_all_sessions,
     revoke_session,
+    revoke_session_by_id,
     verify_password,
     waste_password_time,
 )
@@ -194,3 +197,39 @@ def logout_all(
     db.commit()
     response.delete_cookie(COOKIE_NAME)
     return {"ok": True, "sessions_revoked": revoked}
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+def list_sessions(
+    session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[SessionOut]:
+    """Every device/browser currently signed into this account."""
+    current_id = current_session_id(db, session)
+    return [
+        SessionOut(id=s.id, created_at=s.created_at, expires_at=s.expires_at, is_current=s.id == current_id)
+        for s in list_active_sessions(db, current_user.id)
+    ]
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_session_endpoint(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Sign out one specific device without touching any other session."""
+    found = revoke_session_by_id(db, current_user.id, session_id)
+    if not found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="user.revoke_session",
+        target_type="session",
+        target_id=str(session_id),
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

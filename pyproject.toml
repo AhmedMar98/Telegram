@@ -38,4 +38,3 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["app"]
-omit = ["app/bot/*"]

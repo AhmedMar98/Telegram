@@ -141,6 +141,7 @@ class Link(Base):
     category: Mapped[str] = mapped_column(String(50), index=True, default="other")
     confidence: Mapped[float] = mapped_column(default=0.0)
     classified_by: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
