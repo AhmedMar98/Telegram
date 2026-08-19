@@ -1,0 +1,36 @@
+name: Weekly DB backup
+
+# Render's free Postgres plan expires 30 days after creation (plus a grace
+# period) — there is no free tier that avoids this. This workflow is the
+# documented mitigation (docs/01-critical-analysis.md, Appendix C): a
+# weekly pg_dump stored as a GitHub Actions artifact, independent of
+# Render, so a forced database recreation is a restore, not a data loss.
+#
+# Required repository secret: DATABASE_URL (same value used by the web
+# service and the collector).
+
+on:
+  schedule:
+    - cron: "0 3 * * 0" # every Sunday, 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is not set yet; skipping backup." >&2
+            exit 0
+          fi
+          pg_dump "$DATABASE_URL" --no-owner --no-privileges -F c -f backup.dump
+
+      - uses: actions/upload-artifact@v5
+        if: hashFiles('backup.dump') != ''
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: backup.dump
+          retention-days: 35

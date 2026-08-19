@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint-type-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy app scripts
+
+      - name: bandit (security scan)
+        run: bandit -r app scripts -lll -iii
+
+      - name: Alembic migration smoke test (sqlite)
+        env:
+          DATABASE_URL: "sqlite:///./_ci_alembic.db"
+          SECRET_KEY: "ci-secret"
+        run: |
+          alembic upgrade head
+          rm -f _ci_alembic.db
+
+      - name: pytest
+        env:
+          DATABASE_URL: "sqlite:///:memory:"
+          SECRET_KEY: "ci-secret"
+        run: pytest -q --cov=app --cov-report=term-missing
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: coverage-report
+          path: .coverage

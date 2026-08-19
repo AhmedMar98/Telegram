@@ -1,3 +1,104 @@
-# Telegram — Link Intelligence Platform
+# منصة استخبارات الروابط (Link Intelligence Platform)
 
-هذا فرع القاعدة (main). التطوير الفعلي جرى على فرع منفصل ودُمج عبر Pull Request.
+جمع روابط من قنوات Telegram، تصنيفها تلقائياً، والبحث فيها — بتكلفة تشغيل **صفر** فعلياً، بدون Docker، منشورة على Render.
+
+## المعمارية (لماذا هي مجانية 100٪ فعلاً)
+
+| المكوّن | أين يعمل | التكلفة |
+|---|---|---|
+| واجهة الويب + API + بوت Telegram (webhook) | خدمة ويب واحدة على Render (`free` plan) | 0 |
+| قاعدة البيانات | Render Postgres (`free` plan، 1GB) | 0 (تنتهي كل ٣٠ يوماً وتُنشأ من جديد — انظر «النسخ الاحتياطي» أدناه) |
+| جامع الروابط (Telethon) | GitHub Actions، مجدول (cron)، **ليس عملية دائمة** | 0 (لا توجد خطة عامل خلفي مجانية على Render إطلاقاً — لذلك لم نستخدم عملية دائمة) |
+| النسخ الاحتياطي | GitHub Actions، أسبوعي، يُخزَّن كـ Artifact | 0 |
+| التصنيف الأساسي | قواعد محلية (امتداد/نطاق/كلمات مفتاحية) — بدون أي استدعاء شبكي | 0 دائماً |
+| التصنيف الإضافي (اختياري) | طبقة Groq API المجانية، تُستخدم فقط إذا ضُبط `GROQ_API_KEY` | 0، ولا تُعطّل شيئاً إن غابت |
+
+لا يوجد أي Dockerfile في هذا المستودع — Render يشغّل الكود مباشرة عبر `runtime: python` في `render.yaml`.
+
+## خطوات النشر الفعلي
+
+### ١. نشر الخدمة وقاعدة البيانات
+
+1. اذهب إلى <https://dashboard.render.com/blueprints> واختر "New Blueprint Instance"، ثم اربط هذا المستودع. Render سيقرأ `render.yaml` وينشئ خدمة الويب + قاعدة البيانات تلقائياً على الخطة المجانية.
+2. من إعدادات الخدمة على Render، اضبط المتغيرات المطلوبة يدوياً (القيم التي `sync: false` في `render.yaml`):
+   - `INVITE_CODE` — رمز دعوة يمنع أي زائر عشوائي من إنشاء حساب على الرابط العام (اختياري لكن مستحسن لأداة داخلية).
+   - `PUBLIC_BASE_URL` — الرابط الذي يعطيك إياه Render بعد أول نشر، مثل `https://link-intel-web.onrender.com`.
+   - `BOT_TOKEN` — بعد إنشاء بوت عبر [@BotFather](https://t.me/BotFather) (اختياري، فقط إن أردت تفعيل بوت Telegram).
+3. أعد نشر الخدمة بعد ضبط `PUBLIC_BASE_URL` حتى يُسجَّل webhook البوت تلقائياً عند الإقلاع.
+
+### ٢. إنشاء مساحة العمل الأولى
+
+افتح رابط الموقع → "تسجيل" → أنشئ الحساب (وهو تلقائياً يصبح مساحة عمل جديدة معزولة بالكامل). من صفحة `/auth/me` أو من أدوات المتصفح احصل على `workspace_id` — ستحتاجه في الخطوة التالية.
+
+### ٣. تفعيل الجامع (Collector)
+
+الجامع لا يعمل كعملية دائمة (Render لا يوفر ذلك مجاناً)، بل كمهمة مجدولة في GitHub Actions تعمل مرة كل ساعة.
+
+1. شغّل محلياً (على جهازك، وليس في أي CI):
+   ```bash
+   pip install -r requirements-collector.txt
+   python scripts/make_session_string.py
+   ```
+   أدخل رقم هاتفك وكود الدخول الذي يرسله Telegram. سيطبع لك "session string" — هذا يعادل كلمة مرور حسابك، لا تضعه في أي ملف داخل المستودع.
+2. من إعدادات المستودع على GitHub (Settings → Secrets and variables → Actions) أضف:
+   - `TG_API_ID`, `TG_API_HASH` — من <https://my.telegram.org>
+   - `TG_SESSION_STRING` — الناتج من الخطوة السابقة
+   - `DATABASE_URL` — نفس رابط قاعدة بيانات Render (Internal/External connection string من لوحة Render)
+   - `COLLECTOR_WORKSPACE_ID` — الرقم الذي حصلت عليه في الخطوة ٢
+   - `GROQ_API_KEY` (اختياري) — لتفعيل طبقة التصنيف الإضافية المجانية من <https://console.groq.com>
+3. من تبويب Actions شغّل workflow "Collector" يدوياً أول مرة (`workflow_dispatch`) للتأكد أنه يعمل، ثم سيعمل تلقائياً كل ساعة.
+4. أضف القنوات المراد جمعها من لوحة التحكم في الموقع (`/dashboard` → "القنوات") — الحساب المستخدم في التوكن يجب أن يكون عضواً في تلك القنوات.
+
+### ٤. النسخ الاحتياطي الأسبوعي
+
+workflow باسم "Weekly DB backup" يعمل تلقائياً كل أسبوع وينتج نسخة `pg_dump` كـ Artifact على GitHub (يبقى محفوظاً ٣٥ يوماً). هذا تعويض عن كون قاعدة بيانات Render المجانية تُحذف بعد ٣٠ يوماً من إنشائها — عند إعادة الإنشاء، نزّل آخر artifact واستورده:
+
+```bash
+pg_restore --no-owner --clean --if-exists -d "$NEW_DATABASE_URL" backup.dump
+```
+
+## التطوير محلياً
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+export DATABASE_URL="sqlite:///./local.db"
+export SECRET_KEY="dev-secret"
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+### الفحوصات قبل أي دفع (push)
+
+```bash
+ruff check . && ruff format --check .
+mypy app scripts
+bandit -r app scripts -lll -iii
+pytest -q --cov=app
+```
+
+## بنية المشروع
+
+```
+app/                 تطبيق FastAPI (واجهة الويب + API + بوت Telegram عبر webhook)
+  classifier/        التصنيف: طبقة قواعد مجانية دائماً + طبقة Groq اختيارية
+  bot/                منطق بوت Telegram (aiogram، webhook فقط، بدون polling)
+  routers/            مسارات API (auth, channels, links, bot)
+  templates/          واجهة استخدام مبسّطة (Jinja2، RTL)
+scripts/
+  collect.py           الجامع (يعمل مرة واحدة، يُستدعى من GitHub Actions)
+  make_session_string.py  أداة تفاعلية لمرة واحدة لتوليد StringSession
+alembic/              ترحيلات قاعدة البيانات
+.github/workflows/
+  ci.yml               فحص/فحص أنواع/اختبارات عند كل push
+  collector.yml         تشغيل الجامع كل ساعة
+  backup.yml            نسخة احتياطية أسبوعية
+render.yaml            وصف نشر Render (بدون Docker)
+```
+
+## القيود المعروفة (بصراحة كاملة)
+
+- خدمة الويب المجانية على Render "تنام" بعد ١٥ دقيقة خمول، وأول طلب بعدها يتأخر نحو دقيقة (Cold Start) — هذا يشمل أول رسالة تصل للبوت بعد فترة خمول.
+- قاعدة بيانات Render المجانية تُحذف بعد ٣٠ يوماً من إنشائها؛ النسخ الاحتياطي الأسبوعي هو التخفيف الموثّق لهذا القيد، وليس حلاً كاملاً بدون تدخل يدوي عند إعادة الإنشاء.
+- التصنيف الأساسي (قواعد) يعمل دائماً بدون تكلفة؛ طبقة LLM المجانية (Groq) تحسين اختياري فقط، وتتوقف بأمان دون كسر أي شيء إن انتهت حصتها المجانية أو غابت.
