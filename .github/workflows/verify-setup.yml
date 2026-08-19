@@ -1,0 +1,40 @@
+name: Verify setup
+
+# Run this manually (Actions -> Verify setup -> Run workflow) after adding
+# your secrets. It reports exactly which piece is missing or malformed,
+# instead of leaving you to guess why the hourly collector found nothing.
+#
+# It never prints secret values — only whether each one is present and
+# well-formed — so the run log is safe to read and share.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          COLLECTOR_WORKSPACE_ID: ${{ secrets.COLLECTOR_WORKSPACE_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          BOT_WEBHOOK_SECRET: ${{ secrets.BOT_WEBHOOK_SECRET }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          INVITE_CODE: ${{ secrets.INVITE_CODE }}
+        run: python scripts/check_setup.py

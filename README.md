@@ -39,7 +39,9 @@
    pip install -r requirements-collector.txt
    python scripts/make_session_string.py
    ```
-   أدخل رقم هاتفك وكود الدخول الذي يرسله Telegram. سيطبع لك "session string" — هذا يعادل كلمة مرور حسابك، لا تضعه في أي ملف داخل المستودع.
+   أدخل رقم هاتفك وكود الدخول الذي يرسله Telegram (ويدعم السكربت التحقق بخطوتين إن كان مفعّلاً).
+
+   > ⚠️ الناتج "session string" **يعادل كلمة مرور حسابك على تيليجرام** — من يملكه ينتحل شخصيتك. شغّل هذا السكربت على جهازك أنت فقط، والصقه مباشرة في أسرار GitHub، ولا تحفظه في ملف ولا ترسله في أي محادثة (بما في ذلك لي).
 2. من إعدادات المستودع على GitHub (Settings → Secrets and variables → Actions) أضف:
    - `TG_API_ID`, `TG_API_HASH` — من <https://my.telegram.org>
    - `TG_SESSION_STRING` — الناتج من الخطوة السابقة
@@ -49,7 +51,26 @@
 3. من تبويب Actions شغّل workflow "Collector" يدوياً أول مرة (`workflow_dispatch`) للتأكد أنه يعمل، ثم سيعمل تلقائياً كل ساعة.
 4. أضف القنوات المراد جمعها من لوحة التحكم في الموقع (`/dashboard` → "القنوات") — الحساب المستخدم في التوكن يجب أن يكون عضواً في تلك القنوات.
 
-### ٤. النسخ الاحتياطي الأسبوعي
+### ٤. تأكد أن كل شيء موصول (خطوة واحدة)
+
+بعد إضافة الأسرار، لا تنتظر الجامع ليفشل بصمت — افحص الإعداد مباشرة:
+
+**من GitHub** (الأسهل): تبويب Actions ← "Verify setup" ← Run workflow. سيقرأ أسرارك ويخبرك بالضبط ما الناقص.
+**أو محلياً**: `python scripts/check_setup.py`
+
+الأداة لا تطبع أي قيمة سرية إطلاقاً — تخبرك فقط بحالة كل عنصر:
+
+```
+[ OK ] database: reachable (postgresql)
+[ OK ] schema: 6 core tables present
+[ OK ] workspace: id 1 ("مساحتي")، 1 user(s)
+[WARN] channels: no active channels — add them in the dashboard, or nothing is collected
+[FAIL] telegram: partially configured, missing: TG_SESSION_STRING
+```
+
+`FAIL` = يجب إصلاحه، `WARN` = ميزة اختيارية معطّلة والنظام يعمل بدونها.
+
+### ٥. النسخ الاحتياطي الأسبوعي
 
 workflow باسم "Weekly DB backup" يعمل تلقائياً كل أسبوع وينتج نسخة `pg_dump` كـ Artifact على GitHub (يبقى محفوظاً ٣٥ يوماً). هذا تعويض عن كون قاعدة بيانات Render المجانية تُحذف بعد ٣٠ يوماً من إنشائها — عند إعادة الإنشاء، نزّل آخر artifact واستورده:
 
@@ -111,12 +132,14 @@ app/                 تطبيق FastAPI (واجهة الويب + API + بوت Te
 scripts/
   collect.py           الجامع (يعمل مرة واحدة، يُستدعى من GitHub Actions)
   make_session_string.py  أداة تفاعلية لمرة واحدة لتوليد StringSession
+  check_setup.py       فحص تشخيصي: ما الذي ينقص إعدادك؟
 alembic/              ترحيلات قاعدة البيانات
 .env.example          قالب المتغيرات المطلوبة
 .github/workflows/
   ci.yml               فحص/فحص أنواع/اختبارات عند كل push
   collector.yml         تشغيل الجامع كل ساعة
   backup.yml            نسخة احتياطية أسبوعية
+  verify-setup.yml      فحص الأسرار والإعداد يدوياً
 render.yaml            وصف نشر Render (بدون Docker)
 ```
 
