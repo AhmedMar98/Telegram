@@ -52,3 +52,14 @@ def fts_document(raw_text_col: Any, url_col: Any) -> ColumnElement[Any]:
 def fts_query(text: str) -> ColumnElement[Any]:
     """The user's search terms, split the same way as the document."""
     return func.plainto_tsquery(FTS_CONFIG, func.regexp_replace(text, FTS_SPLIT_PATTERN, " ", "g"))
+
+
+def fts_rank(raw_text_col: Any, url_col: Any, term: str) -> ColumnElement[Any]:
+    """Relevance score for ordering results, highest first.
+
+    Without this, a search with many matches is only ever sorted by
+    recency, so a link that mentions the term once in passing outranks
+    (chronologically) a link that is centrally about it. ``ts_rank``
+    scores how much of / how prominently the document matches the query.
+    """
+    return func.ts_rank(fts_document(raw_text_col, url_col), fts_query(term))

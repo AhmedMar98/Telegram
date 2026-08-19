@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
 from app.models import User, Workspace
-from app.schemas import LoginRequest, RegisterRequest
+from app.schemas import ChangePasswordRequest, LoginRequest, RegisterRequest
 from app.security import (
     clear_login_failures,
     constant_time_equals,
@@ -25,6 +25,7 @@ from app.security import (
     is_locked_out,
     normalize_email,
     record_login_attempt,
+    revoke_all_sessions,
     revoke_session,
     verify_password,
     waste_password_time,
@@ -136,3 +137,60 @@ def logout(
 @router.get("/me")
 def me(current_user: User = Depends(get_current_user)) -> dict:
     return {"id": current_user.id, "email": current_user.email, "workspace_id": current_user.workspace_id}
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    response: Response,
+    session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Change the account password and revoke every other active session.
+
+    Everywhere else the account was logged in is signed out immediately —
+    the whole point of a password change is to cut off access from a
+    session that might be compromised. The session used to make this
+    request stays alive so the person is not logged out of their own
+    change.
+    """
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="current password is incorrect")
+
+    current_user.password_hash = hash_password(payload.new_password)
+    revoked = revoke_all_sessions(db, current_user.id, except_token=session)
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="user.change_password",
+        detail=f"{revoked} other session(s) revoked",
+    )
+    db.commit()
+
+    if session:
+        _set_session_cookie(response, session)
+    return {"ok": True, "other_sessions_revoked": revoked}
+
+
+@router.post("/logout-all")
+def logout_all(
+    response: Response,
+    session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Sign out of every device, including this one."""
+    revoked = revoke_all_sessions(db, current_user.id)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="user.logout_all",
+        detail=f"{revoked} session(s) revoked",
+    )
+    db.commit()
+    response.delete_cookie(COOKIE_NAME)
+    return {"ok": True, "sessions_revoked": revoked}

@@ -10,6 +10,11 @@
   </select>
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
+  <button onclick="exportJson()">تصدير JSON</button>
+</div>
+<div class="row" style="align-items:center;">
+  <button onclick="bulkRecategorize()">نقل كل النتائج الحالية إلى تصنيف آخر</button>
+  <button onclick="bulkDelete()">حذف كل النتائج الحالية</button>
 </div>
 <p id="stats" class="muted"></p>
 <div id="results"></div>
@@ -38,6 +43,15 @@
 <h2>ربط البوت</h2>
 <button onclick="linkBot()">توليد رمز ربط للبوت</button>
 <p id="botCode" class="muted"></p>
+
+<h2>الحساب</h2>
+<div class="row" style="flex-direction: column;">
+  <input id="curPass" type="password" placeholder="كلمة المرور الحالية">
+  <input id="newPass" type="password" placeholder="كلمة المرور الجديدة (٨ أحرف على الأقل)">
+  <button onclick="changePassword()">تغيير كلمة المرور</button>
+  <p id="passResult" class="muted"></p>
+  <button onclick="logoutAll()">تسجيل الخروج من كل الأجهزة</button>
+</div>
 
 <script>
 async function api(path, opts) {
@@ -76,6 +90,39 @@ async function recategorize(id, category) {
 function exportCsv() {
   const category = document.getElementById("category").value;
   window.location = "/links/export.csv" + (category ? `?category=${encodeURIComponent(category)}` : "");
+}
+
+function exportJson() {
+  const category = document.getElementById("category").value;
+  window.location = "/links/export.json" + (category ? `?category=${encodeURIComponent(category)}` : "");
+}
+
+function currentFilter() {
+  return { q: document.getElementById("q").value || null, category: document.getElementById("category").value || null };
+}
+
+async function bulkDelete() {
+  const filter = currentFilter();
+  if (!confirm("حذف كل الروابط المطابقة للفلتر الحالي؟ لا يمكن التراجع.")) return;
+  const res = await api("/links/bulk/delete", { method: "POST", body: JSON.stringify(filter) });
+  const data = await res.json();
+  alert(`تم حذف ${data.affected} رابط.`);
+  search(false);
+  loadStats();
+}
+
+async function bulkRecategorize() {
+  const filter = currentFilter();
+  const new_category = prompt("التصنيف الجديد لكل النتائج المطابقة للفلتر الحالي:\n" + CATEGORIES.join(", "));
+  if (!new_category) return;
+  if (!CATEGORIES.includes(new_category)) { alert("تصنيف غير معروف."); return; }
+  const res = await api("/links/bulk/recategorize", {
+    method: "POST",
+    body: JSON.stringify(Object.assign({}, filter, { new_category })),
+  });
+  const data = await res.json();
+  alert(`تم تحديث ${data.affected} رابط.`);
+  search(false);
 }
 
 async function search(resetPage = true) {
@@ -148,6 +195,28 @@ async function linkBot() {
   const res = await api("/bot/link-code", { method: "POST" });
   const data = await res.json();
   document.getElementById("botCode").textContent = data.instructions;
+}
+
+async function changePassword() {
+  const current_password = document.getElementById("curPass").value;
+  const new_password = document.getElementById("newPass").value;
+  const out = document.getElementById("passResult");
+  const res = await api("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) });
+  if (!res.ok) {
+    const err = await res.json();
+    out.textContent = err.detail || "فشل تغيير كلمة المرور.";
+    return;
+  }
+  const data = await res.json();
+  out.textContent = `تم تغيير كلمة المرور. تم تسجيل الخروج من ${data.other_sessions_revoked} جلسة أخرى.`;
+  document.getElementById("curPass").value = "";
+  document.getElementById("newPass").value = "";
+}
+
+async function logoutAll() {
+  if (!confirm("تسجيل الخروج من كل الأجهزة بما فيها هذا الجهاز؟")) return;
+  await api("/auth/logout-all", { method: "POST" });
+  window.location.href = "/login";
 }
 
 loadStats();
