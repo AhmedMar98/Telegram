@@ -10,14 +10,16 @@ filtered by ``workspace_id`` — this is what makes cross-tenant data leaks
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.audit import record as audit_record
 from app.database import get_db
 from app.deps import get_current_user
+from app.ingest import ingest_text, manual_channel
 from app.models import Channel, Link, User
-from app.schemas import LinkOut, SearchResponse, StatsResponse
+from app.schemas import LinkImportRequest, LinkImportResponse, LinkOut, SearchResponse, StatsResponse
 
 router = APIRouter(prefix="/links", tags=["links"])
 
@@ -64,3 +66,28 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
     ).all()
     by_category: dict[str, int] = {row[0]: row[1] for row in rows}
     return StatsResponse(total_links=total_links, total_channels=total_channels, by_category=by_category)
+
+
+@router.post("", response_model=LinkImportResponse, status_code=status.HTTP_201_CREATED)
+def add_links(
+    payload: LinkImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> LinkImportResponse:
+    """Add links by pasting text — one URL, a list, or a whole message.
+
+    This is the entry point that does not depend on Telegram API access at
+    all, so the platform is usable before (or without) the automated
+    collector being wired up.
+    """
+    channel = manual_channel(db, current_user.workspace_id)
+    summary = ingest_text(db, workspace_id=current_user.workspace_id, channel_id=channel.id, text=payload.text)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="link.manual_add",
+        detail=f"{summary.stored} new, {summary.duplicates} duplicate(s)",
+    )
+    db.commit()
+    return LinkImportResponse(found=summary.total_found, stored=summary.stored, duplicates=summary.duplicates)

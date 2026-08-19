@@ -61,3 +61,15 @@ class StatsResponse(BaseModel):
     total_links: int
     total_channels: int
     by_category: dict[str, int]
+
+
+class LinkImportRequest(BaseModel):
+    """A free-text paste; every URL inside it is extracted and classified."""
+
+    text: str = Field(min_length=1, max_length=50_000)
+
+
+class LinkImportResponse(BaseModel):
+    found: int
+    stored: int
+    duplicates: int

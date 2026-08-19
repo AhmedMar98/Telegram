@@ -13,6 +13,14 @@
 <p id="stats" class="muted"></p>
 <div id="results"></div>
 
+<h2>إضافة روابط يدوياً</h2>
+<p class="muted">الصق أي نص يحتوي روابط — رابط واحد أو رسالة كاملة أو قائمة. سيُستخرج كل رابط ويُصنَّف تلقائياً.</p>
+<div class="row" style="flex-direction: column;">
+  <textarea id="pasteBox" rows="4" placeholder="الصق الروابط أو النص هنا..." style="width:100%; font-family:inherit; font-size:1rem; padding:.5rem; border-radius:.4rem; border:1px solid #8888;"></textarea>
+  <button onclick="addLinks()">إضافة وتصنيف</button>
+  <p id="addResult" class="muted"></p>
+</div>
+
 <h2>القنوات</h2>
 <div class="row">
   <input id="chId" placeholder="معرّف القناة (tg_channel_id)">
@@ -69,6 +77,25 @@ async function addChannel() {
   await api("/channels", { method: "POST", body: JSON.stringify({ tg_channel_id, username }) });
   document.getElementById("chId").value = "";
   document.getElementById("chUsername").value = "";
+  loadChannels();
+}
+
+async function addLinks() {
+  const box = document.getElementById("pasteBox");
+  const text = box.value.trim();
+  const out = document.getElementById("addResult");
+  if (!text) { out.textContent = "الصق نصاً أولاً."; return; }
+  out.textContent = "جارٍ التصنيف...";
+  const res = await api("/links", { method: "POST", body: JSON.stringify({ text }) });
+  const data = await res.json();
+  if (data.found === 0) {
+    out.textContent = "لم يُعثر على أي رابط في النص.";
+    return;
+  }
+  out.textContent = `وُجد ${data.found} رابط — أُضيف ${data.stored} جديد، و${data.duplicates} موجود مسبقاً.`;
+  box.value = "";
+  loadStats();
+  search();
   loadChannels();
 }
 

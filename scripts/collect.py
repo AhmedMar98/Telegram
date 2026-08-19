@@ -30,21 +30,18 @@ import logging
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from telethon import TelegramClient  # noqa: E402
 from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.audit import record as audit_record  # noqa: E402
-from app.classifier import classify_link, extract_urls, hash_url  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
+from app.ingest import IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
-from app.models import Link as LinkModel  # noqa: E402
 
 logger = logging.getLogger("collector")
 
@@ -60,14 +57,6 @@ def _message_limit() -> int:
         return DEFAULT_MESSAGE_LIMIT
 
 
-def _domain_of(url: str) -> str:
-    try:
-        netloc = urlparse(url).netloc.lower()
-    except ValueError:
-        return url[:300]
-    return (netloc[4:] if netloc.startswith("www.") else netloc) or url[:300]
-
-
 def _entity_ref(channel: Channel) -> str | int:
     """Resolve how to address a channel, preferring its @username.
 
@@ -81,39 +70,6 @@ def _entity_ref(channel: Channel) -> str | int:
     return int(channel.tg_channel_id)
 
 
-def _store_link(db: Session, channel: Channel, message_id: int, url: str, text: str, posted_at) -> bool:
-    """Insert one link, returning whether it was new.
-
-    The insert runs inside a SAVEPOINT so that hitting the
-    (channel_id, url_hash) uniqueness constraint rolls back *only this
-    row*. A plain ``db.rollback()`` here would discard the entire
-    channel's uncommitted work — every link collected so far in this run
-    plus the watermark update — turning a routine duplicate into silent
-    data loss.
-    """
-    result = classify_link(url, text)
-    row = LinkModel(
-        workspace_id=channel.workspace_id,
-        channel_id=channel.id,
-        message_id=message_id,
-        url=url,
-        url_hash=hash_url(url),
-        domain=_domain_of(url),
-        category=result.category,
-        confidence=result.confidence,
-        classified_by="llm" if result.matched_rule.startswith("llm") else "rules",
-        raw_text=text[:2000],
-        posted_at=posted_at,
-    )
-    try:
-        with db.begin_nested():
-            db.add(row)
-            db.flush()
-    except IntegrityError:
-        return False  # already collected this URL for this channel
-    return True
-
-
 async def _collect_channel(client: TelegramClient, db: Session, channel: Channel) -> int:
     label = channel.username or channel.tg_channel_id
     try:
@@ -123,7 +79,7 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
         return 0
 
     new_watermark = channel.last_message_id
-    collected = 0
+    summary = IngestSummary()
 
     # reverse=True walks *forward* from the watermark (oldest unseen first).
     # Telethon's default is newest-first, which combined with a limit would
@@ -134,13 +90,15 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
         async for message in client.iter_messages(
             entity, min_id=channel.last_message_id, reverse=True, limit=_message_limit()
         ):
-            text = message.raw_text or ""
-            posted_at = message.date.replace(tzinfo=None) if message.date else None
-
-            for url in extract_urls(text):
-                if _store_link(db, channel, message.id, url, text, posted_at):
-                    collected += 1
-
+            ingest_text(
+                db,
+                workspace_id=channel.workspace_id,
+                channel_id=channel.id,
+                text=message.raw_text or "",
+                message_id=message.id,
+                posted_at=message.date.replace(tzinfo=None) if message.date else None,
+                summary=summary,
+            )
             new_watermark = max(new_watermark, message.id)
     except FloodWaitError as exc:
         # Keep whatever was collected before the rate limit and resume from
@@ -155,11 +113,18 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
         action="collector.run",
         target_type="channel",
         target_id=str(channel.id),
-        detail=f"{collected} new link(s)",
+        detail=f"{summary.stored} new link(s)",
     )
     db.commit()
-    logger.info("channel %s (%s): %d new link(s), watermark -> %d", channel.id, label, collected, new_watermark)
-    return collected
+    logger.info(
+        "channel %s (%s): %d new link(s), %d duplicate(s), watermark -> %d",
+        channel.id,
+        label,
+        summary.stored,
+        summary.duplicates,
+        new_watermark,
+    )
+    return summary.stored
 
 
 async def collect() -> None:
