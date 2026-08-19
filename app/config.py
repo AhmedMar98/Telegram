@@ -10,7 +10,30 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str) -> str:
+    """Rewrite a hosted-Postgres URL to the driver actually installed.
+
+    Managed providers (Render included) hand out connection strings of the
+    form ``postgres://…``. Two things go wrong with that verbatim:
+
+    1. SQLAlchemy 2 removed the ``postgres://`` alias, so it fails with
+       "Can't load plugin: sqlalchemy.dialects:postgres".
+    2. Even corrected to ``postgresql://``, SQLAlchemy resolves the default
+       driver to psycopg2, which is not installed — this project ships
+       psycopg 3 — so it fails with "No module named 'psycopg2'".
+
+    Both are startup-time crashes on a fresh deploy, so the URL is
+    normalized here, once, for every consumer: the web app, Alembic, the
+    collector, and the setup diagnostic.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
 
 
 class Settings(BaseSettings):
@@ -47,6 +70,11 @@ class Settings(BaseSettings):
     # free API tier, and never blocks a request if it is absent or fails.
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        return normalize_database_url(value)
 
     @property
     def is_saas_ready_auth(self) -> bool:
