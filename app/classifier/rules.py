@@ -30,7 +30,15 @@ CATEGORIES = (
     "other",
 )
 
-URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s<>\"'()\[\]]+", re.IGNORECASE)
+
+# Punctuation that routinely terminates a sentence rather than a URL. Telegram
+# messages are prose, so "زوروا https://example.com." and "see https://x.io!"
+# are the norm, not the exception. Leaving the trailing mark attached would
+# both corrupt the stored URL and defeat dedup, since url_hash is computed
+# over the exact string (the same link would hash differently depending on the
+# sentence it happened to end).
+_TRAILING_PUNCTUATION = ".,!?:;\u060c\u061b\u061f\u2026'\"“”’«»"
 
 _EXTENSION_MAP: dict[str, str] = {
     "apk": "software_apps",
@@ -100,9 +108,29 @@ def hash_url(url: str) -> str:
     return hashlib.sha256(url.strip().lower().encode("utf-8")).hexdigest()
 
 
+def _strip_trailing_punctuation(url: str) -> str:
+    """Drop sentence punctuation that the URL pattern greedily swallowed."""
+    return url.rstrip(_TRAILING_PUNCTUATION)
+
+
 def extract_urls(text: str | None) -> list[str]:
-    """Pull every http(s) URL out of a raw Telegram message body."""
-    return URL_RE.findall(text or "")
+    """Pull every http(s) URL out of a raw Telegram message body.
+
+    Duplicates within a single message are collapsed while preserving the
+    order they were written in, so a message that repeats the same link
+    yields it once.
+    """
+    seen: set[str] = set()
+    urls: list[str] = []
+    for match in URL_RE.findall(text or ""):
+        url = _strip_trailing_punctuation(match)
+        # A bare scheme ("https://") left over after stripping is not a link.
+        if not url or url.rstrip("/").endswith(":/"):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 def classify(url: str, raw_text: str | None = None) -> ClassificationResult:

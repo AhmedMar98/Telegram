@@ -16,17 +16,27 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import timedelta
+from functools import lru_cache
 
 import bcrypt
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AuthSession, User
+from app.models import AuthSession, LoginAttempt, User
 from app.timeutil import utcnow
+
+# Brute-force throttle. Counted per identifier (the submitted email) over a
+# rolling window; generous enough that a person fat-fingering their password
+# is never affected, tight enough that online guessing is not viable.
+LOGIN_WINDOW_MINUTES = 15
+LOGIN_MAX_FAILURES = 8
 
 
 def hash_password(raw: str) -> str:
-    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    rounds = get_settings().bcrypt_rounds
+    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt(rounds=rounds)).decode("utf-8")
 
 
 def verify_password(raw: str, hashed: str) -> bool:
@@ -36,14 +46,74 @@ def verify_password(raw: str, hashed: str) -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
+def _decoy_hash() -> str:
+    """A real bcrypt hash used to burn time when an account does not exist."""
+    return hash_password("decoy-password-for-constant-time-login")
+
+
+def waste_password_time() -> None:
+    """Spend the same work as a real check, so a miss is not faster than a hit.
+
+    Without this, "no such user" returns before any hashing happens and
+    "wrong password" returns after ~100ms of bcrypt, which is a reliable
+    oracle for enumerating which addresses have accounts.
+    """
+    verify_password("decoy-password-for-constant-time-login", _decoy_hash())
+
+
+def constant_time_equals(left: str | None, right: str | None) -> bool:
+    """Compare two secrets without leaking their common prefix length."""
+    if left is None or right is None:
+        return False
+    return secrets.compare_digest(left, right)
+
+
+def normalize_email(email: str) -> str:
+    """Fold addresses to one canonical form so casing cannot fork an account."""
+    return email.strip().lower()
+
+
+def _window_start():
+    return utcnow() - timedelta(minutes=LOGIN_WINDOW_MINUTES)
+
+
+def record_login_attempt(db: Session, identifier: str, *, successful: bool) -> None:
+    """Log an attempt and opportunistically prune ones outside the window."""
+    db.add(LoginAttempt(identifier=identifier, successful=successful))
+    db.execute(delete(LoginAttempt).where(LoginAttempt.created_at < _window_start()))
+    db.commit()
+
+
+def recent_failure_count(db: Session, identifier: str) -> int:
+    return (
+        db.query(LoginAttempt)
+        .filter(
+            LoginAttempt.identifier == identifier,
+            LoginAttempt.successful.is_(False),
+            LoginAttempt.created_at >= _window_start(),
+        )
+        .count()
+    )
+
+
+def is_locked_out(db: Session, identifier: str) -> bool:
+    return recent_failure_count(db, identifier) >= LOGIN_MAX_FAILURES
+
+
+def clear_login_failures(db: Session, identifier: str) -> None:
+    db.execute(
+        delete(LoginAttempt).where(LoginAttempt.identifier == identifier, LoginAttempt.successful.is_(False))
+    )
+    db.commit()
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def create_session(db: Session, user: User) -> str:
     """Create a new server-side session and return the raw cookie token."""
-    from datetime import timedelta
-
     settings = get_settings()
     token = secrets.token_urlsafe(32)
     record = AuthSession(

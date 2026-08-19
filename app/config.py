@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # entirely (accounts must then be created manually).
     invite_code: str | None = None
     session_ttl_hours: int = 24 * 14  # 14 days
+    # bcrypt work factor. 12 is a sane default on real hardware; it is
+    # exposed so the (slow, shared) free-tier CPU can be tuned down if login
+    # latency becomes painful, and so the test suite can drop it to the
+    # minimum instead of burning CI minutes on deliberate key stretching.
+    bcrypt_rounds: int = 12
 
     # --- Telegram bot (webhook mode; no polling worker required) --------
     bot_token: str | None = None

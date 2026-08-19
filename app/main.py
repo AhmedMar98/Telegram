@@ -9,20 +9,29 @@ second process to pay for — the collector runs separately on a schedule
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Cookie, FastAPI, Request
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.classifier import CATEGORIES
 from app.config import get_settings
-from app.database import Base, engine
+from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
 from app.routers import auth, bot_router, channels, links
 from app.security import resolve_session
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +41,14 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Safety net alongside Alembic migrations: harmless no-op if the
-    # schema already exists (e.g. Alembic already ran in the deploy
-    # startCommand), and lets `uvicorn app.main:app` work standalone for
-    # local development without a separate migration step.
-    Base.metadata.create_all(bind=engine)
+    # Convenience for local development and the test suite only: it lets
+    # `uvicorn app.main:app` work against a throwaway SQLite file with no
+    # separate migration step. On Postgres the schema is owned solely by
+    # Alembic (run from the Render startCommand) — calling create_all there
+    # would race the migration and could half-create tables that Alembic
+    # then believes it still has to build.
+    if engine.dialect.name == "sqlite":
+        Base.metadata.create_all(bind=engine)
 
     settings = get_settings()
     if settings.bot_token and settings.bot_webhook_secret and settings.public_base_url:
@@ -64,7 +76,25 @@ app.include_router(bot_router.router)
 
 @app.get("/healthz")
 def healthz() -> dict:
+    """Liveness: is the process up? Deliberately does not touch the database.
+
+    Render restarts the service when this fails, so it must not go red for
+    a transient database blip that the process itself would ride out.
+    """
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz(db: Session = Depends(get_db)) -> dict:
+    """Readiness: can we actually serve traffic (database reachable)?"""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.warning("readiness check failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="database unavailable"
+        ) from exc
+    return {"status": "ready"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -87,15 +117,9 @@ def register_page(request: Request) -> HTMLResponse:
 def dashboard_page(
     request: Request,
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    db: Session = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    from app.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        user = resolve_session(db, session)
-    finally:
-        db.close()
-
+    user = resolve_session(db, session)
     if user is None:
         return RedirectResponse(url="/login")
     return templates.TemplateResponse(request, "dashboard.html", {"categories": CATEGORIES})

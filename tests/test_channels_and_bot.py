@@ -60,3 +60,7 @@ def test_index_redirects_to_login_when_anonymous(client: TestClient):
 
 def test_healthz(client: TestClient):
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_readyz_reports_database_reachable(client: TestClient):
+    assert client.get("/readyz").json() == {"status": "ready"}
