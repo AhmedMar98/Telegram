@@ -113,6 +113,7 @@ def test_export_returns_csv_of_the_workspace(client: TestClient):
         "category",
         "confidence",
         "classified_by",
+        "is_favorite",
         "domain",
         "posted_at",
         "collected_at",

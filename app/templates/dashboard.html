@@ -8,6 +8,13 @@
     <option value="">كل التصنيفات</option>
     {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
   </select>
+  <select id="sort">
+    <option value="date">الأحدث أولاً</option>
+    <option value="domain">النطاق</option>
+    <option value="category">التصنيف</option>
+    <option value="confidence">الثقة</option>
+  </select>
+  <label class="muted"><input type="checkbox" id="favoriteOnly" onchange="search()"> المفضّلة فقط</label>
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
@@ -52,6 +59,8 @@
   <p id="passResult" class="muted"></p>
   <button onclick="logoutAll()">تسجيل الخروج من كل الأجهزة</button>
 </div>
+<h3>الجلسات النشطة</h3>
+<div id="sessions"></div>
 
 <script>
 async function api(path, opts) {
@@ -63,8 +72,10 @@ async function api(path, opts) {
 async function loadStats() {
   const res = await api("/links/stats");
   const data = await res.json();
+  const topDomains = data.top_domains.slice(0, 5).map(([d, n]) => `${d} (${n})`).join("، ");
   document.getElementById("stats").textContent =
-    `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}`;
+    `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}` +
+    (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "");
 }
 
 const CATEGORIES = {{ categories | tojson }};
@@ -85,6 +96,11 @@ async function removeLink(id) {
 async function recategorize(id, category) {
   await api(`/links/${id}`, { method: "PATCH", body: JSON.stringify({ category }) });
   loadStats();
+}
+
+async function toggleFavorite(id, makeFavorite) {
+  await api(`/links/${id}/favorite?is_favorite=${makeFavorite}`, { method: "POST" });
+  search(false);
 }
 
 function exportCsv() {
@@ -129,10 +145,14 @@ async function search(resetPage = true) {
   if (resetPage) currentPage = 1;
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
+  const sort = document.getElementById("sort").value;
+  const favoriteOnly = document.getElementById("favoriteOnly").checked;
   const params = new URLSearchParams();
   params.set("page", currentPage);
   if (q) params.set("q", q);
   if (category) params.set("category", category);
+  if (sort && sort !== "date") params.set("sort", sort);
+  if (favoriteOnly) params.set("favorite", "true");
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
@@ -144,6 +164,7 @@ async function search(resetPage = true) {
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
          </select>
          <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
          <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
        </div>
      </div>`
@@ -219,8 +240,26 @@ async function logoutAll() {
   window.location.href = "/login";
 }
 
+async function loadSessions() {
+  const res = await api("/auth/sessions");
+  const data = await res.json();
+  document.getElementById("sessions").innerHTML = data.map(s =>
+    `<div class="card">
+       ${s.is_current ? "<strong>هذا الجهاز</strong>" : "جهاز آخر"}
+       <span class="muted">— بدأت ${new Date(s.created_at).toLocaleString("ar")}</span>
+       ${s.is_current ? "" : `<button onclick="revokeSession(${s.id})" style="margin-inline-start:.5rem;">إنهاء</button>`}
+     </div>`
+  ).join("");
+}
+
+async function revokeSession(id) {
+  await api(`/auth/sessions/${id}`, { method: "DELETE" });
+  loadSessions();
+}
+
 loadStats();
 search();
 loadChannels();
+loadSessions();
 </script>
 {% endblock %}

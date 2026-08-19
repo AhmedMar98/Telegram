@@ -47,8 +47,16 @@ def _dialect(db: Session) -> str:
     return db.bind.dialect.name if db.bind is not None else "sqlite"
 
 
+SORT_OPTIONS = ("date", "domain", "category", "confidence")
+
+
 def _filtered_query(
-    db: Session, workspace_id: int, *, q: str | None, category: str | None
+    db: Session,
+    workspace_id: int,
+    *,
+    q: str | None,
+    category: str | None,
+    favorite: bool | None = None,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
 
@@ -60,6 +68,9 @@ def _filtered_query(
 
     if category:
         query = query.filter(Link.category == category)
+
+    if favorite is not None:
+        query = query.filter(Link.is_favorite == favorite)
 
     if q:
         if _dialect(db) == "postgresql":
@@ -76,17 +87,32 @@ def _filtered_query(
 def search_links(
     q: str | None = Query(default=None, max_length=300),
     category: str | None = Query(default=None),
+    favorite: bool | None = Query(default=None),
+    sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
-    query, ranked = _filtered_query(db, current_user.workspace_id, q=q, category=category)
+    if sort not in SORT_OPTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"sort must be one of: {', '.join(SORT_OPTIONS)}",
+        )
+
+    query, ranked = _filtered_query(db, current_user.workspace_id, q=q, category=category, favorite=favorite)
     total = query.count()
 
-    if ranked and q:
-        # Most relevant first, then newest as a tiebreak among equally
-        # relevant results — a search with no term keeps pure recency.
+    if sort == "domain":
+        query = query.order_by(Link.domain.asc(), Link.created_at.desc())
+    elif sort == "category":
+        query = query.order_by(Link.category.asc(), Link.created_at.desc())
+    elif sort == "confidence":
+        query = query.order_by(Link.confidence.desc(), Link.created_at.desc())
+    elif ranked and q:
+        # Default "date" sort yields to relevance when there is a search
+        # term and Postgres can actually rank it — a plain date order would
+        # bury the best match under whatever was collected most recently.
         query = query.order_by(fts_rank(Link.raw_text, Link.url, q).desc(), Link.created_at.desc())
     else:
         query = query.order_by(Link.created_at.desc())
@@ -107,7 +133,21 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         select(Link.category, func.count(Link.id)).where(Link.workspace_id == ws_id).group_by(Link.category)
     ).all()
     by_category: dict[str, int] = {row[0]: row[1] for row in rows}
-    return StatsResponse(total_links=total_links, total_channels=total_channels, by_category=by_category)
+
+    domain_rows = db.execute(
+        select(Link.domain, func.count(Link.id))
+        .where(Link.workspace_id == ws_id)
+        .group_by(Link.domain)
+        .order_by(func.count(Link.id).desc())
+        .limit(10)
+    ).all()
+
+    return StatsResponse(
+        total_links=total_links,
+        total_channels=total_channels,
+        by_category=by_category,
+        top_domains=[(row[0], row[1]) for row in domain_rows],
+    )
 
 
 # Generous on purpose: a person pasting several messages in a row must
@@ -226,6 +266,21 @@ def recategorize_link(
     return link
 
 
+@router.post("/{link_id}/favorite", response_model=LinkOut)
+def set_favorite(
+    link_id: int,
+    is_favorite: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Link:
+    """Mark or unmark a link as a favorite. Pass ?is_favorite=false to clear it."""
+    link = _owned_link(db, link_id, current_user)
+    link.is_favorite = is_favorite
+    db.commit()
+    db.refresh(link)
+    return link
+
+
 @router.post("/bulk/delete", response_model=BulkResult)
 def bulk_delete(
     payload: BulkDeleteRequest,
@@ -290,6 +345,7 @@ def _export_row(link: Link) -> dict:
         "category": link.category,
         "confidence": round(link.confidence, 2),
         "classified_by": link.classified_by,
+        "is_favorite": link.is_favorite,
         "domain": link.domain,
         "posted_at": link.posted_at.isoformat() if link.posted_at else None,
         "collected_at": link.created_at.isoformat() if link.created_at else None,
@@ -334,7 +390,17 @@ def export_links_csv(
             return value
 
         writer.writerow(
-            ["url", "category", "confidence", "classified_by", "domain", "posted_at", "collected_at", "context"]
+            [
+                "url",
+                "category",
+                "confidence",
+                "classified_by",
+                "is_favorite",
+                "domain",
+                "posted_at",
+                "collected_at",
+                "context",
+            ]
         )
         yield flush()
 
@@ -346,6 +412,7 @@ def export_links_csv(
                     row["category"],
                     f"{row['confidence']:.2f}",
                     row["classified_by"],
+                    row["is_favorite"],
                     row["domain"],
                     row["posted_at"] or "",
                     row["collected_at"] or "",

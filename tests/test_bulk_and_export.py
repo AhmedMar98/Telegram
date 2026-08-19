@@ -84,7 +84,17 @@ def test_export_json_matches_csv_content(client: TestClient):
     assert urls == {"https://example.com/book.pdf", "https://example.com/app.apk"}
     assert all(
         set(r)
-        == {"url", "category", "confidence", "classified_by", "domain", "posted_at", "collected_at", "context"}
+        == {
+            "url",
+            "category",
+            "confidence",
+            "classified_by",
+            "is_favorite",
+            "domain",
+            "posted_at",
+            "collected_at",
+            "context",
+        }
         for r in rows
     )
 

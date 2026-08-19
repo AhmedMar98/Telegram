@@ -150,6 +150,41 @@ def revoke_session(db: Session, token: str) -> None:
         db.commit()
 
 
+def current_session_id(db: Session, token: str | None) -> int | None:
+    """The id of the AuthSession backing this cookie, for marking it as 'current' in a list."""
+    if not token:
+        return None
+    record = db.query(AuthSession).filter(AuthSession.token_hash == _hash_token(token)).first()
+    return record.id if record else None
+
+
+def list_active_sessions(db: Session, user_id: int) -> list[AuthSession]:
+    """Every currently-usable session for a user, newest first."""
+    return (
+        db.query(AuthSession)
+        .filter(
+            AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None), AuthSession.expires_at >= utcnow()
+        )
+        .order_by(AuthSession.created_at.desc())
+        .all()
+    )
+
+
+def revoke_session_by_id(db: Session, user_id: int, session_id: int) -> bool:
+    """Revoke one session by id, scoped to its owner. Returns whether it existed.
+
+    Scoping by ``user_id`` in the query itself — rather than fetching then
+    checking — means another user's session id is indistinguishable from
+    one that does not exist, so ids cannot be probed.
+    """
+    record = db.query(AuthSession).filter(AuthSession.id == session_id, AuthSession.user_id == user_id).first()
+    if record is None or record.revoked_at is not None:
+        return False
+    record.revoked_at = utcnow()
+    db.commit()
+    return True
+
+
 def revoke_all_sessions(db: Session, user_id: int, *, except_token: str | None = None) -> int:
     """Revoke every active session for a user, optionally sparing one.
 

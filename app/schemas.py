@@ -44,6 +44,7 @@ class LinkOut(BaseModel):
     category: str
     confidence: float
     classified_by: str
+    is_favorite: bool
     raw_text: str | None
     created_at: datetime
 
@@ -61,6 +62,7 @@ class StatsResponse(BaseModel):
     total_links: int
     total_channels: int
     by_category: dict[str, int]
+    top_domains: list[tuple[str, int]]
 
 
 class LinkImportRequest(BaseModel):
@@ -101,3 +103,10 @@ class BulkRecategorizeRequest(BaseModel):
 
 class BulkResult(BaseModel):
     affected: int
+
+
+class SessionOut(BaseModel):
+    id: int
+    created_at: datetime
+    expires_at: datetime
+    is_current: bool
