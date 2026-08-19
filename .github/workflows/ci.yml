@@ -47,10 +47,55 @@ jobs:
         env:
           DATABASE_URL: "sqlite:///:memory:"
           SECRET_KEY: "ci-secret"
-        run: pytest -q --cov=app --cov-report=term-missing
+        run: pytest -q --cov=app --cov=scripts --cov-report=term-missing
 
       - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: coverage-report
           path: .coverage
+
+  postgres-search:
+    # The SQLite suite exercises the ILIKE fallback. Production runs Postgres
+    # and takes the to_tsvector path instead, which once silently returned
+    # nothing for URL fragments. This job covers that path against a real
+    # Postgres so the difference cannot hide a defect again.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: linktest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Migrations apply cleanly to Postgres
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/linktest"
+          SECRET_KEY: "ci-secret"
+        run: |
+          alembic upgrade head
+          alembic check
+
+      - name: Full-text search tests against Postgres
+        env:
+          PG_TEST_DSN: "postgresql://postgres:postgres@localhost:5432/linktest"
+          DATABASE_URL: "sqlite:///:memory:"
+          SECRET_KEY: "ci-secret"
+        run: pytest tests/test_postgres_search.py -q
