@@ -9,9 +9,15 @@
     {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
   </select>
   <button onclick="search()">بحث</button>
+  <button onclick="exportCsv()">تصدير CSV</button>
 </div>
 <p id="stats" class="muted"></p>
 <div id="results"></div>
+<div class="row" style="align-items:center;">
+  <button id="prevBtn" onclick="changePage(-1)">السابق</button>
+  <span id="pageInfo" class="muted"></span>
+  <button id="nextBtn" onclick="changePage(1)">التالي</button>
+</div>
 
 <h2>إضافة روابط يدوياً</h2>
 <p class="muted">الصق أي نص يحتوي روابط — رابط واحد أو رسالة كاملة أو قائمة. سيُستخرج كل رابط ويُصنَّف تلقائياً.</p>
@@ -47,19 +53,58 @@ async function loadStats() {
     `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}`;
 }
 
-async function search() {
+const CATEGORIES = {{ categories | tojson }};
+let currentPage = 1;
+
+function changePage(delta) {
+  currentPage = Math.max(1, currentPage + delta);
+  search(false);
+}
+
+async function removeLink(id) {
+  if (!confirm("حذف هذا الرابط؟")) return;
+  await api(`/links/${id}`, { method: "DELETE" });
+  search(false);
+  loadStats();
+}
+
+async function recategorize(id, category) {
+  await api(`/links/${id}`, { method: "PATCH", body: JSON.stringify({ category }) });
+  loadStats();
+}
+
+function exportCsv() {
+  const category = document.getElementById("category").value;
+  window.location = "/links/export.csv" + (category ? `?category=${encodeURIComponent(category)}` : "");
+}
+
+async function search(resetPage = true) {
+  if (resetPage) currentPage = 1;
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
   const params = new URLSearchParams();
+  params.set("page", currentPage);
   if (q) params.set("q", q);
   if (category) params.set("category", category);
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
   el.innerHTML = data.items.map(i =>
-    `<div class="card"><a href="${i.url}" target="_blank" rel="noopener">${i.url}</a>
-     <div><span class="tag">${i.category}</span> <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span></div></div>`
+    `<div class="card">
+       <a href="${i.url}" target="_blank" rel="noopener">${i.url}</a>
+       <div style="margin-top:.5rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+         <select onchange="recategorize(${i.id}, this.value)">
+           ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
+         </select>
+         <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
+       </div>
+     </div>`
   ).join("") || "<p class='muted'>لا نتائج</p>";
+  document.getElementById("pageInfo").textContent =
+    data.total === 0 ? "" : `صفحة ${data.page} — عرض ${data.items.length} من ${data.total}`;
+  document.getElementById("prevBtn").disabled = data.page <= 1;
+  document.getElementById("nextBtn").disabled = data.page * data.page_size >= data.total;
 }
 
 async function loadChannels() {

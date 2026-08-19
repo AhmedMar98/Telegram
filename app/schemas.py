@@ -73,3 +73,9 @@ class LinkImportResponse(BaseModel):
     found: int
     stored: int
     duplicates: int
+
+
+class LinkCategoryUpdate(BaseModel):
+    """Correct a classification the automatic tiers got wrong."""
+
+    category: str
