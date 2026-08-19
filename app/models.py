@@ -170,6 +170,25 @@ class BotLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ActionEvent(Base):
+    """Timestamped marker for a generic rate-limited action.
+
+    Generalizes the login throttle (``LoginAttempt``) to any action worth
+    rate-limiting — currently manual link submission. ``scope`` names the
+    action (e.g. ``"link_add"``) and ``identifier`` is whatever the limit
+    is scoped to (a workspace id, a user id, ...), so one table serves
+    every throttle instead of a new table per feature.
+    """
+
+    __tablename__ = "action_events"
+    __table_args__ = (Index("ix_action_events_scope_identifier_created", "scope", "identifier", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(50))
+    identifier: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class AuditLog(Base):
     """Append-only record of who did what. Resolves R-18 (no audit trail)."""
 

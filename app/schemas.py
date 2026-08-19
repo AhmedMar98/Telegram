@@ -79,3 +79,25 @@ class LinkCategoryUpdate(BaseModel):
     """Correct a classification the automatic tiers got wrong."""
 
     category: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+class BulkDeleteRequest(BaseModel):
+    """Filter identifying which links to delete; empty matches the whole workspace."""
+
+    q: str | None = Field(default=None, max_length=300)
+    category: str | None = None
+
+
+class BulkRecategorizeRequest(BaseModel):
+    q: str | None = Field(default=None, max_length=300)
+    category: str | None = None
+    new_category: str
+
+
+class BulkResult(BaseModel):
+    affected: int

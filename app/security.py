@@ -24,7 +24,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AuthSession, LoginAttempt, User
+from app.models import ActionEvent, AuthSession, LoginAttempt, User
 from app.timeutil import utcnow
 
 # Brute-force throttle. Counted per identifier (the submitted email) over a
@@ -148,3 +148,53 @@ def revoke_session(db: Session, token: str) -> None:
     if record is not None and record.revoked_at is None:
         record.revoked_at = utcnow()
         db.commit()
+
+
+def revoke_all_sessions(db: Session, user_id: int, *, except_token: str | None = None) -> int:
+    """Revoke every active session for a user, optionally sparing one.
+
+    Sparing the caller's own current session (``except_token``) is what
+    lets a password change take effect everywhere else without logging
+    the person out of the tab they just used to change it.
+
+    Returns the number of sessions revoked.
+    """
+    except_hash = _hash_token(except_token) if except_token else None
+    query = db.query(AuthSession).filter(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+    if except_hash is not None:
+        query = query.filter(AuthSession.token_hash != except_hash)
+    count = query.update({"revoked_at": utcnow()})
+    db.commit()
+    return count
+
+
+def record_action_event(db: Session, scope: str, identifier: str) -> None:
+    """Mark that a rate-limited action happened, for later counting."""
+    db.add(ActionEvent(scope=scope, identifier=identifier))
+    db.commit()
+
+
+def is_action_rate_limited(db: Session, scope: str, identifier: str, *, limit: int, window_minutes: int) -> bool:
+    """Whether ``identifier`` has hit ``limit`` occurrences of ``scope`` recently.
+
+    Also opportunistically prunes events for this scope+identifier older
+    than the window, so the table does not grow without bound under
+    steady use.
+    """
+    window_start = utcnow() - timedelta(minutes=window_minutes)
+    db.execute(
+        delete(ActionEvent).where(
+            ActionEvent.scope == scope, ActionEvent.identifier == identifier, ActionEvent.created_at < window_start
+        )
+    )
+    db.commit()
+    count = (
+        db.query(ActionEvent)
+        .filter(
+            ActionEvent.scope == scope,
+            ActionEvent.identifier == identifier,
+            ActionEvent.created_at >= window_start,
+        )
+        .count()
+    )
+    return count >= limit
