@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}لوحة التحكم{% endblock %}
+{% block content %}
+<h2>البحث في الروابط</h2>
+<div class="row">
+  <input id="q" placeholder="ابحث..." style="flex: 1;">
+  <select id="category">
+    <option value="">كل التصنيفات</option>
+    {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+  </select>
+  <button onclick="search()">بحث</button>
+</div>
+<p id="stats" class="muted"></p>
+<div id="results"></div>
+
+<h2>القنوات</h2>
+<div class="row">
+  <input id="chId" placeholder="معرّف القناة (tg_channel_id)">
+  <input id="chUsername" placeholder="username (اختياري)">
+  <button onclick="addChannel()">إضافة قناة</button>
+</div>
+<div id="channels"></div>
+
+<h2>ربط البوت</h2>
+<button onclick="linkBot()">توليد رمز ربط للبوت</button>
+<p id="botCode" class="muted"></p>
+
+<script>
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
+  if (res.status === 401) { window.location.href = "/login"; throw new Error("unauthenticated"); }
+  return res;
+}
+
+async function loadStats() {
+  const res = await api("/links/stats");
+  const data = await res.json();
+  document.getElementById("stats").textContent =
+    `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}`;
+}
+
+async function search() {
+  const q = document.getElementById("q").value;
+  const category = document.getElementById("category").value;
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (category) params.set("category", category);
+  const res = await api("/links?" + params.toString());
+  const data = await res.json();
+  const el = document.getElementById("results");
+  el.innerHTML = data.items.map(i =>
+    `<div class="card"><a href="${i.url}" target="_blank" rel="noopener">${i.url}</a>
+     <div><span class="tag">${i.category}</span> <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span></div></div>`
+  ).join("") || "<p class='muted'>لا نتائج</p>";
+}
+
+async function loadChannels() {
+  const res = await api("/channels");
+  const data = await res.json();
+  document.getElementById("channels").innerHTML = data.map(c =>
+    `<div class="card">${c.title || c.username || c.tg_channel_id} <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}</span></div>`
+  ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
+}
+
+async function addChannel() {
+  const tg_channel_id = document.getElementById("chId").value.trim();
+  const username = document.getElementById("chUsername").value.trim() || null;
+  if (!tg_channel_id) return;
+  await api("/channels", { method: "POST", body: JSON.stringify({ tg_channel_id, username }) });
+  document.getElementById("chId").value = "";
+  document.getElementById("chUsername").value = "";
+  loadChannels();
+}
+
+async function linkBot() {
+  const res = await api("/bot/link-code", { method: "POST" });
+  const data = await res.json();
+  document.getElementById("botCode").textContent = data.instructions;
+}
+
+loadStats();
+search();
+loadChannels();
+</script>
+{% endblock %}

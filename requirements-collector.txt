@@ -1,0 +1,4 @@
+# Installed only inside the scheduled GitHub Actions collector job
+# (.github/workflows/collector.yml), never on the Render web service.
+-r requirements.txt
+telethon>=1.36,<2.0
