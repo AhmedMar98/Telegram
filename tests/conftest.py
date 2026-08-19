@@ -3,6 +3,8 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ENVIRONMENT", "test")
+# Key stretching is the point in production and pure waste in tests.
+os.environ.setdefault("BCRYPT_ROUNDS", "4")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

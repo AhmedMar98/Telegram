@@ -17,7 +17,18 @@ from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
 from app.models import User, Workspace
 from app.schemas import LoginRequest, RegisterRequest
-from app.security import create_session, hash_password, revoke_session, verify_password
+from app.security import (
+    clear_login_failures,
+    constant_time_equals,
+    create_session,
+    hash_password,
+    is_locked_out,
+    normalize_email,
+    record_login_attempt,
+    revoke_session,
+    verify_password,
+    waste_password_time,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -39,10 +50,11 @@ def _set_session_cookie(response: Response, token: str) -> None:
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)) -> dict:
     settings = get_settings()
-    if settings.invite_code and payload.invite_code != settings.invite_code:
+    if settings.invite_code and not constant_time_equals(payload.invite_code, settings.invite_code):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid invite code")
 
-    existing = db.query(User).filter(User.email == payload.email).first()
+    email = normalize_email(payload.email)
+    existing = db.query(User).filter(User.email == email).first()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email already registered")
 
@@ -52,7 +64,7 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
 
     user = User(
         workspace_id=workspace.id,
-        email=payload.email,
+        email=email,
         password_hash=hash_password(payload.password),
         role="owner",
     )
@@ -76,10 +88,27 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
 
 @router.post("/login")
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
-    user = db.query(User).filter(User.email == payload.email).first()
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+    email = normalize_email(payload.email)
+
+    if is_locked_out(db, email):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many failed attempts, try again later",
+        )
+
+    user = db.query(User).filter(User.email == email).first()
+    if user is None or not user.is_active:
+        # Burn the same time a real password check would, so a missing or
+        # disabled account is indistinguishable from a wrong password.
+        waste_password_time()
+        record_login_attempt(db, email, successful=False)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
+    if not verify_password(payload.password, user.password_hash):
+        record_login_attempt(db, email, successful=False)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+
+    clear_login_failures(db, email)
     audit_record(db, workspace_id=user.workspace_id, user_id=user.id, action="user.login")
     db.commit()
 

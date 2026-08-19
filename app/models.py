@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -65,6 +66,24 @@ class AuthSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class LoginAttempt(Base):
+    """Failed/successful login records backing the brute-force lockout.
+
+    Kept in the database rather than in process memory because the free
+    Render web service sleeps and restarts freely — in-memory counters
+    would reset on every cold start, which is exactly when an attacker
+    would benefit. Rows are pruned past the throttle window, so the table
+    stays small without a scheduled cleanup job.
+    """
+
+    __tablename__ = "login_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identifier: Mapped[str] = mapped_column(String(320), index=True)
+    successful: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class TelegramAccount(Base):
     """A userbot session (Telethon StringSession) used to collect messages."""
 
@@ -105,7 +124,12 @@ class Link(Base):
     # uniqueness key is (channel_id, url_hash) rather than (channel_id,
     # message_id) — message_id is retained only as provenance / the
     # collector's watermark, not as part of the identity of a link.
-    __table_args__ = (UniqueConstraint("channel_id", "url_hash", name="uq_link_per_channel_url"),)
+    __table_args__ = (
+        UniqueConstraint("channel_id", "url_hash", name="uq_link_per_channel_url"),
+        # Search filters by workspace and orders newest-first; one composite
+        # index serves both halves of that query.
+        Index("ix_links_workspace_created", "workspace_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)

@@ -32,12 +32,15 @@ jobs:
       - name: bandit (security scan)
         run: bandit -r app scripts -lll -iii
 
-      - name: Alembic migration smoke test (sqlite)
+      - name: Alembic migrations apply and match the models
         env:
           DATABASE_URL: "sqlite:///./_ci_alembic.db"
           SECRET_KEY: "ci-secret"
         run: |
           alembic upgrade head
+          # Fails if the ORM models have drifted from the migration chain,
+          # i.e. someone changed a model without writing the migration.
+          alembic check
           rm -f _ci_alembic.db
 
       - name: pytest

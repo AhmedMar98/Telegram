@@ -57,12 +57,31 @@ workflow باسم "Weekly DB backup" يعمل تلقائياً كل أسبوع �
 pg_restore --no-owner --clean --if-exists -d "$NEW_DATABASE_URL" backup.dump
 ```
 
+## الأمان المطبَّق فعلياً
+
+| الإجراء | التفاصيل |
+|---|---|
+| كلمات المرور | تُخزَّن مُجزَّأة بـ bcrypt فقط (معامل الكلفة قابل للضبط عبر `BCRYPT_ROUNDS`) |
+| الجلسات | رمز عشوائي ٢٥٦-بت؛ القاعدة تخزّن SHA-256 له فقط، فتسريب قاعدة البيانات لا يُمكّن من انتحال جلسة |
+| إلغاء الجلسة | فوري عند تسجيل الخروج (تحقق من القاعدة في كل طلب، لا انتظار انتهاء صلاحية الكوكي) |
+| تقييد المحاولات | ٨ محاولات فاشلة خلال ١٥ دقيقة لكل بريد ⟵ حجب مؤقت (٤٢٩)، ولا يتأثر أي حساب آخر |
+| منع استكشاف الحسابات | البريد غير الموجود يستهلك نفس زمن التحقق الحقيقي، والرد مطابق تماماً لحالة كلمة المرور الخاطئة |
+| رمز الدعوة | مقارنة ثابتة الزمن (`secrets.compare_digest`) |
+| عزل مساحات العمل | كل صف يحمل `workspace_id`، وكل استعلام مفلتَر به — مغطّى باختبار عزل صريح |
+| سجل التدقيق | كل عملية حساسة (تسجيل، دخول، خروج، إضافة/تعطيل قناة، تشغيل الجامع) تُكتب في `audit_log` |
+
+## نقاط الفحص التشغيلية
+
+- `GET /healthz` — فحص حياة العملية فقط، لا يلمس قاعدة البيانات (حتى لا يعيد Render تشغيل الخدمة بسبب عطل عابر في القاعدة).
+- `GET /readyz` — فحص جاهزية حقيقي ينفّذ استعلاماً على القاعدة ويعيد ٥٠٣ إن كانت غير متاحة.
+
 ## التطوير محلياً
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 
+cp .env.example .env      # ثم عدّل القيم حسب حاجتك
 export DATABASE_URL="sqlite:///./local.db"
 export SECRET_KEY="dev-secret"
 alembic upgrade head
@@ -75,8 +94,11 @@ uvicorn app.main:app --reload
 ruff check . && ruff format --check .
 mypy app scripts
 bandit -r app scripts -lll -iii
-pytest -q --cov=app
+alembic upgrade head && alembic check   # يفشل إن انحرفت النماذج عن الترحيلات
+pytest -q --cov=app --cov=scripts
 ```
+
+`alembic check` جزء من CI: أي تعديل على نموذج دون كتابة ترحيل مقابل له يُوقف البناء.
 
 ## بنية المشروع
 
@@ -90,6 +112,7 @@ scripts/
   collect.py           الجامع (يعمل مرة واحدة، يُستدعى من GitHub Actions)
   make_session_string.py  أداة تفاعلية لمرة واحدة لتوليد StringSession
 alembic/              ترحيلات قاعدة البيانات
+.env.example          قالب المتغيرات المطلوبة
 .github/workflows/
   ci.yml               فحص/فحص أنواع/اختبارات عند كل push
   collector.yml         تشغيل الجامع كل ساعة
