@@ -1,0 +1,50 @@
+name: Prune expired rows
+
+# The application prunes throttle and session rows opportunistically — it
+# deletes what it happens to touch. Rows belonging to an email or workspace
+# that goes quiet are never revisited and stay forever, which on a
+# size-limited free plan is a slow leak. This is the sweep that closes it.
+#
+# Daily rather than hourly: the retention windows are a day and a week, so
+# a more frequent run would do nothing but spend Actions minutes. Same
+# no-persistent-process reasoning as the Collector and Vitality workflows.
+#
+# Required repository secrets:
+#   DATABASE_URL — same Render Postgres URL the web service uses
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # daily, off-peak
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be deleted without deleting it"
+        type: boolean
+        default: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Prune
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: "prune-process-does-not-serve-http"
+          PRUNE_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python scripts/prune_expired.py
+
+      - name: Report database size
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: "prune-process-does-not-serve-http"
+        run: python scripts/db_report.py

@@ -122,7 +122,20 @@ def healthz() -> dict:
 
 @app.get("/readyz")
 def readyz(db: Session = Depends(get_db)) -> dict:
-    """Readiness: can we actually serve traffic (database reachable)?"""
+    """Readiness: can we actually serve traffic (database reachable)?
+
+    Also reports the applied migration revision. That belongs here and not
+    in ``/healthz``: the revision lives in the database, and ``/healthz``
+    deliberately never touches it — Render restarts the service when
+    liveness fails, so making it depend on the database would turn a
+    transient blip into a restart loop. Idea 75 asked for it in
+    ``/healthz``; putting it there would have broken that property.
+
+    The revision is read every call rather than cached at import, because
+    the useful case is exactly the one where it changed under a running
+    process. A read failure degrades to ``None`` — the service is ready if
+    the database answers, whether or not this extra fact is available.
+    """
     try:
         db.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
@@ -130,7 +143,15 @@ def readyz(db: Session = Depends(get_db)) -> dict:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="database unavailable"
         ) from exc
-    return {"status": "ready"}
+
+    try:
+        revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    except SQLAlchemyError:
+        # A database created by create_all() rather than by alembic has no
+        # such table. That is a normal test/dev shape, not an outage.
+        revision = None
+
+    return {"status": "ready", "schema_version": revision}
 
 
 @app.get("/", response_class=HTMLResponse)

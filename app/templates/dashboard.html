@@ -159,10 +159,21 @@ async function loadStats() {
     ` | 🟢 ${v.alive} · 🔴 ${v.dead} · ⚪ ${v.unchecked}` +
     (v.archived ? ` · 🗄 ${v.archived}` : "") +
     (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "") +
-    (deadest ? ` | الأكثر موتاً: ${deadest}` : "");
+    (deadest ? ` | الأكثر موتاً: ${deadest}` : "") +
+    storageSummary(data.storage);
   renderVitalityBar(v);
   renderCollectorHealth(data.collection);
   renderQuickStart(data.total_links);
+}
+
+function storageSummary(s) {
+  if (!s) return "";
+  // Size is Postgres-only. On SQLite the server sends null rather than a
+  // made-up number, and the page says nothing rather than inventing one.
+  if (s.database_bytes == null) return "";
+  const mb = s.database_bytes / (1024 * 1024);
+  const size = mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+  return ` | التخزين: ${size}` + (s.largest_table ? ` (أكبر جدول: ${escapeText(s.largest_table)})` : "");
 }
 
 // A stopped collector is the failure with no symptom: everything keeps
@@ -443,8 +454,9 @@ function linkCard(i, terms) {
   const archLabel = i.is_archived ? "أعد من الأرشيف" : "أرشف (إخفاء من النتائج دون حذف)";
   const compact = VIEW_MODE === "compact";
   return `<div class="card${compact ? " compact" : ""}">
-       <a href="${escapeText(i.url)}" target="_blank" rel="noopener">${highlighted(i.url, terms)}</a>
+       <a href="/links/${i.id}/open" target="_blank" rel="noopener" title="${escapeText(i.url)}">${highlighted(i.url, terms)}</a>
        ${compact ? "" : contextLine(i, terms)}
+       ${noteLine(i)}
        <div style="margin-top:.5rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
          <label class="sr-only" for="cat-${i.id}">تصنيف ${escapeText(i.domain)}</label>
          <select id="cat-${i.id}" onchange="recategorize(${i.id}, this.value)">
@@ -455,12 +467,34 @@ function linkCard(i, terms) {
          <span class="muted" title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
          ${standoutBadge(i)}
          <button onclick="copyLink('${escapeText(i.url)}')" aria-label="انسخ الرابط" title="انسخ الرابط">⧉</button>
+         <button onclick="editNote(${i.id})" aria-label="${i.notes ? "عدّل الملاحظة" : "أضف ملاحظة"}" title="${i.notes ? "عدّل الملاحظة" : "أضف ملاحظة"}">${i.notes ? "📝" : "✎"}</button>
+         <button onclick="togglePin(${i.id}, ${!i.is_pinned})" aria-label="${i.is_pinned ? "أزل التثبيت" : "ثبّت كمرجع دائم"}" aria-pressed="${!!i.is_pinned}" title="${i.is_pinned ? "أزل التثبيت" : "ثبّت كمرجع دائم"}">${i.is_pinned ? "📌" : "📎"}</button>
          <button onclick="showSimilar('${escapeText(i.domain)}', '${i.category}')" title="روابط أخرى من نفس النطاق والتصنيف">مشابهة</button>
          <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" aria-label="${favLabel}" aria-pressed="${!!i.is_favorite}" title="${favLabel}">${i.is_favorite ? "★" : "☆"}</button>
          <button onclick="toggleArchive(${i.id}, ${!i.is_archived})" aria-label="${archLabel}" title="${archLabel}">${i.is_archived ? "↩" : "🗄"}</button>
          <button onclick="removeLink(${i.id})" aria-label="احذف الرابط" style="margin-inline-start:auto;">حذف</button>
        </div>
      </div>`;
+}
+
+function noteLine(i) {
+  if (!i.notes) return "";
+  return `<div class="muted" style="margin-top:.35rem;">📝 ${escapeText(i.notes)}</div>`;
+}
+
+async function editNote(id) {
+  const current = (CURRENT_ITEMS[id] || {}).notes || "";
+  const notes = prompt("ملاحظتك على هذا الرابط (اتركها فارغة لحذفها):", current);
+  if (notes === null) return;
+  await api(`/links/${id}/notes`, { method: "PATCH", body: JSON.stringify({ notes }) });
+  announce(notes.trim() ? "حُفظت الملاحظة." : "حُذفت الملاحظة.");
+  search(false);
+}
+
+async function togglePin(id, makePinned) {
+  await api(`/links/${id}/pin?is_pinned=${makePinned}`, { method: "POST" });
+  announce(makePinned ? "ثُبّت الرابط." : "أُزيل التثبيت.");
+  search(false);
 }
 
 async function copyLink(url) {
@@ -506,6 +540,7 @@ async function search(resetPage = true) {
   const data = await res.json();
   const el = document.getElementById("results");
   const terms = positiveTerms();
+  CURRENT_ITEMS = Object.fromEntries(data.items.map(i => [i.id, i]));
 
   el.className = VIEW_MODE === "grid" ? "grid-results" : "";
   if (data.items.length) {
@@ -597,6 +632,7 @@ async function loadSavedSearches() {
 }
 
 let SAVED_BY_ID = {};
+let CURRENT_ITEMS = {};
 
 function applySavedSearch(id) {
   const row = SAVED_BY_ID[id];

@@ -142,6 +142,14 @@ class Link(Base):
         # Lets the vitality checker pick "never checked, then longest since
         # last checked" without a full table scan.
         Index("ix_links_last_checked_at", "last_checked_at"),
+        # Serves the top-domains panel as an index-only scan. The column
+        # order is not cosmetic and neither is the query that uses it:
+        # measured on 50k rows, (workspace_id, domain) alone was ignored by
+        # the planner, and this index with count(id) was ignored too —
+        # because id is not in the index, so no index-only scan is
+        # possible. Only this index *together with* count(*) works:
+        # 10.7ms/1118 buffers -> 1.9ms/13 buffers, Heap Fetches: 0.
+        Index("ix_links_ws_archived_domain", "workspace_id", "is_archived", "domain"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -169,6 +177,19 @@ class Link(Base):
     # "ar", "en", or "mixed". Derived from the stored context, not declared
     # by the source, so it is a heuristic rather than metadata.
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # A free-text note the user writes about this link. Separate from
+    # raw_text, which is what the *source message* said — conflating the
+    # two would let an edit destroy the original context.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Distinct from is_favorite on purpose. "Favourite" is affection;
+    # "pinned" is "this is the reference I keep coming back to". Merging
+    # them would mean starring a link you like buries the one you rely on.
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Incremented by the /r/{id} redirect. Zero means "never opened through
+    # the redirect", which is not the same as "never opened" — a copied URL
+    # is invisible here, and the dashboard says so rather than implying the
+    # count is complete.
+    click_count: Mapped[int] = mapped_column(Integer, default=0)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
