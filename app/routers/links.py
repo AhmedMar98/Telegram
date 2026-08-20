@@ -26,7 +26,7 @@ from app.classifier import CATEGORIES
 from app.database import get_db
 from app.deps import get_current_user
 from app.ingest import ingest_text, manual_channel
-from app.models import Channel, ClassificationFeedback, Link, User
+from app.models import Channel, ClassificationFeedback, Link, SavedSearch, User
 from app.schemas import (
     BulkDeleteRequest,
     BulkRecategorizeRequest,
@@ -37,11 +37,13 @@ from app.schemas import (
     LinkImportRequest,
     LinkImportResponse,
     LinkOut,
+    SavedSearchCreate,
+    SavedSearchOut,
     SearchResponse,
     StatsResponse,
     VitalityStats,
 )
-from app.search import fts_document, fts_query, fts_rank
+from app.search import fts_document, fts_query, fts_rank, parse_query
 from app.security import is_action_rate_limited, record_action_event
 from app.timeutil import utcnow
 
@@ -52,7 +54,7 @@ def _dialect(db: Session) -> str:
     return db.bind.dialect.name if db.bind is not None else "sqlite"
 
 
-SORT_OPTIONS = ("date", "domain", "category", "confidence", "checked")
+SORT_OPTIONS = ("date", "domain", "category", "confidence", "checked", "domain_frequency")
 
 
 def _filtered_query(
@@ -65,6 +67,7 @@ def _filtered_query(
     alive: bool | None = None,
     channel_id: int | None = None,
     language: str | None = None,
+    domain: str | None = None,
     include_archived: bool = False,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
@@ -92,6 +95,12 @@ def _filtered_query(
         # ever means "show me a definite answer", never "include unknowns".
         query = query.filter(Link.is_alive == alive)
 
+    if domain:
+        # Exact match on the stored domain, which is already normalised
+        # (lowercased, "www." stripped) at ingest time — so this is the same
+        # value the stats panel and the "similar links" button hand back.
+        query = query.filter(Link.domain == domain.lower())
+
     if language:
         # Deliberately an exact match on the stored label rather than a
         # "contains Arabic" test: the label is what the UI offers as a chip,
@@ -107,12 +116,27 @@ def _filtered_query(
         query = query.filter(Link.channel_id == channel_id)
 
     if q:
-        if _dialect(db) == "postgresql":
-            query = query.filter(fts_document(Link.raw_text, Link.url).op("@@")(fts_query(q)))
-            ranked = True
-        else:
-            like = f"%{q}%"
-            query = query.filter(or_(Link.url.ilike(like), Link.raw_text.ilike(like)))
+        parsed = parse_query(q)
+        postgres = _dialect(db) == "postgresql"
+
+        if parsed.include:
+            if postgres:
+                query = query.filter(fts_document(Link.raw_text, Link.url).op("@@")(fts_query(parsed.include)))
+                ranked = True
+            else:
+                like = f"%{parsed.include}%"
+                query = query.filter(or_(Link.url.ilike(like), Link.raw_text.ilike(like)))
+
+        for term in parsed.exclude:
+            # Negation as a SQL NOT rather than inside the tsquery: this is
+            # what lets the user's text stay literal input to
+            # plainto_tsquery instead of becoming a query language that has
+            # to be sanitised.
+            if postgres:
+                query = query.filter(~fts_document(Link.raw_text, Link.url).op("@@")(fts_query(term)))
+            else:
+                like = f"%{term}%"
+                query = query.filter(~or_(Link.url.ilike(like), func.coalesce(Link.raw_text, "").ilike(like)))
 
     return query, ranked
 
@@ -125,6 +149,7 @@ def search_links(
     alive: bool | None = Query(default=None),
     channel_id: int | None = Query(default=None),
     language: str | None = Query(default=None, max_length=10),
+    domain: str | None = Query(default=None, max_length=300),
     include_archived: bool = Query(default=False),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
@@ -147,6 +172,7 @@ def search_links(
         alive=alive,
         channel_id=channel_id,
         language=language,
+        domain=domain,
         include_archived=include_archived,
     )
     total = query.count()
@@ -157,6 +183,13 @@ def search_links(
         query = query.order_by(Link.category.asc(), Link.created_at.desc())
     elif sort == "confidence":
         query = query.order_by(Link.confidence.desc(), Link.created_at.desc())
+    elif sort == "domain_frequency":
+        # Groups the collection by how much of it comes from the same place,
+        # busiest source first. A window function rather than a join on a
+        # grouped subquery — verified to run identically on SQLite (>= 3.25)
+        # and Postgres, so the two backends do not diverge here.
+        frequency = func.count().over(partition_by=Link.domain)
+        query = query.order_by(frequency.desc(), Link.domain.asc(), Link.created_at.desc())
     elif sort == "checked":
         # Most recently verified first. Different question from "newest":
         # this answers "what do I currently know to be working?", which the
@@ -166,7 +199,9 @@ def search_links(
         # Default "date" sort yields to relevance when there is a search
         # term and Postgres can actually rank it — a plain date order would
         # bury the best match under whatever was collected most recently.
-        query = query.order_by(fts_rank(Link.raw_text, Link.url, q).desc(), Link.created_at.desc())
+        query = query.order_by(
+            fts_rank(Link.raw_text, Link.url, parse_query(q).include).desc(), Link.created_at.desc()
+        )
     else:
         query = query.order_by(Link.created_at.desc())
 
@@ -379,6 +414,107 @@ def recategorize_link(
     return link
 
 
+# The filter keys a saved search is allowed to carry. Validated rather than
+# trusted: without this a saved search is a stored blob that gets replayed
+# into a later request, so an unexpected key would be a way to smuggle a
+# parameter past the caller who created it.
+SAVEABLE_FILTERS = frozenset(
+    {"q", "category", "favorite", "alive", "channel_id", "language", "domain", "include_archived", "sort"}
+)
+
+MAX_SAVED_SEARCHES = 50
+
+
+@router.get("/saved", response_model=list[SavedSearchOut])
+def list_saved_searches(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> list[SavedSearchOut]:
+    rows = (
+        db.query(SavedSearch)
+        .filter(SavedSearch.workspace_id == current_user.workspace_id)
+        .order_by(SavedSearch.name.asc())
+        .all()
+    )
+    return [
+        SavedSearchOut(id=r.id, name=r.name, filters=json.loads(r.filters), created_at=r.created_at) for r in rows
+    ]
+
+
+@router.post("/saved", response_model=SavedSearchOut, status_code=status.HTTP_201_CREATED)
+def create_saved_search(
+    payload: SavedSearchCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SavedSearchOut:
+    """Store a filter combination under a name. Re-using a name replaces it."""
+    unknown = sorted(set(payload.filters) - SAVEABLE_FILTERS)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"unknown filter(s): {', '.join(unknown)}",
+        )
+
+    existing = (
+        db.query(SavedSearch)
+        .filter(SavedSearch.workspace_id == current_user.workspace_id, SavedSearch.name == payload.name)
+        .first()
+    )
+    if existing is None:
+        count = (
+            db.query(func.count(SavedSearch.id))
+            .filter(SavedSearch.workspace_id == current_user.workspace_id)
+            .scalar()
+        )
+        if count and count >= MAX_SAVED_SEARCHES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"at most {MAX_SAVED_SEARCHES} saved searches per workspace",
+            )
+        existing = SavedSearch(workspace_id=current_user.workspace_id, name=payload.name, filters="{}")
+        db.add(existing)
+
+    existing.filters = json.dumps(payload.filters, ensure_ascii=False)
+    db.commit()
+    db.refresh(existing)
+    return SavedSearchOut(
+        id=existing.id, name=existing.name, filters=json.loads(existing.filters), created_at=existing.created_at
+    )
+
+
+@router.delete("/saved/{saved_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_saved_search(
+    saved_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> Response:
+    row = (
+        db.query(SavedSearch)
+        .filter(SavedSearch.id == saved_id, SavedSearch.workspace_id == current_user.workspace_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="saved search not found")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/random", response_model=list[LinkOut])
+def random_links(
+    count: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Link]:
+    """A handful of links at random, for rediscovering an old collection.
+
+    ``ORDER BY random() LIMIT n`` is a full scan and would be the wrong
+    tool on a large table, but it is correct on both backends and the
+    measured corpus size here (see docs/07-phase0-measurements.md) is
+    nowhere near where that matters. Replacing it with something cleverer
+    before it is a measured problem would be guessing.
+    """
+    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=None)
+    return query.order_by(func.random()).limit(count).all()
+
+
 @router.get("/feedback", response_model=FeedbackListResponse)
 def list_feedback(
     link_id: int | None = Query(default=None),
@@ -577,6 +713,7 @@ def _csv_cell(column: str, row: dict) -> str:
 @router.get("/export.csv")
 def export_links_csv(
     category: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=300),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -592,14 +729,14 @@ def export_links_csv(
     # include_archived: an export is about completeness. Archiving hides a
     # link from the dashboard; silently omitting it from the user's own
     # data export would make the export a lie.
-    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category, include_archived=True)
+    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=csv category={category or 'all'}",
+        detail=f"format=csv category={category or 'all'} q={q or ''}",
     )
     db.commit()
 
@@ -631,6 +768,7 @@ def export_links_csv(
 @router.get("/export.json")
 def export_links_json(
     category: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=300),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -642,14 +780,14 @@ def export_links_json(
     # include_archived: an export is about completeness. Archiving hides a
     # link from the dashboard; silently omitting it from the user's own
     # data export would make the export a lie.
-    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category, include_archived=True)
+    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=json category={category or 'all'}",
+        detail=f"format=json category={category or 'all'} q={q or ''}",
     )
     db.commit()
 
@@ -666,4 +804,68 @@ def export_links_json(
         rows(),
         media_type="application/json; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="links.json"'},
+    )
+
+
+# Markdown link text is delimited by these; leaving them raw lets a message
+# body break out of the [label](url) it is placed in. Escaped rather than
+# stripped so the reader still sees what the message actually said.
+_MARKDOWN_ESCAPES = str.maketrans({"[": r"\[", "]": r"\]", "(": r"\(", ")": r"\)", "\\": "\\\\"})
+
+
+def _markdown_safe(text: str) -> str:
+    return text.translate(_MARKDOWN_ESCAPES).replace("\n", " ").strip()
+
+
+@router.get("/export.md")
+def export_links_markdown(
+    category: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=300),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream a search's results as a readable Markdown document.
+
+    CSV and JSON are for moving data to another program. This one is for
+    moving it to a person: grouped by category, with the message text that
+    labelled each link, so a search like "دورات بايثون" becomes something
+    that can be pasted into a note or a message and read as-is.
+
+    Unlike the other two formats this one honours the *search term*, since
+    a curated share is the point — exporting the whole workspace as prose
+    would not be.
+    """
+    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="link.export",
+        detail=f"format=md category={category or 'all'} q={q or ''}",
+    )
+    db.commit()
+
+    def rows():
+        heading = "# روابط" + (f" — بحث: {_markdown_safe(q)}" if q else "")
+        yield heading + "\n\n"
+
+        current_category: str | None = None
+        # Ordered by category so the grouping needs no buffering: rows are
+        # still streamed one at a time, which is what keeps a large export
+        # from having to fit in memory on a small instance.
+        for link in query.order_by(Link.category.asc(), Link.created_at.desc()).yield_per(200):
+            if link.category != current_category:
+                current_category = link.category
+                yield f"\n## {current_category}\n\n"
+            label = _markdown_safe((link.raw_text or "")[:120]) or link.domain
+            line = f"- [{label}]({link.url})"
+            if link.is_alive is False:
+                line += "  _(رابط ميت)_"
+            yield line + "\n"
+
+    return StreamingResponse(
+        rows(),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="links.md"'},
     )

@@ -34,6 +34,16 @@
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
+  <button onclick="exportMarkdown()" title="نتائج البحث الحالية كملف Markdown قابل للقراءة والمشاركة">تصدير Markdown</button>
+</div>
+<p id="activeDomain" class="muted" style="margin:.25rem 0;"></p>
+<div class="row" style="align-items:center;">
+  <span class="muted">عمليات بحث محفوظة:</span>
+  <span id="savedSearches" class="muted">—</span>
+  <button onclick="saveCurrentSearch()">احفظ البحث الحالي</button>
+  <button onclick="copyPermalink()" title="رابط يعيد فتح اللوحة بنفس الفلاتر">انسخ رابط الفلاتر</button>
+  <button onclick="toggleView()" id="viewBtn">عرض شبكي</button>
+  <button onclick="discover()" title="خمسة روابط عشوائية لإعادة اكتشاف ما جمعته">اكتشاف عشوائي</button>
 </div>
 <div class="row" style="align-items:center;">
   <button onclick="bulkRecategorize()">نقل كل النتائج الحالية إلى تصنيف آخر</button>
@@ -56,6 +66,7 @@
 <div class="row" style="flex-direction: column;">
   <textarea id="pasteBox" rows="4" placeholder="الصق الروابط أو النص هنا..." style="width:100%; font-family:inherit; font-size:1rem; padding:.5rem; border-radius:.4rem; border:1px solid #8888;"></textarea>
   <button onclick="addLinks()">إضافة وتصنيف</button>
+  <span id="pasteCount" class="muted"></span>
   <p id="addResult" class="muted"></p>
 </div>
 
@@ -168,15 +179,22 @@ async function toggleArchive(id, makeArchived) {
   loadStats();
 }
 
-function exportCsv() {
+// All three exports carry the search term as well as the category. Before
+// this, "export" next to a search box exported the whole workspace, which
+// is the opposite of what the button appears to promise.
+function exportWith(path) {
+  const params = new URLSearchParams();
+  const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
-  window.location = "/links/export.csv" + (category ? `?category=${encodeURIComponent(category)}` : "");
+  if (q) params.set("q", q);
+  if (category) params.set("category", category);
+  const query = params.toString();
+  window.location = path + (query ? "?" + query : "");
 }
 
-function exportJson() {
-  const category = document.getElementById("category").value;
-  window.location = "/links/export.json" + (category ? `?category=${encodeURIComponent(category)}` : "");
-}
+function exportCsv() { exportWith("/links/export.csv"); }
+function exportJson() { exportWith("/links/export.json"); }
+function exportMarkdown() { exportWith("/links/export.md"); }
 
 function currentFilter() {
   return { q: document.getElementById("q").value || null, category: document.getElementById("category").value || null };
@@ -235,31 +253,72 @@ function vitalityTitle(i) {
   return escapeText(parts.join(" · "));
 }
 
-async function search(resetPage = true) {
-  if (resetPage) currentPage = 1;
+// The domain filter has no control of its own in the bar: it is set by
+// clicking a link's domain or its "similar" button, and cleared from the
+// notice under the bar. A permanently visible free-text domain box would be
+// a worse version of the search field that already matches URLs.
+let activeDomain = null;
+
+function currentParams() {
+  const params = new URLSearchParams();
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
   const sort = document.getElementById("sort").value;
-  const favoriteOnly = document.getElementById("favoriteOnly").checked;
   const alive = document.getElementById("aliveFilter").value;
-  const params = new URLSearchParams();
-  params.set("page", currentPage);
+  const channelId = document.getElementById("channelFilter").value;
+  const language = document.getElementById("languageFilter").value;
   if (q) params.set("q", q);
   if (category) params.set("category", category);
   if (sort && sort !== "date") params.set("sort", sort);
-  if (favoriteOnly) params.set("favorite", "true");
+  if (document.getElementById("favoriteOnly").checked) params.set("favorite", "true");
   if (alive) params.set("alive", alive);
-  const channelId = document.getElementById("channelFilter").value;
   if (channelId) params.set("channel_id", channelId);
-  const language = document.getElementById("languageFilter").value;
   if (language) params.set("language", language);
+  if (activeDomain) params.set("domain", activeDomain);
   if (document.getElementById("includeArchived").checked) params.set("include_archived", "true");
-  const res = await api("/links?" + params.toString());
-  const data = await res.json();
-  const el = document.getElementById("results");
-  el.innerHTML = data.items.map(i =>
-    `<div class="card">
-       <a href="${i.url}" target="_blank" rel="noopener">${i.url}</a>
+  return params;
+}
+
+// Highlighting is done by splitting on the matched term and rebuilding with
+// <mark>, never by string-replacing inside already-escaped HTML: doing it
+// the other way round would let a message body containing "&lt;" reassemble
+// into a real tag.
+function highlighted(text, terms) {
+  const escaped = escapeText(text);
+  if (!terms.length) return escaped;
+  const pattern = terms
+    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .filter(Boolean)
+    .join("|");
+  if (!pattern) return escaped;
+  return escaped.replace(new RegExp("(" + pattern + ")", "gi"), "<mark>$1</mark>");
+}
+
+function positiveTerms() {
+  // Mirrors app/search.py::parse_query — a "-term" is excluded, so
+  // highlighting it would point at the very thing the user filtered out.
+  return document.getElementById("q").value.split(/\s+/).filter(t => t && !t.startsWith("-"));
+}
+
+function contextLine(i, terms) {
+  if (!i.raw_text) return "";
+  const trimmed = i.raw_text.length > 240 ? i.raw_text.slice(0, 240) + "…" : i.raw_text;
+  return `<div class="muted" style="margin-top:.35rem; font-size:.9em;">${highlighted(trimmed, terms)}</div>`;
+}
+
+// A link that is starred, confirmed working and collected in the last week
+// is the best thing in a result list; nothing in the row said so.
+function standoutBadge(i) {
+  const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+  const fresh = i.created_at && new Date(i.created_at).getTime() >= weekAgo;
+  if (!(i.is_favorite && i.is_alive === true && fresh)) return "";
+  return `<span class="muted" title="مفضّلة وحيّة وحديثة">✨</span>`;
+}
+
+function linkCard(i, terms) {
+  return `<div class="card">
+       <a href="${escapeText(i.url)}" target="_blank" rel="noopener">${highlighted(i.url, terms)}</a>
+       ${contextLine(i, terms)}
        <div style="margin-top:.5rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
          <select onchange="recategorize(${i.id}, this.value)">
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
@@ -267,16 +326,178 @@ async function search(resetPage = true) {
          <span class="muted" title="${classificationReason(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
          ${originBadge(i)}
          <span class="muted" title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
+         ${standoutBadge(i)}
+         <button onclick="showSimilar('${escapeText(i.domain)}', '${i.category}')" title="روابط أخرى من نفس النطاق والتصنيف">مشابهة</button>
          <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
          <button onclick="toggleArchive(${i.id}, ${!i.is_archived})" title="${i.is_archived ? "إعادة من الأرشيف" : "أرشفة (إخفاء من النتائج دون حذف)"}">${i.is_archived ? "↩" : "🗄"}</button>
          <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
        </div>
-     </div>`
-  ).join("") || "<p class='muted'>لا نتائج</p>";
+     </div>`;
+}
+
+// Suggesting categories that *have* links beats an empty page: the usual
+// cause of no results is a filter combination, not an empty collection.
+async function emptyStateHtml() {
+  const res = await api("/links/stats");
+  const data = await res.json();
+  const populated = Object.entries(data.by_category).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (!data.total_links) return "<p class='muted'>لا روابط بعد في مساحة العمل هذه.</p>";
+  const chips = populated
+    .map(([c, n]) => `<button onclick="jumpToCategory('${c}')">${c} (${n})</button>`)
+    .join(" ");
+  return `<p class='muted'>لا نتائج بهذه الفلاتر. تصنيفات فيها روابط:</p><div class="row">${chips}</div>`;
+}
+
+function jumpToCategory(category) {
+  document.getElementById("q").value = "";
+  document.getElementById("category").value = category;
+  clearDomain(false);
+  search();
+}
+
+async function search(resetPage = true) {
+  if (resetPage) currentPage = 1;
+  const params = currentParams();
+  params.set("page", currentPage);
+  const res = await api("/links?" + params.toString());
+  const data = await res.json();
+  const el = document.getElementById("results");
+  const terms = positiveTerms();
+
+  el.className = VIEW_MODE === "grid" ? "grid-results" : "";
+  if (data.items.length) {
+    el.innerHTML = data.items.map(i => linkCard(i, terms)).join("");
+  } else {
+    el.innerHTML = await emptyStateHtml();
+  }
+
+  renderActiveDomain();
+  writePermalink(params);
   document.getElementById("pageInfo").textContent =
     data.total === 0 ? "" : `صفحة ${data.page} — عرض ${data.items.length} من ${data.total}`;
   document.getElementById("prevBtn").disabled = data.page <= 1;
   document.getElementById("nextBtn").disabled = data.page * data.page_size >= data.total;
+}
+
+function showSimilar(domain, category) {
+  activeDomain = domain;
+  document.getElementById("category").value = category;
+  document.getElementById("q").value = "";
+  search();
+}
+
+function clearDomain(rerun = true) {
+  activeDomain = null;
+  if (rerun) search();
+}
+
+function renderActiveDomain() {
+  const el = document.getElementById("activeDomain");
+  if (!activeDomain) { el.textContent = ""; return; }
+  el.innerHTML = `مقصور على النطاق: <strong>${escapeText(activeDomain)}</strong> `
+    + `<button onclick="clearDomain()">إلغاء</button>`;
+}
+
+// --- shareable filter permalink -------------------------------------------
+
+function writePermalink(params) {
+  // replaceState, not pushState: every keystroke-driven search would
+  // otherwise add a history entry and make the back button useless.
+  const query = params.toString();
+  history.replaceState(null, "", query ? "?" + query : location.pathname);
+}
+
+function applyPermalink() {
+  const params = new URLSearchParams(location.search);
+  if (![...params.keys()].length) return false;
+  const setValue = (id, key) => { const v = params.get(key); if (v !== null) document.getElementById(id).value = v; };
+  setValue("q", "q");
+  setValue("category", "category");
+  setValue("sort", "sort");
+  setValue("aliveFilter", "alive");
+  setValue("channelFilter", "channel_id");
+  setValue("languageFilter", "language");
+  document.getElementById("favoriteOnly").checked = params.get("favorite") === "true";
+  document.getElementById("includeArchived").checked = params.get("include_archived") === "true";
+  activeDomain = params.get("domain");
+  currentPage = Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+  return true;
+}
+
+async function copyPermalink() {
+  const url = location.origin + location.pathname + "?" + currentParams().toString();
+  try {
+    await navigator.clipboard.writeText(url);
+    alert("نُسخ رابط الفلاتر.");
+  } catch (e) {
+    // Clipboard access is refused outside a secure context or without a
+    // user gesture the browser accepts; showing the URL still gets the job
+    // done rather than failing silently.
+    prompt("انسخ الرابط يدوياً:", url);
+  }
+}
+
+// --- saved searches --------------------------------------------------------
+
+async function loadSavedSearches() {
+  const res = await api("/links/saved");
+  const rows = await res.json();
+  const el = document.getElementById("savedSearches");
+  if (!rows.length) { el.textContent = "—"; return; }
+  el.innerHTML = rows.map(r =>
+    `<button onclick="applySavedSearch(${r.id})">${escapeText(r.name)}</button>`
+    + `<button onclick="deleteSavedSearch(${r.id})" title="حذف البحث المحفوظ">×</button>`
+  ).join(" ");
+  SAVED_BY_ID = Object.fromEntries(rows.map(r => [r.id, r]));
+}
+
+let SAVED_BY_ID = {};
+
+function applySavedSearch(id) {
+  const row = SAVED_BY_ID[id];
+  if (!row) return;
+  const params = new URLSearchParams(row.filters);
+  history.replaceState(null, "", "?" + params.toString());
+  applyPermalink();
+  search();
+}
+
+async function saveCurrentSearch() {
+  const name = prompt("اسم البحث المحفوظ:");
+  if (!name) return;
+  const filters = Object.fromEntries(currentParams());
+  delete filters.page;
+  const res = await api("/links/saved", { method: "POST", body: JSON.stringify({ name, filters }) });
+  if (!res.ok) { alert((await res.json()).detail || "تعذّر الحفظ."); return; }
+  loadSavedSearches();
+}
+
+async function deleteSavedSearch(id) {
+  await api(`/links/saved/${id}`, { method: "DELETE" });
+  loadSavedSearches();
+}
+
+// --- view mode and discovery ----------------------------------------------
+
+let VIEW_MODE = "list";
+try { VIEW_MODE = localStorage.getItem("viewMode") || "list"; } catch (e) { /* private mode */ }
+
+function toggleView() {
+  VIEW_MODE = VIEW_MODE === "grid" ? "list" : "grid";
+  try { localStorage.setItem("viewMode", VIEW_MODE); } catch (e) { /* private mode */ }
+  document.getElementById("viewBtn").textContent = VIEW_MODE === "grid" ? "عرض قائمة" : "عرض شبكي";
+  search(false);
+}
+
+async function discover() {
+  const res = await api("/links/random?count=5");
+  const items = await res.json();
+  const el = document.getElementById("results");
+  el.className = VIEW_MODE === "grid" ? "grid-results" : "";
+  el.innerHTML = items.length
+    ? "<p class='muted'>خمسة روابط عشوائية:</p>" + items.map(i => linkCard(i, [])).join("")
+    : "<p class='muted'>لا روابط بعد.</p>";
+  document.getElementById("pageInfo").textContent = "";
 }
 
 let ACCOUNTS = [];
@@ -371,6 +592,21 @@ async function addChannel() {
   document.getElementById("chId").value = "";
   document.getElementById("chUsername").value = "";
   loadChannels();
+}
+
+// Mirrors app/classifier/rules.py::URL_RE, including the excluded
+// characters, so the number shown while typing is the number the server
+// will actually store. A looser pattern here would promise links the
+// extractor then discards.
+const PASTE_URL_RE = /https?:\/\/[^\s<>"'()\[\]]+/gi;
+
+function updatePasteCount() {
+  const text = document.getElementById("pasteBox").value;
+  // Counted as a set: the server dedupes within a single message, so
+  // showing 5 for a message repeating one link would be a lie.
+  const found = new Set((text.match(PASTE_URL_RE) || []).map(u => u.replace(/[.,،!?؟:;»)\]]+$/, "")));
+  const el = document.getElementById("pasteCount");
+  el.textContent = found.size ? `${found.size} رابط في النص` : "";
 }
 
 async function addLinks() {
@@ -489,8 +725,15 @@ async function revokeSession(id) {
   loadSessions();
 }
 
+// A permalink may set filters that only exist once the channel list has
+// loaded; applying it before the first search is still correct because the
+// select simply has no matching option yet and falls back to "all".
+document.getElementById("pasteBox").addEventListener("input", updatePasteCount);
+applyPermalink();
+document.getElementById("viewBtn").textContent = VIEW_MODE === "grid" ? "عرض قائمة" : "عرض شبكي";
 loadStats();
 search();
+loadSavedSearches();
 loadAccounts().then(loadChannels);
 loadSessions();
 loadSecurityActivity();

@@ -263,6 +263,33 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class SavedSearch(Base):
+    """A filter combination someone wants back with one click.
+
+    Stored server-side rather than in the browser so the same saved
+    searches are there on a phone and a laptop. The whole filter set is
+    kept as one JSON blob instead of a column per filter: filters are
+    added every other batch, and a schema migration per new filter would
+    make adding one more expensive than it should be. Nothing queries
+    *inside* this value — it is read back whole and handed to the search
+    endpoint — so there is no index to lose by not normalising it.
+    """
+
+    __tablename__ = "saved_searches"
+    __table_args__ = (
+        # Two saved searches with the same name in one workspace would be
+        # indistinguishable in the UI that lists them.
+        UniqueConstraint("workspace_id", "name", name="uq_saved_search_per_workspace"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    # JSON-encoded query parameters, e.g. {"q": "كتاب", "category": "books_courses"}.
+    filters: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ClassificationFeedback(Base):
     """A human correcting the classifier, kept as an auditable trail.
 

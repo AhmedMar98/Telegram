@@ -31,6 +31,7 @@ from app.models import (
     ClassificationFeedback,
     Link,
     LoginAttempt,
+    SavedSearch,
     TelegramAccount,
     User,
     Workspace,
@@ -41,7 +42,17 @@ from app.models import (
 # something else and are handled separately in ``delete_workspace``:
 # AuthSession (user_id), LoginAttempt (email) and ActionEvent (scope +
 # identifier).
-WORKSPACE_TABLES = (ClassificationFeedback, Link, AuditLog, BotLink, BotLinkCode, Channel, TelegramAccount, User)
+WORKSPACE_TABLES = (
+    ClassificationFeedback,
+    SavedSearch,
+    Link,
+    AuditLog,
+    BotLink,
+    BotLinkCode,
+    Channel,
+    TelegramAccount,
+    User,
+)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -134,6 +145,10 @@ def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
                 "created_at": _iso(f.created_at),
             }
             for f in rows(ClassificationFeedback)
+        ],
+        "saved_searches": [
+            {"id": q.id, "name": q.name, "filters": q.filters, "created_at": _iso(q.created_at)}
+            for q in rows(SavedSearch)
         ],
         "bot_links": [{"chat_id": b.chat_id, "created_at": _iso(b.created_at)} for b in rows(BotLink)],
         "bot_link_codes": [
