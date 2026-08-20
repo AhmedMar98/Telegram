@@ -71,10 +71,31 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
 
+    # --- Field-level encryption -------------------------------------------
+    # Encrypts secrets that (unlike passwords or session tokens) must be
+    # recoverable in their original form — today, only a collected Telegram
+    # account's session string (app/crypto.py). The dev default below is
+    # published in this repository and MUST be overridden with a real
+    # secret (e.g. `python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())"`) anywhere real credentials are
+    # stored; using the default in production makes the encryption
+    # decorative.
+    field_encryption_key: str = "S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA="
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:
         return normalize_database_url(value)
+
+    @field_validator("field_encryption_key")
+    @classmethod
+    def _default_field_encryption_key_when_unset(cls, value: str) -> str:
+        # An unset GitHub Actions secret still exports an empty-string env
+        # var (${{ secrets.X }} with no X resolves to ""), which would
+        # otherwise reach Fernet() as an invalid key and crash the
+        # collector outright instead of falling back like every other
+        # optional secret in this file does.
+        return value or "S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA="
 
     @property
     def is_saas_ready_auth(self) -> bool:

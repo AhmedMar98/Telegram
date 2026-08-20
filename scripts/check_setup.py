@@ -25,6 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 _SYMBOL = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]"}
+_DEFAULT_FIELD_ENCRYPTION_KEY = "S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA="
 
 results: list[tuple[str, str, str]] = []
 
@@ -164,6 +165,17 @@ def check_optional_features() -> None:
         report(OK, "registration", "gated by INVITE_CODE")
     else:
         report(WARN, "registration", "INVITE_CODE not set — anyone reaching the URL can create an account")
+
+    field_key = os.environ.get("FIELD_ENCRYPTION_KEY")
+    if field_key and field_key != _DEFAULT_FIELD_ENCRYPTION_KEY:
+        report(OK, "field encryption", "FIELD_ENCRYPTION_KEY set to a non-default value")
+    else:
+        report(
+            WARN,
+            "field encryption",
+            "FIELD_ENCRYPTION_KEY unset or using the published dev default — collected Telegram "
+            "session strings are only decoratively encrypted until a real secret is set",
+        )
 
 
 def main() -> int:

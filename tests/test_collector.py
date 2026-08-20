@@ -13,8 +13,9 @@ from datetime import UTC, datetime
 import pytest
 from telethon.errors import FloodWaitError
 
+from app.crypto import decrypt_field
 from app.database import SessionLocal
-from app.models import Channel, Link, Workspace
+from app.models import Channel, Link, TelegramAccount, Workspace
 from scripts import collect as collector
 
 
@@ -234,3 +235,38 @@ def test_message_limit_is_read_at_call_time(monkeypatch):
     assert collector._message_limit() == 42
     monkeypatch.setenv("COLLECTOR_MESSAGE_LIMIT", "not-a-number")
     assert collector._message_limit() == collector.DEFAULT_MESSAGE_LIMIT
+
+
+def test_collect_stores_the_session_string_encrypted_not_plaintext(monkeypatch):
+    """Regression guard for the cleartext-session-string vulnerability.
+
+    A workspace with no active channels lets ``collect()`` exercise its
+    real account-provisioning path (env credentials -> encrypted row) and
+    return before ever touching the network, so this needs no fake
+    Telethon client.
+    """
+    db = SessionLocal()
+    try:
+        workspace = Workspace(name="Encryption WS")
+        db.add(workspace)
+        db.flush()
+        workspace_id = workspace.id
+        db.commit()
+    finally:
+        db.close()
+
+    raw_session = "raw-plaintext-session-value-that-must-never-hit-the-database-as-is"
+    monkeypatch.setenv("TG_API_ID", "12345")
+    monkeypatch.setenv("TG_API_HASH", "deadbeefcafebabe")
+    monkeypatch.setenv("TG_SESSION_STRING", raw_session)
+    monkeypatch.setenv("COLLECTOR_WORKSPACE_ID", str(workspace_id))
+
+    asyncio.run(collector.collect())
+
+    db = SessionLocal()
+    try:
+        account = db.query(TelegramAccount).filter(TelegramAccount.workspace_id == workspace_id).one()
+        assert account.session_string != raw_session
+        assert decrypt_field(account.session_string) == raw_session
+    finally:
+        db.close()
