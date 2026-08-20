@@ -57,6 +57,7 @@ def _filtered_query(
     q: str | None,
     category: str | None,
     favorite: bool | None = None,
+    alive: bool | None = None,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
 
@@ -71,6 +72,11 @@ def _filtered_query(
 
     if favorite is not None:
         query = query.filter(Link.is_favorite == favorite)
+
+    if alive is not None:
+        # is_alive is nullable (never checked yet); an explicit filter only
+        # ever means "show me a definite answer", never "include unknowns".
+        query = query.filter(Link.is_alive == alive)
 
     if q:
         if _dialect(db) == "postgresql":
@@ -88,6 +94,7 @@ def search_links(
     q: str | None = Query(default=None, max_length=300),
     category: str | None = Query(default=None),
     favorite: bool | None = Query(default=None),
+    alive: bool | None = Query(default=None),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -100,7 +107,9 @@ def search_links(
             detail=f"sort must be one of: {', '.join(SORT_OPTIONS)}",
         )
 
-    query, ranked = _filtered_query(db, current_user.workspace_id, q=q, category=category, favorite=favorite)
+    query, ranked = _filtered_query(
+        db, current_user.workspace_id, q=q, category=category, favorite=favorite, alive=alive
+    )
     total = query.count()
 
     if sort == "domain":
@@ -349,6 +358,9 @@ def _export_row(link: Link) -> dict:
         "domain": link.domain,
         "posted_at": link.posted_at.isoformat() if link.posted_at else None,
         "collected_at": link.created_at.isoformat() if link.created_at else None,
+        "is_alive": link.is_alive,
+        "http_status": link.http_status,
+        "last_checked_at": link.last_checked_at.isoformat() if link.last_checked_at else None,
         "context": (link.raw_text or "")[:300],
     }
 
@@ -399,6 +411,9 @@ def export_links_csv(
                 "domain",
                 "posted_at",
                 "collected_at",
+                "is_alive",
+                "http_status",
+                "last_checked_at",
                 "context",
             ]
         )
@@ -416,6 +431,9 @@ def export_links_csv(
                     row["domain"],
                     row["posted_at"] or "",
                     row["collected_at"] or "",
+                    row["is_alive"] if row["is_alive"] is not None else "",
+                    row["http_status"] if row["http_status"] is not None else "",
+                    row["last_checked_at"] or "",
                     (row["context"] or "").replace("\n", " "),
                 ]
             )

@@ -47,6 +47,9 @@ class LinkOut(BaseModel):
     is_favorite: bool
     raw_text: str | None
     created_at: datetime
+    last_checked_at: datetime | None
+    http_status: int | None
+    is_alive: bool | None
 
     model_config = {"from_attributes": True}
 

@@ -129,6 +129,9 @@ class Link(Base):
         # Search filters by workspace and orders newest-first; one composite
         # index serves both halves of that query.
         Index("ix_links_workspace_created", "workspace_id", "created_at"),
+        # Lets the vitality checker pick "never checked, then longest since
+        # last checked" without a full table scan.
+        Index("ix_links_last_checked_at", "last_checked_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -145,6 +148,11 @@ class Link(Base):
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Vitality: None/None/None means "never checked yet" — distinct from a
+    # confirmed-dead link, which has a real (usually >= 400) http_status.
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_alive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     channel: Mapped[Channel] = relationship(back_populates="links")
 

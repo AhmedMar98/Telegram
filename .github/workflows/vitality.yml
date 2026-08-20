@@ -1,0 +1,37 @@
+name: Link vitality check
+
+# Scheduled reachability probe over collected links — same reasoning as
+# the Collector workflow: Render has no free background-worker tier, so
+# this runs as a bounded one-shot job instead of a persistent process.
+# Each run checks a batch of links (never-checked first, then oldest-
+# checked) via one HTTP request each, bounded concurrency, and records
+# is_alive/http_status/last_checked_at. Needs no Telegram credentials —
+# only requirements.txt (httpx + the ORM), not requirements-collector.txt.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DATABASE_URL — same Render Postgres URL the web service uses
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch: {}
+
+jobs:
+  check-vitality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run vitality check
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: "vitality-check-process-does-not-serve-http"
+        run: python scripts/check_link_vitality.py

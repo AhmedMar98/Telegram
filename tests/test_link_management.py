@@ -117,10 +117,15 @@ def test_export_returns_csv_of_the_workspace(client: TestClient):
         "domain",
         "posted_at",
         "collected_at",
+        "is_alive",
+        "http_status",
+        "last_checked_at",
         "context",
     ]
     urls = {r[0] for r in rows[1:]}
     assert urls == {"https://example.com/book.pdf", "https://example.com/app.apk"}
+    # A freshly-collected link has never been vitality-checked.
+    assert all(r[8] == "" and r[9] == "" and r[10] == "" for r in rows[1:])
 
 
 def test_export_can_be_filtered_by_category(client: TestClient):
