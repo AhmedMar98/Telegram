@@ -20,6 +20,9 @@
     <option value="true">الحيّة فقط</option>
     <option value="false">الميتة فقط</option>
   </select>
+  <select id="channelFilter" onchange="search()">
+    <option value="">كل القنوات</option>
+  </select>
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
@@ -64,6 +67,13 @@
   <p id="passResult" class="muted"></p>
   <button onclick="logoutAll()">تسجيل الخروج من كل الأجهزة</button>
 </div>
+<h3>مساحة العمل</h3>
+<div class="row">
+  <input id="wsName" placeholder="اسم مساحة العمل" style="flex:1;">
+  <button onclick="renameWorkspace()">إعادة التسمية</button>
+</div>
+<p id="wsResult" class="muted"></p>
+
 <h3>بياناتي</h3>
 <div class="row">
   <button onclick="exportWorkspace()">تنزيل كل بيانات مساحة العمل (JSON)</button>
@@ -172,6 +182,8 @@ async function search(resetPage = true) {
   if (sort && sort !== "date") params.set("sort", sort);
   if (favoriteOnly) params.set("favorite", "true");
   if (alive) params.set("alive", alive);
+  const channelId = document.getElementById("channelFilter").value;
+  if (channelId) params.set("channel_id", channelId);
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
@@ -215,9 +227,22 @@ async function reassignChannel(channelId, value) {
   loadChannels();
 }
 
+function fillChannelFilter(channels) {
+  const select = document.getElementById("channelFilter");
+  const previous = select.value;
+  select.innerHTML = '<option value="">كل القنوات</option>' + channels.map(c =>
+    `<option value="${c.id}">${c.title || c.username || c.tg_channel_id}</option>`
+  ).join("");
+  // Keep the active filter selected across reloads; if the channel is gone,
+  // the value simply falls back to "all channels" rather than filtering on
+  // an id that no longer exists.
+  select.value = previous;
+}
+
 async function loadChannels() {
   const res = await api("/channels");
   const data = await res.json();
+  fillChannelFilter(data);
   document.getElementById("channels").innerHTML = data.map(c =>
     `<div class="card">
        ${c.title || c.username || c.tg_channel_id}
@@ -225,6 +250,25 @@ async function loadChannels() {
        ${ACCOUNTS.length > 1 ? `<select onchange="reassignChannel(${c.id}, this.value)" style="margin-inline-start:.5rem;">${accountOptions(c.account_id)}</select>` : ""}
      </div>`
   ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
+}
+
+async function loadWorkspace() {
+  const res = await api("/auth/me");
+  const data = await res.json();
+  document.getElementById("wsName").value = data.workspace_name || "";
+}
+
+async function renameWorkspace() {
+  const name = document.getElementById("wsName").value.trim();
+  const out = document.getElementById("wsResult");
+  if (!name) { out.textContent = "الاسم لا يمكن أن يكون فارغاً."; return; }
+  const res = await api("/auth/workspace", { method: "PATCH", body: JSON.stringify({ name }) });
+  if (!res.ok) {
+    const err = await res.json();
+    out.textContent = (err.detail && err.detail.toString()) || "تعذّرت إعادة التسمية.";
+    return;
+  }
+  out.textContent = `تم تغيير الاسم إلى «${(await res.json()).name}».`;
 }
 
 function exportWorkspace() {
@@ -325,5 +369,6 @@ loadStats();
 search();
 loadAccounts().then(loadChannels);
 loadSessions();
+loadWorkspace();
 </script>
 {% endblock %}

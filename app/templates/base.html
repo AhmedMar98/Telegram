@@ -4,18 +4,78 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}منصة استخبارات الروابط{% endblock %}</title>
+<script>
+  // Applied before first paint: reading the stored theme after the body
+  // renders would show a flash of the wrong palette on every load.
+  // "system" is stored as the absence of the attribute, so the CSS media
+  // query stays in charge unless the person made an explicit choice.
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* private mode: fall back to the OS preference */ }
+  })();
+</script>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; max-width: 900px; margin: 0 auto; padding: 1rem; line-height: 1.6; }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-  nav a { margin-inline-start: 1rem; text-decoration: none; }
-  input, select, button { font-size: 1rem; padding: .5rem; border-radius: .4rem; border: 1px solid #8888; }
+  /* Light palette on bare :root, so every token always has a definition.
+     Dark is applied twice — once for the OS preference (guarded so an
+     explicit light choice still wins) and once for the explicit choice —
+     which is what lets the toggle override the system in both directions. */
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --border: #d0d0d0;
+    --card-bg: #fafafa;
+    --tag-bg: #ececec;
+    --accent: #0b57d0;
+    --danger: #c1121f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14171c;
+      --fg: #e6e6e6;
+      --muted: #a0a6b0;
+      --border: #333a44;
+      --card-bg: #1b1f26;
+      --tag-bg: #2a3038;
+      --accent: #7ca9f5;
+      --danger: #ff6b6b;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171c;
+    --fg: #e6e6e6;
+    --muted: #a0a6b0;
+    --border: #333a44;
+    --card-bg: #1b1f26;
+    --tag-bg: #2a3038;
+    --accent: #7ca9f5;
+    --danger: #ff6b6b;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+    max-width: 900px; margin: 0 auto; padding: 1rem; line-height: 1.6;
+    background: var(--bg); color: var(--fg);
+  }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: .5rem; flex-wrap: wrap; }
+  nav a { margin-inline-start: 1rem; text-decoration: none; color: var(--accent); }
+  a { color: var(--accent); }
+  input, select, button, textarea {
+    font-size: 1rem; padding: .5rem; border-radius: .4rem;
+    border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  }
   button { cursor: pointer; }
-  .card { border: 1px solid #8884; border-radius: .6rem; padding: 1rem; margin-bottom: .75rem; }
+  .card { border: 1px solid var(--border); background: var(--card-bg); border-radius: .6rem; padding: 1rem; margin-bottom: .75rem; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  .muted { opacity: .7; font-size: .9rem; }
-  .tag { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; background: #8882; font-size: .8rem; }
-  .error { color: #d33; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .tag { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; background: var(--tag-bg); font-size: .8rem; }
+  .error { color: var(--danger); }
+  #themeToggle { padding: .35rem .6rem; font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -25,10 +85,38 @@
     <a href="/">الرئيسية</a>
     <a href="/login">دخول</a>
     <a href="/register">تسجيل</a>
+    <button id="themeToggle" type="button" onclick="cycleTheme()" title="تبديل المظهر"></button>
   </nav>
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
+<script>
+  // Three states, not two: "system" must stay reachable so the page can go
+  // back to following the OS after someone has overridden it once.
+  var THEMES = ["system", "light", "dark"];
+  var THEME_LABEL = { system: "🖥️ تلقائي", light: "☀️ فاتح", dark: "🌙 داكن" };
+
+  function storedTheme() {
+    try { return localStorage.getItem("theme") || "system"; } catch (e) { return "system"; }
+  }
+
+  function applyTheme(theme) {
+    if (theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+    try {
+      if (theme === "system") localStorage.removeItem("theme");
+      else localStorage.setItem("theme", theme);
+    } catch (e) { /* private mode: the choice just does not persist */ }
+    var btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = THEME_LABEL[theme];
+  }
+
+  function cycleTheme() {
+    applyTheme(THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length]);
+  }
+
+  applyTheme(storedTheme());
+</script>
 </body>
 </html>

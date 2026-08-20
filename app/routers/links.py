@@ -58,6 +58,7 @@ def _filtered_query(
     category: str | None,
     favorite: bool | None = None,
     alive: bool | None = None,
+    channel_id: int | None = None,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
 
@@ -78,6 +79,12 @@ def _filtered_query(
         # ever means "show me a definite answer", never "include unknowns".
         query = query.filter(Link.is_alive == alive)
 
+    if channel_id is not None:
+        # No existence check is needed: the query is already scoped to the
+        # workspace, so another workspace's channel id simply matches
+        # nothing rather than leaking whether it exists.
+        query = query.filter(Link.channel_id == channel_id)
+
     if q:
         if _dialect(db) == "postgresql":
             query = query.filter(fts_document(Link.raw_text, Link.url).op("@@")(fts_query(q)))
@@ -95,6 +102,7 @@ def search_links(
     category: str | None = Query(default=None),
     favorite: bool | None = Query(default=None),
     alive: bool | None = Query(default=None),
+    channel_id: int | None = Query(default=None),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -108,7 +116,13 @@ def search_links(
         )
 
     query, ranked = _filtered_query(
-        db, current_user.workspace_id, q=q, category=category, favorite=favorite, alive=alive
+        db,
+        current_user.workspace_id,
+        q=q,
+        category=category,
+        favorite=favorite,
+        alive=alive,
+        channel_id=channel_id,
     )
     total = query.count()
 
