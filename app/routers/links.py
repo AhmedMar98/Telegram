@@ -25,11 +25,13 @@ from app.classifier import CATEGORIES
 from app.database import get_db
 from app.deps import get_current_user
 from app.ingest import ingest_text, manual_channel
-from app.models import Channel, Link, User
+from app.models import Channel, ClassificationFeedback, Link, User
 from app.schemas import (
     BulkDeleteRequest,
     BulkRecategorizeRequest,
     BulkResult,
+    ClassificationFeedbackOut,
+    FeedbackListResponse,
     LinkCategoryUpdate,
     LinkImportRequest,
     LinkImportResponse,
@@ -59,6 +61,7 @@ def _filtered_query(
     favorite: bool | None = None,
     alive: bool | None = None,
     channel_id: int | None = None,
+    language: str | None = None,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
 
@@ -78,6 +81,14 @@ def _filtered_query(
         # is_alive is nullable (never checked yet); an explicit filter only
         # ever means "show me a definite answer", never "include unknowns".
         query = query.filter(Link.is_alive == alive)
+
+    if language:
+        # Deliberately an exact match on the stored label rather than a
+        # "contains Arabic" test: the label is what the UI offers as a chip,
+        # so filtering on anything else would return rows the chip did not
+        # promise. Links stored before language detection existed have NULL
+        # here and are correctly excluded from every language filter.
+        query = query.filter(Link.language == language)
 
     if channel_id is not None:
         # No existence check is needed: the query is already scoped to the
@@ -103,6 +114,7 @@ def search_links(
     favorite: bool | None = Query(default=None),
     alive: bool | None = Query(default=None),
     channel_id: int | None = Query(default=None),
+    language: str | None = Query(default=None, max_length=10),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -123,6 +135,7 @@ def search_links(
         favorite=favorite,
         alive=alive,
         channel_id=channel_id,
+        language=language,
     )
     total = query.count()
 
@@ -272,6 +285,23 @@ def recategorize_link(
 
     link = _owned_link(db, link_id, current_user)
     previous = link.category
+    if payload.category != previous:
+        # Recorded before the row is mutated, because the whole value of the
+        # feedback is what the classifier *said* — once the link is updated
+        # that answer is gone. Only a real change is recorded: re-selecting
+        # the category that is already set is not a correction, and logging
+        # it would dilute the signal with no-ops.
+        db.add(
+            ClassificationFeedback(
+                workspace_id=current_user.workspace_id,
+                link_id=link.id,
+                url=link.url,
+                previous_category=previous,
+                new_category=payload.category,
+                previous_confidence=link.confidence,
+                previous_matched_rule=link.matched_rule,
+            )
+        )
     link.category = payload.category
     link.confidence = 1.0
     link.classified_by = "manual"
@@ -287,6 +317,43 @@ def recategorize_link(
     db.commit()
     db.refresh(link)
     return link
+
+
+@router.get("/feedback", response_model=FeedbackListResponse)
+def list_feedback(
+    link_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> FeedbackListResponse:
+    """Corrections a human made to the classifier, newest first.
+
+    Two questions, one endpoint: unfiltered it is the workspace's learning
+    signal — the concrete list of what the rules get wrong, which is what a
+    new rule should be written from. With ``link_id`` it is one link's
+    classification history.
+
+    Bulk recategorization deliberately does not appear here. Correcting one
+    link is a judgement about that link; sweeping a filter is a
+    reorganization, and mixing thousands of swept rows into this list would
+    bury the individual judgements that are actually informative.
+    """
+    query = db.query(ClassificationFeedback).filter(
+        ClassificationFeedback.workspace_id == current_user.workspace_id
+    )
+    if link_id is not None:
+        # No ownership check on link_id: the query is already workspace
+        # scoped, so a foreign id returns an empty list rather than
+        # revealing whether it exists.
+        query = query.filter(ClassificationFeedback.link_id == link_id)
+
+    total = query.count()
+    rows = (
+        query.order_by(ClassificationFeedback.created_at.desc(), ClassificationFeedback.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return FeedbackListResponse(total=total, items=[ClassificationFeedbackOut.model_validate(r) for r in rows])
 
 
 @router.post("/{link_id}/favorite", response_model=LinkOut)
@@ -368,6 +435,10 @@ def _export_row(link: Link) -> dict:
         "category": link.category,
         "confidence": round(link.confidence, 2),
         "classified_by": link.classified_by,
+        "matched_rule": link.matched_rule,
+        "source_type": link.source_type,
+        "forwarded_from": link.forwarded_from,
+        "language": link.language,
         "is_favorite": link.is_favorite,
         "domain": link.domain,
         "posted_at": link.posted_at.isoformat() if link.posted_at else None,
@@ -377,6 +448,39 @@ def _export_row(link: Link) -> dict:
         "last_checked_at": link.last_checked_at.isoformat() if link.last_checked_at else None,
         "context": (link.raw_text or "")[:300],
     }
+
+
+# The CSV header and the CSV body are both derived from the JSON row above,
+# so the two export formats cannot drift apart. They used to be three
+# hand-maintained lists in the same order, which is a bug waiting for the
+# next column.
+EXPORT_COLUMNS: tuple[str, ...] = tuple(
+    _export_row(
+        Link(
+            url="",
+            category="",
+            confidence=0.0,
+            classified_by="",
+            source_type="",
+            domain="",
+            is_favorite=False,
+        )
+    )
+)
+
+
+def _csv_cell(column: str, row: dict) -> str:
+    """Render one exported value for CSV, where there is no null."""
+    value = row[column]
+    if column == "confidence":
+        return f"{value:.2f}"
+    if value is None:
+        return ""
+    if column == "context":
+        # Embedded newlines would split one link across several CSV rows
+        # in tools that do not honour quoting.
+        return str(value).replace("\n", " ")
+    return str(value)
 
 
 @router.get("/export.csv")
@@ -415,42 +519,12 @@ def export_links_csv(
             buffer.truncate(0)
             return value
 
-        writer.writerow(
-            [
-                "url",
-                "category",
-                "confidence",
-                "classified_by",
-                "is_favorite",
-                "domain",
-                "posted_at",
-                "collected_at",
-                "is_alive",
-                "http_status",
-                "last_checked_at",
-                "context",
-            ]
-        )
+        writer.writerow(list(EXPORT_COLUMNS))
         yield flush()
 
         for link in query.order_by(Link.created_at.desc()).yield_per(200):
             row = _export_row(link)
-            writer.writerow(
-                [
-                    row["url"],
-                    row["category"],
-                    f"{row['confidence']:.2f}",
-                    row["classified_by"],
-                    row["is_favorite"],
-                    row["domain"],
-                    row["posted_at"] or "",
-                    row["collected_at"] or "",
-                    row["is_alive"] if row["is_alive"] is not None else "",
-                    row["http_status"] if row["http_status"] is not None else "",
-                    row["last_checked_at"] or "",
-                    (row["context"] or "").replace("\n", " "),
-                ]
-            )
+            writer.writerow([_csv_cell(column, row) for column in EXPORT_COLUMNS])
             yield flush()
 
     return StreamingResponse(

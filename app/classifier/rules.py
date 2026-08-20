@@ -197,6 +197,42 @@ def split_context(text: str | None, spans: list[tuple[str, int, int]]) -> list[s
     return [body[bounds[i] : bounds[i + 1]].strip() for i in range(len(spans))]
 
 
+# Arabic script, including the Arabic Supplement and Extended-A blocks, so
+# that letters used by Persian/Urdu-influenced spellings still count.
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+# Below this share, a script is treated as incidental rather than as one of
+# the languages the text is written in — a single English brand name inside
+# an Arabic sentence should not make the message "mixed".
+_MIXED_MINOR_SHARE = 0.2
+
+
+def detect_language(text: str | None) -> str | None:
+    """Rough script-based label for a message: "ar", "en", "mixed" or None.
+
+    This detects *script*, not language: it cannot tell English from French,
+    and it calls Persian "ar". That is deliberate — the useful question here
+    is "can I filter to the Arabic half of my collection", and script answers
+    it with no dependency, no model and no network. Anything more precise
+    would need a language-detection package, which is not worth its weight
+    for a filter chip.
+
+    URLs are removed first, because every link contributes Latin letters and
+    would otherwise make every Arabic message look mixed.
+    """
+    body = URL_RE.sub(" ", text or "")
+    arabic = len(_ARABIC_RE.findall(body))
+    latin = len(_LATIN_RE.findall(body))
+    total = arabic + latin
+    if total == 0:
+        return None
+    minor = min(arabic, latin) / total
+    if minor >= _MIXED_MINOR_SHARE:
+        return "mixed"
+    return "ar" if arabic > latin else "en"
+
+
 def classify(url: str, raw_text: str | None = None) -> ClassificationResult:
     domain = _domain_of(url)
     last_segment = urlparse(url).path.lower().rsplit("/", 1)[-1]

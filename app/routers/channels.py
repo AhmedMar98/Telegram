@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.audit import record as audit_record
@@ -138,7 +138,15 @@ def reassign_channel(
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deactivate_channel(
     channel_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
-) -> None:
+) -> Response:
+    """Stop collecting from a channel without deleting the links it produced.
+
+    Returns an explicit empty ``Response`` rather than being annotated
+    ``-> None``. Under ``from __future__ import annotations`` the annotation
+    ``None`` reaches FastAPI as the *class* ``NoneType``, which it reads as a
+    declared response body and rejects on a 204 — so the two sibling delete
+    endpoints and this one now all return ``Response`` the same way.
+    """
     channel = (
         db.query(Channel)
         .filter(Channel.id == channel_id, Channel.workspace_id == current_user.workspace_id)
@@ -156,3 +164,4 @@ def deactivate_channel(
         target_id=str(channel.id),
     )
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

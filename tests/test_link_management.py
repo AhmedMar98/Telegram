@@ -113,6 +113,10 @@ def test_export_returns_csv_of_the_workspace(client: TestClient):
         "category",
         "confidence",
         "classified_by",
+        "matched_rule",
+        "source_type",
+        "forwarded_from",
+        "language",
         "is_favorite",
         "domain",
         "posted_at",
@@ -124,8 +128,28 @@ def test_export_returns_csv_of_the_workspace(client: TestClient):
     ]
     urls = {r[0] for r in rows[1:]}
     assert urls == {"https://example.com/book.pdf", "https://example.com/app.apk"}
+
+    # Addressed by name, not by position: an index shifts silently when a
+    # column is inserted, which is exactly what happened to this test.
+    by_name = [dict(zip(rows[0], r, strict=True)) for r in rows[1:]]
     # A freshly-collected link has never been vitality-checked.
-    assert all(r[8] == "" and r[9] == "" and r[10] == "" for r in rows[1:])
+    assert all(r["is_alive"] == "" and r["http_status"] == "" and r["last_checked_at"] == "" for r in by_name)
+    # Provenance is exported, and a nullable one that was never set is empty
+    # rather than the string "None".
+    assert all(r["source_type"] == "text" and r["forwarded_from"] == "" for r in by_name)
+    assert all(r["matched_rule"] for r in by_name)
+
+
+def test_the_csv_header_matches_the_json_keys(client: TestClient):
+    """The two export formats are generated from one row builder; this is
+    the assertion that keeps them from drifting apart again."""
+    register_workspace(client, email="expsync@example.com", workspace_name="ExpSync")
+    _add(client, "https://example.com/book.pdf")
+
+    header = next(csv.reader(io.StringIO(client.get("/links/export.csv").text)))
+    json_rows = client.get("/links/export.json").json()
+
+    assert list(json_rows[0]) == header
 
 
 def test_export_can_be_filtered_by_category(client: TestClient):

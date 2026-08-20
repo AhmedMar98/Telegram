@@ -23,6 +23,12 @@
   <select id="channelFilter" onchange="search()">
     <option value="">كل القنوات</option>
   </select>
+  <select id="languageFilter" onchange="search()">
+    <option value="">كل اللغات</option>
+    <option value="ar">عربي</option>
+    <option value="en">إنجليزي</option>
+    <option value="mixed">مختلط</option>
+  </select>
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
@@ -187,6 +193,8 @@ async function search(resetPage = true) {
   if (alive) params.set("alive", alive);
   const channelId = document.getElementById("channelFilter").value;
   if (channelId) params.set("channel_id", channelId);
+  const language = document.getElementById("languageFilter").value;
+  if (language) params.set("language", language);
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
@@ -197,7 +205,8 @@ async function search(resetPage = true) {
          <select onchange="recategorize(${i.id}, this.value)">
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
          </select>
-         <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         <span class="muted" title="${classificationReason(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         ${originBadge(i)}
          <span class="muted" title="${i.last_checked_at ? "آخر فحص: " + new Date(i.last_checked_at).toLocaleString("ar") + (i.http_status ? " (HTTP " + i.http_status + ")" : "") : "لم يُفحص بعد"}">${vitalityBadge(i.is_alive)}</span>
          <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
          <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
@@ -349,6 +358,29 @@ async function logoutAll() {
   if (!confirm("تسجيل الخروج من كل الأجهزة بما فيها هذا الجهاز؟")) return;
   await api("/auth/logout-all", { method: "POST" });
   window.location.href = "/login";
+}
+
+const SOURCE_LABEL = { text: "من نص الرسالة", button: "من زر", hyperlink: "من رابط مخفي" };
+
+function classificationReason(i) {
+  // Shown as a tooltip on the confidence badge: "why did it decide this?".
+  // matched_rule is null for links stored before the column existed, and
+  // saying so is more useful than an empty tooltip.
+  const rule = i.matched_rule ? escapeText(i.matched_rule) : "غير مسجَّلة (رابط أقدم من هذه الميزة)";
+  return `القاعدة: ${rule}`;
+}
+
+function originBadge(i) {
+  // forwarded_from is a channel title chosen by whoever wrote it, so it is
+  // escaped; source_type is one of a fixed set the server controls.
+  const parts = [];
+  if (i.source_type && i.source_type !== "text") {
+    parts.push(`<span class="muted">${SOURCE_LABEL[i.source_type] || escapeText(i.source_type)}</span>`);
+  }
+  if (i.forwarded_from) {
+    parts.push(`<span class="muted">محوَّل عن: ${escapeText(i.forwarded_from)}</span>`);
+  }
+  return parts.join(" ");
 }
 
 function escapeText(value) {
