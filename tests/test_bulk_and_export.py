@@ -93,10 +93,15 @@ def test_export_json_matches_csv_content(client: TestClient):
             "domain",
             "posted_at",
             "collected_at",
+            "is_alive",
+            "http_status",
+            "last_checked_at",
             "context",
         }
         for r in rows
     )
+    # A freshly-collected link has never been vitality-checked.
+    assert all(r["is_alive"] is None and r["last_checked_at"] is None for r in rows)
 
 
 def test_export_json_empty_workspace_is_empty_array(client: TestClient):

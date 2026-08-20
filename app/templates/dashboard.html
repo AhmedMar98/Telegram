@@ -15,6 +15,11 @@
     <option value="confidence">الثقة</option>
   </select>
   <label class="muted"><input type="checkbox" id="favoriteOnly" onchange="search()"> المفضّلة فقط</label>
+  <select id="aliveFilter">
+    <option value="">كل الروابط (حيويّة أو لا)</option>
+    <option value="true">الحيّة فقط</option>
+    <option value="false">الميتة فقط</option>
+  </select>
   <button onclick="search()">بحث</button>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
@@ -141,18 +146,26 @@ async function bulkRecategorize() {
   search(false);
 }
 
+function vitalityBadge(isAlive) {
+  if (isAlive === true) return "🟢 حيّة";
+  if (isAlive === false) return "🔴 ميتة";
+  return "⚪ لم تُفحص بعد";
+}
+
 async function search(resetPage = true) {
   if (resetPage) currentPage = 1;
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
   const sort = document.getElementById("sort").value;
   const favoriteOnly = document.getElementById("favoriteOnly").checked;
+  const alive = document.getElementById("aliveFilter").value;
   const params = new URLSearchParams();
   params.set("page", currentPage);
   if (q) params.set("q", q);
   if (category) params.set("category", category);
   if (sort && sort !== "date") params.set("sort", sort);
   if (favoriteOnly) params.set("favorite", "true");
+  if (alive) params.set("alive", alive);
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
@@ -164,6 +177,7 @@ async function search(resetPage = true) {
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
          </select>
          <span class="muted">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         <span class="muted" title="${i.last_checked_at ? "آخر فحص: " + new Date(i.last_checked_at).toLocaleString("ar") + (i.http_status ? " (HTTP " + i.http_status + ")" : "") : "لم يُفحص بعد"}">${vitalityBadge(i.is_alive)}</span>
          <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
          <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
        </div>
