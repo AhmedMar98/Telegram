@@ -64,6 +64,12 @@
   <p id="passResult" class="muted"></p>
   <button onclick="logoutAll()">تسجيل الخروج من كل الأجهزة</button>
 </div>
+<h3>بياناتي</h3>
+<div class="row">
+  <button onclick="exportWorkspace()">تنزيل كل بيانات مساحة العمل (JSON)</button>
+  <button onclick="deleteWorkspace()" style="color:#c00;">حذف مساحة العمل نهائياً</button>
+</div>
+<p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
 <h3>الجلسات النشطة</h3>
 <div id="sessions"></div>
 
@@ -189,12 +195,56 @@ async function search(resetPage = true) {
   document.getElementById("nextBtn").disabled = data.page * data.page_size >= data.total;
 }
 
+let ACCOUNTS = [];
+
+async function loadAccounts() {
+  const res = await api("/channels/accounts");
+  ACCOUNTS = await res.json();
+}
+
+function accountOptions(selectedId) {
+  const auto = `<option value="" ${selectedId == null ? "selected" : ""}>الحساب الافتراضي</option>`;
+  return auto + ACCOUNTS.map(a =>
+    `<option value="${a.id}" ${a.id === selectedId ? "selected" : ""}>${a.label}${a.is_active ? "" : " (معطّل)"}</option>`
+  ).join("");
+}
+
+async function reassignChannel(channelId, value) {
+  const account_id = value === "" ? null : Number(value);
+  await api(`/channels/${channelId}`, { method: "PATCH", body: JSON.stringify({ account_id }) });
+  loadChannels();
+}
+
 async function loadChannels() {
   const res = await api("/channels");
   const data = await res.json();
   document.getElementById("channels").innerHTML = data.map(c =>
-    `<div class="card">${c.title || c.username || c.tg_channel_id} <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}</span></div>`
+    `<div class="card">
+       ${c.title || c.username || c.tg_channel_id}
+       <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}</span>
+       ${ACCOUNTS.length > 1 ? `<select onchange="reassignChannel(${c.id}, this.value)" style="margin-inline-start:.5rem;">${accountOptions(c.account_id)}</select>` : ""}
+     </div>`
   ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
+}
+
+function exportWorkspace() {
+  window.location = "/auth/me/export";
+}
+
+async function deleteWorkspace() {
+  if (!confirm("سيُحذف كل شيء نهائياً: الروابط والقنوات والمستخدمون. لا يمكن التراجع. متابعة؟")) return;
+  const current_password = prompt("أدخل كلمة المرور الحالية للتأكيد:");
+  if (!current_password) return;
+  const confirmText = prompt("اكتب DELETE بالأحرف الكبيرة لتأكيد الحذف النهائي:");
+  if (confirmText !== "DELETE") { alert("لم يتم التأكيد — أُلغيت العملية."); return; }
+  const res = await api("/auth/me/delete", { method: "POST", body: JSON.stringify({ current_password, confirm: confirmText }) });
+  if (!res.ok) {
+    const err = await res.json();
+    alert(err.detail || "تعذّر الحذف.");
+    return;
+  }
+  alert("تم حذف مساحة العمل.");
+  window.location.href = "/login";
 }
 
 async function addChannel() {
@@ -273,7 +323,7 @@ async function revokeSession(id) {
 
 loadStats();
 search();
-loadChannels();
+loadAccounts().then(loadChannels);
 loadSessions();
 </script>
 {% endblock %}

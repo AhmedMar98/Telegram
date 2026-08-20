@@ -23,6 +23,17 @@ class ChannelCreate(BaseModel):
     tg_channel_id: str = Field(min_length=1, max_length=64)
     username: str | None = None
     title: str | None = None
+    account_id: int | None = None
+
+
+class ChannelUpdate(BaseModel):
+    """Reassign which collecting account is responsible for a channel.
+
+    ``None`` hands it back to the workspace's default account rather than
+    leaving it uncollected.
+    """
+
+    account_id: int | None = None
 
 
 class ChannelOut(BaseModel):
@@ -30,6 +41,18 @@ class ChannelOut(BaseModel):
     tg_channel_id: str
     username: str | None
     title: str | None
+    is_active: bool
+    account_id: int | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TelegramAccountOut(BaseModel):
+    """A collecting account. The session string is never exposed."""
+
+    id: int
+    label: str
     is_active: bool
     created_at: datetime
 
@@ -113,3 +136,18 @@ class SessionOut(BaseModel):
     created_at: datetime
     expires_at: datetime
     is_current: bool
+
+
+class DeleteAccountRequest(BaseModel):
+    """Deleting a workspace is irreversible, so it is password-gated.
+
+    A stolen session cookie is enough to browse; it must not also be enough
+    to destroy the collection.
+    """
+
+    current_password: str
+    confirm: str = Field(description="must be the literal string DELETE")
+
+
+class DeleteAccountResponse(BaseModel):
+    deleted: dict[str, int]
