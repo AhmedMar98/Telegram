@@ -75,6 +75,15 @@
   .muted { color: var(--muted); font-size: .9rem; }
   .tag { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; background: var(--tag-bg); font-size: .8rem; }
   .error { color: var(--danger); }
+  /* Grid view. auto-fill with a minimum column width rather than a fixed
+     column count, so the same rule works from a phone (one column) to a
+     wide screen without a media query per breakpoint. */
+  .grid-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .75rem; }
+  .grid-results .card { margin-bottom: 0; overflow-wrap: anywhere; }
+  /* Search-term highlight. Defined against the theme tokens so it stays
+     readable in dark mode, where a browser's default yellow-on-white
+     <mark> becomes unreadable. */
+  mark { background: var(--tag-bg); color: var(--fg); font-weight: 600; padding: 0 .15rem; border-radius: .2rem; }
   #themeToggle { padding: .35rem .6rem; font-size: .9rem; }
 </style>
 </head>

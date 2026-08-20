@@ -50,6 +50,9 @@ NOT_TENANT_SCOPED = {
     "/links/bulk/recategorize",
     "/links/export.csv",
     "/links/export.json",
+    "/links/export.md",
+    "/links/random",
+    "/links/saved",
     "/telegram/webhook/{secret}",
 }
 
@@ -74,6 +77,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/links/{link_id}",
         "/links/{link_id}/favorite",
         "/links/{link_id}/archive",
+        "/links/saved/{saved_id}",
     }
     assert discovered == expected, (
         f"Tenant-scoped paths changed. New ones must be probed below or "
@@ -89,8 +93,14 @@ def victim_ids(client: TestClient) -> dict[str, int]:
     client.post("/links", json={"text": "https://victim.example/secret.pdf"})
     link = client.get("/links").json()["items"][0]
     session = client.get("/auth/sessions").json()[0]
+    saved = client.post("/links/saved", json={"name": "victim search", "filters": {"q": "secret"}}).json()
     client.post("/auth/logout")
-    return {"channel_id": channel["id"], "link_id": link["id"], "session_id": session["id"]}
+    return {
+        "channel_id": channel["id"],
+        "link_id": link["id"],
+        "session_id": session["id"],
+        "saved_id": saved["id"],
+    }
 
 
 @pytest.fixture
@@ -129,6 +139,7 @@ def test_foreign_resource_survives_the_probe(attacker, victim_ids, path: str, me
 
     assert attacker.get("/links").json()["total"] == 1, f"{method} {path} destroyed the victim's link"
     assert len(attacker.get("/channels").json()) == 2  # manual bucket + the added one
+    assert len(attacker.get("/links/saved").json()) == 1, f"{method} {path} destroyed the victim's saved search"
 
 
 def test_unauthenticated_access_is_rejected_everywhere(client: TestClient, victim_ids):

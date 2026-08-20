@@ -20,6 +20,7 @@ UTF-8 locale, so Arabic words pass through untouched.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func
@@ -63,3 +64,46 @@ def fts_rank(raw_text_col: Any, url_col: Any, term: str) -> ColumnElement[Any]:
     scores how much of / how prominently the document matches the query.
     """
     return func.ts_rank(fts_document(raw_text_col, url_col), fts_query(term))
+
+
+# --- query parsing ---------------------------------------------------------
+
+# A term prefixed with "-" is excluded rather than required. Kept as an
+# application-level convention on top of both backends instead of passing
+# operators through to Postgres's to_tsquery: to_tsquery parses its input
+# and raises a syntax error on anything unexpected, so user text would have
+# to be sanitised into a query language. plainto_tsquery treats its whole
+# input as literal terms, which is exactly what makes it safe to hand raw
+# user text to — and negation is expressed as a separate SQL NOT rather
+# than inside the tsquery.
+EXCLUDE_PREFIX = "-"
+
+
+@dataclass(frozen=True)
+class ParsedQuery:
+    """A raw search string split into what must match and what must not."""
+
+    include: str = ""
+    exclude: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.include and not self.exclude
+
+
+def parse_query(text: str | None) -> ParsedQuery:
+    """Split ``"دورة بايثون -مدفوع"`` into include/exclude parts.
+
+    A bare ``-`` is not an exclusion (nothing follows it), and a hyphen
+    inside a word is left alone — only a leading one on a whitespace-
+    separated token counts, so ``python-book`` still searches for the
+    hyphenated term rather than excluding ``book``.
+    """
+    include: list[str] = []
+    exclude: list[str] = []
+    for token in (text or "").split():
+        if token.startswith(EXCLUDE_PREFIX) and len(token) > len(EXCLUDE_PREFIX):
+            exclude.append(token[len(EXCLUDE_PREFIX) :])
+        else:
+            include.append(token)
+    return ParsedQuery(include=" ".join(include), exclude=exclude)

@@ -112,6 +112,21 @@ class FeedbackListResponse(BaseModel):
     items: list[ClassificationFeedbackOut]
 
 
+class SavedSearchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    # The search endpoint's query parameters, as given. Validated against a
+    # known key set server-side rather than trusted, so a saved search
+    # cannot smuggle an arbitrary parameter into a later request.
+    filters: dict[str, str]
+
+
+class SavedSearchOut(BaseModel):
+    id: int
+    name: str
+    filters: dict[str, str]
+    created_at: datetime
+
+
 class SearchResponse(BaseModel):
     total: int
     page: int
