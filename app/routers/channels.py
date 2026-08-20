@@ -69,14 +69,13 @@ def list_accounts(
 
     # One grouped query rather than one per account: the panel is small
     # today, but a per-row count is the shape that quietly becomes N+1.
-    counts: dict[int | None, int] = {
-        account_id: count
-        for account_id, count in db.execute(
+    counts: dict[int | None, int] = dict(
+        db.execute(
             select(Channel.account_id, func.count())
             .where(Channel.workspace_id == current_user.workspace_id)
             .group_by(Channel.account_id)
-        ).all()
-    }
+        ).all()  # type: ignore[arg-type]  # Row[(int|None, int)] is a 2-tuple at runtime
+    )
 
     # Channels with no account named fall to the default (lowest-id)
     # account at collection time, so the panel attributes them the same
