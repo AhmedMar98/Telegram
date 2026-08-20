@@ -24,7 +24,7 @@ def test_duplicate_email_registration_rejected(client: TestClient):
     register_workspace(client, email="dup@example.com", workspace_name="A")
     second = client.post(
         "/auth/register",
-        json={"email": "dup@example.com", "password": "password123", "workspace_name": "B"},
+        json={"email": "dup@example.com", "password": "j8Kd0-slwQ2x", "workspace_name": "B"},
     )
     assert second.status_code == 409
 

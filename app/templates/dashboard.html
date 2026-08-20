@@ -80,6 +80,9 @@
   <button onclick="deleteWorkspace()" style="color:#c00;">حذف مساحة العمل نهائياً</button>
 </div>
 <p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
+<h3>نشاط الأمان</h3>
+<p id="securityActivity" class="muted"></p>
+
 <h3>الجلسات النشطة</h3>
 <div id="sessions"></div>
 
@@ -348,6 +351,34 @@ async function logoutAll() {
   window.location.href = "/login";
 }
 
+function escapeText(value) {
+  // Session origin comes from client-supplied headers. Rendering it as
+  // HTML would let a crafted User-Agent inject markup into this page.
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
+function describeOrigin(s) {
+  if (!s.ip_address && !s.user_agent) return "الأصل غير مسجَّل (جلسة أقدم من هذه الميزة)";
+  const ip = s.ip_address ? escapeText(s.ip_address) : "عنوان غير معروف";
+  const ua = s.user_agent ? escapeText(s.user_agent.slice(0, 80)) : "متصفح غير معروف";
+  return `${ip} · ${ua}`;
+}
+
+async function loadSecurityActivity() {
+  const res = await api("/auth/security-activity");
+  const d = await res.json();
+  const el = document.getElementById("securityActivity");
+  if (d.failed_attempts === 0) {
+    el.textContent = `لا محاولات دخول فاشلة في آخر ${d.window_minutes} دقيقة.`;
+    return;
+  }
+  el.textContent =
+    `${d.failed_attempts} محاولة دخول فاشلة من ${d.distinct_ip_count} عنوان في آخر ${d.window_minutes} دقيقة ` +
+    `(الحجب عند ${d.lockout_threshold}). آخر محاولة: ${new Date(d.last_failed_at).toLocaleString("ar")}.`;
+}
+
 async function loadSessions() {
   const res = await api("/auth/sessions");
   const data = await res.json();
@@ -355,6 +386,7 @@ async function loadSessions() {
     `<div class="card">
        ${s.is_current ? "<strong>هذا الجهاز</strong>" : "جهاز آخر"}
        <span class="muted">— بدأت ${new Date(s.created_at).toLocaleString("ar")}</span>
+       <div class="muted">${describeOrigin(s)}</div>
        ${s.is_current ? "" : `<button onclick="revokeSession(${s.id})" style="margin-inline-start:.5rem;">إنهاء</button>`}
      </div>`
   ).join("");
@@ -369,6 +401,7 @@ loadStats();
 search();
 loadAccounts().then(loadChannels);
 loadSessions();
+loadSecurityActivity();
 loadWorkspace();
 </script>
 {% endblock %}

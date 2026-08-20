@@ -12,7 +12,7 @@ from tests.conftest import register_workspace
 def test_change_password_requires_correct_current_password(client: TestClient):
     register_workspace(client, email="cp@example.com", workspace_name="CP")
     resp = client.post(
-        "/auth/change-password", json={"current_password": "wrong", "new_password": "newpassword123"}
+        "/auth/change-password", json={"current_password": "wrong", "new_password": "newj8Kd0-slwQ2x"}
     )
     assert resp.status_code == 401
 
@@ -21,12 +21,12 @@ def test_change_password_succeeds_and_new_password_works(client: TestClient):
     register_workspace(client, email="cp2@example.com", workspace_name="CP2")
     resp = client.post(
         "/auth/change-password",
-        json={"current_password": "password123", "new_password": "brandnewpassword"},
+        json={"current_password": "j8Kd0-slwQ2x", "new_password": "brandnewpassword"},
     )
     assert resp.status_code == 200
 
     client.post("/auth/logout")
-    old = client.post("/auth/login", json={"email": "cp2@example.com", "password": "password123"})
+    old = client.post("/auth/login", json={"email": "cp2@example.com", "password": "j8Kd0-slwQ2x"})
     assert old.status_code == 401
     new = client.post("/auth/login", json={"email": "cp2@example.com", "password": "brandnewpassword"})
     assert new.status_code == 200
@@ -36,11 +36,11 @@ def test_change_password_revokes_other_sessions_but_not_current(client: TestClie
     register_workspace(client, email="cp3@example.com", workspace_name="CP3")
 
     other = TestClient(client.app)
-    other.post("/auth/login", json={"email": "cp3@example.com", "password": "password123"})
+    other.post("/auth/login", json={"email": "cp3@example.com", "password": "j8Kd0-slwQ2x"})
     assert other.get("/auth/me").status_code == 200
 
     resp = client.post(
-        "/auth/change-password", json={"current_password": "password123", "new_password": "anotherpassword1"}
+        "/auth/change-password", json={"current_password": "j8Kd0-slwQ2x", "new_password": "anotherpassword1"}
     )
     assert resp.json()["other_sessions_revoked"] == 1
 
@@ -51,7 +51,7 @@ def test_change_password_revokes_other_sessions_but_not_current(client: TestClie
 def test_change_password_is_audited(client: TestClient):
     register_workspace(client, email="cp4@example.com", workspace_name="CP4")
     client.post(
-        "/auth/change-password", json={"current_password": "password123", "new_password": "yetanotherpass1"}
+        "/auth/change-password", json={"current_password": "j8Kd0-slwQ2x", "new_password": "yetanotherpass1"}
     )
 
     db = SessionLocal()
@@ -65,7 +65,7 @@ def test_logout_all_revokes_every_session_including_current(client: TestClient):
     register_workspace(client, email="la@example.com", workspace_name="LA")
 
     other = TestClient(client.app)
-    other.post("/auth/login", json={"email": "la@example.com", "password": "password123"})
+    other.post("/auth/login", json={"email": "la@example.com", "password": "j8Kd0-slwQ2x"})
 
     resp = client.post("/auth/logout-all")
     assert resp.json()["sessions_revoked"] == 2

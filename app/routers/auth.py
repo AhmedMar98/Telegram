@@ -8,7 +8,7 @@ isolated from every other from the very first row it ever writes.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -18,17 +18,21 @@ from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
 from app.models import User, Workspace
+from app.passwords import rejection_reason
 from app.schemas import (
     ChangePasswordRequest,
     DeleteAccountRequest,
     DeleteAccountResponse,
     LoginRequest,
     RegisterRequest,
+    SecurityActivityOut,
     SessionOut,
     WorkspaceOut,
     WorkspaceRenameRequest,
 )
 from app.security import (
+    LOGIN_MAX_FAILURES,
+    LOGIN_WINDOW_MINUTES,
     clear_login_failures,
     constant_time_equals,
     create_session,
@@ -37,6 +41,7 @@ from app.security import (
     is_locked_out,
     list_active_sessions,
     normalize_email,
+    recent_failed_attempts,
     record_login_attempt,
     revoke_all_sessions,
     revoke_session,
@@ -48,6 +53,21 @@ from app.security import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 14  # 14 days, matches Settings.session_ttl_hours default
+
+
+def _client_origin(request: Request) -> tuple[str | None, str | None]:
+    """The caller's IP and User-Agent, as reported by the platform.
+
+    Render terminates TLS at its own proxy, so ``request.client.host`` is
+    the proxy, not the visitor; the real address arrives in
+    ``X-Forwarded-For``. Only the first entry is used — the rest are
+    upstream proxies — and the value is treated as advisory, because a
+    client can send that header itself. It is shown to help a person
+    recognise their own device, never used to make an access decision.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
+    return (ip or None), request.headers.get("user-agent")
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -63,7 +83,9 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)) -> dict:
+def register(
+    payload: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict:
     settings = get_settings()
     if settings.invite_code and not constant_time_equals(payload.invite_code, settings.invite_code):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid invite code")
@@ -72,6 +94,10 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
     existing = db.query(User).filter(User.email == email).first()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email already registered")
+
+    weak = rejection_reason(payload.password)
+    if weak is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=weak)
 
     workspace = Workspace(name=payload.workspace_name)
     db.add(workspace)
@@ -96,14 +122,16 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
     )
     db.commit()
 
-    token = create_session(db, user)
+    ip, user_agent = _client_origin(request)
+    token = create_session(db, user, ip_address=ip, user_agent=user_agent)
     _set_session_cookie(response, token)
     return {"id": user.id, "email": user.email, "workspace_id": workspace.id}
 
 
 @router.post("/login")
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     email = normalize_email(payload.email)
+    ip, user_agent = _client_origin(request)
 
     if is_locked_out(db, email):
         raise HTTPException(
@@ -116,18 +144,18 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
         # Burn the same time a real password check would, so a missing or
         # disabled account is indistinguishable from a wrong password.
         waste_password_time()
-        record_login_attempt(db, email, successful=False)
+        record_login_attempt(db, email, successful=False, ip_address=ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     if not verify_password(payload.password, user.password_hash):
-        record_login_attempt(db, email, successful=False)
+        record_login_attempt(db, email, successful=False, ip_address=ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     clear_login_failures(db, email)
     audit_record(db, workspace_id=user.workspace_id, user_id=user.id, action="user.login")
     db.commit()
 
-    token = create_session(db, user)
+    token = create_session(db, user, ip_address=ip, user_agent=user_agent)
     _set_session_cookie(response, token)
     return {"id": user.id, "email": user.email, "workspace_id": user.workspace_id}
 
@@ -178,6 +206,10 @@ def change_password(
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="current password is incorrect")
 
+    weak = rejection_reason(payload.new_password)
+    if weak is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=weak)
+
     current_user.password_hash = hash_password(payload.new_password)
     revoked = revoke_all_sessions(db, current_user.id, except_token=session)
 
@@ -225,7 +257,14 @@ def list_sessions(
     """Every device/browser currently signed into this account."""
     current_id = current_session_id(db, session)
     return [
-        SessionOut(id=s.id, created_at=s.created_at, expires_at=s.expires_at, is_current=s.id == current_id)
+        SessionOut(
+            id=s.id,
+            created_at=s.created_at,
+            expires_at=s.expires_at,
+            is_current=s.id == current_id,
+            ip_address=s.ip_address,
+            user_agent=s.user_agent,
+        )
         for s in list_active_sessions(db, current_user.id)
     ]
 
@@ -344,3 +383,30 @@ def rename_workspace(
     db.commit()
     db.refresh(workspace)
     return workspace
+
+
+@router.get("/security-activity", response_model=SecurityActivityOut)
+def security_activity(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SecurityActivityOut:
+    """Failed sign-in attempts on this account, so the owner can notice an attack.
+
+    The throttle in ``app/security.py`` already blocks online guessing;
+    this makes it *visible*, which is a different job — a lockout the
+    account owner never sees tells them nothing about whether someone is
+    trying.
+
+    Scoped to the caller's own email. There is no parameter to inspect a
+    different account, so this cannot be turned into a way to probe
+    whether some other address is under attack.
+    """
+    attempts = recent_failed_attempts(db, current_user.email)
+    distinct_ips = sorted({a.ip_address for a in attempts if a.ip_address})
+    return SecurityActivityOut(
+        failed_attempts=len(attempts),
+        window_minutes=LOGIN_WINDOW_MINUTES,
+        lockout_threshold=LOGIN_MAX_FAILURES,
+        distinct_ip_count=len(distinct_ips),
+        last_failed_at=attempts[0].created_at if attempts else None,
+    )
