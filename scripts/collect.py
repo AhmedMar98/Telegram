@@ -17,6 +17,13 @@ Required environment (set as GitHub Actions secrets):
                             in GitHub Secrets, never in the repo)
   DATABASE_URL            - the same Render Postgres URL the web service uses
   COLLECTOR_WORKSPACE_ID  - the workspace this collector feeds (see README)
+  FIELD_ENCRYPTION_KEY    - encrypts the session string before it is stored
+                            in TelegramAccount (app/crypto.py). Must match
+                            whatever value any future consumer of that row
+                            uses to decrypt it; changing it strands
+                            previously-stored rows. Generate with:
+                            python -c "from cryptography.fernet import \
+                            Fernet; print(Fernet.generate_key().decode())"
 
 Optional:
   COLLECTOR_MESSAGE_LIMIT - messages scanned per channel per run (default 200)
@@ -39,6 +46,7 @@ from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.audit import record as audit_record  # noqa: E402
+from app.crypto import encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.ingest import IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
@@ -141,7 +149,9 @@ async def collect() -> None:
             .first()
         )
         if account is None:
-            account = TelegramAccount(workspace_id=workspace_id, label="primary", session_string=session_string)
+            account = TelegramAccount(
+                workspace_id=workspace_id, label="primary", session_string=encrypt_field(session_string)
+            )
             db.add(account)
             db.commit()
 

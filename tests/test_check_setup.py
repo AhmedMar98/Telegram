@@ -123,3 +123,24 @@ def test_ungated_registration_is_warned_about(monkeypatch):
 
     check_setup.check_optional_features()
     assert _statuses()["registration"] == check_setup.WARN
+
+
+def test_missing_field_encryption_key_is_warned_about(monkeypatch):
+    monkeypatch.delenv("FIELD_ENCRYPTION_KEY", raising=False)
+
+    check_setup.check_optional_features()
+    assert _statuses()["field encryption"] == check_setup.WARN
+
+
+def test_default_field_encryption_key_is_warned_about(monkeypatch):
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", check_setup._DEFAULT_FIELD_ENCRYPTION_KEY)
+
+    check_setup.check_optional_features()
+    assert _statuses()["field encryption"] == check_setup.WARN
+
+
+def test_real_field_encryption_key_passes(monkeypatch):
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", "a-real-secret-generated-with-fernet-generate-key")
+
+    check_setup.check_optional_features()
+    assert _statuses()["field encryption"] == check_setup.OK

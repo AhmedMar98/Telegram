@@ -92,6 +92,10 @@ python scripts/seed_demo.py
    - `TG_SESSION_STRING` — الناتج من الخطوة السابقة
    - `DATABASE_URL` — نفس رابط قاعدة بيانات Render (Internal/External connection string من لوحة Render)
    - `COLLECTOR_WORKSPACE_ID` — الرقم الذي حصلت عليه في الخطوة ٢
+   - `FIELD_ENCRYPTION_KEY` — يشفّر session string قبل تخزينه في القاعدة (بلا هذا السرّ، تسريب نسخة من القاعدة يعادل تسريب الحساب نفسه). ولّده بـ:
+     ```bash
+     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+     ```
    - `GROQ_API_KEY` (اختياري) — لتفعيل طبقة التصنيف الإضافية المجانية من <https://console.groq.com>
 3. من تبويب Actions شغّل workflow "Collector" يدوياً أول مرة (`workflow_dispatch`) للتأكد أنه يعمل، ثم سيعمل تلقائياً كل ساعة.
 4. أضف القنوات المراد جمعها من لوحة التحكم في الموقع (`/dashboard` → "القنوات") — الحساب المستخدم في التوكن يجب أن يكون عضواً في تلك القنوات.
