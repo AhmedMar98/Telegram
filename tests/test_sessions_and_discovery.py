@@ -24,7 +24,7 @@ def test_list_sessions_shows_current_session_marked(client: TestClient):
 def test_list_sessions_shows_all_devices(client: TestClient):
     register_workspace(client, email="s2@example.com", workspace_name="S2")
     other = TestClient(client.app)
-    other.post("/auth/login", json={"email": "s2@example.com", "password": "password123"})
+    other.post("/auth/login", json={"email": "s2@example.com", "password": "j8Kd0-slwQ2x"})
 
     sessions = client.get("/auth/sessions").json()
     assert len(sessions) == 2
@@ -34,7 +34,7 @@ def test_list_sessions_shows_all_devices(client: TestClient):
 def test_revoke_specific_session_by_id(client: TestClient):
     register_workspace(client, email="s3@example.com", workspace_name="S3")
     other = TestClient(client.app)
-    other.post("/auth/login", json={"email": "s3@example.com", "password": "password123"})
+    other.post("/auth/login", json={"email": "s3@example.com", "password": "j8Kd0-slwQ2x"})
 
     other_session_id = next(s["id"] for s in client.get("/auth/sessions").json() if not s["is_current"])
     resp = client.delete(f"/auth/sessions/{other_session_id}")

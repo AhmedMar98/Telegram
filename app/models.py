@@ -64,6 +64,12 @@ class AuthSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Recorded so "end this session" is an informed decision rather than a
+    # guess between identical-looking rows. Nullable because sessions
+    # created before this existed have no origin to report, and honestly
+    # showing "unknown" beats inventing one.
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)  # 45 = max INET6 length
+    user_agent: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 
 class LoginAttempt(Base):
@@ -82,6 +88,10 @@ class LoginAttempt(Base):
     identifier: Mapped[str] = mapped_column(String(320), index=True)
     successful: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # Which origin the attempt came from. Failed attempts are pruned past
+    # the throttle window, so this is a short-lived signal for "is someone
+    # actively guessing my password", not a long-term audit trail.
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
 
 class TelegramAccount(Base):

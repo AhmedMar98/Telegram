@@ -139,7 +139,7 @@ def test_rename_only_touches_the_callers_own_workspace(client: TestClient):
     client.patch("/auth/workspace", json={"name": "Renamed"})
     client.post("/auth/logout")
 
-    client.post("/auth/login", json={"email": "ren5@example.com", "password": "password123"})
+    client.post("/auth/login", json={"email": "ren5@example.com", "password": "j8Kd0-slwQ2x"})
     assert client.get("/auth/me").json()["workspace_name"] == "Theirs"
 
 

@@ -30,7 +30,7 @@ jobs:
         run: mypy app scripts
 
       - name: bandit (security scan)
-        run: bandit -r app scripts -lll -iii
+        run: bandit -r app scripts tests -lll -iii
 
       # Catches known CVEs in pinned dependencies. A one-off audit rots the
       # moment a new advisory lands, so it runs on every push rather than

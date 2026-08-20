@@ -136,6 +136,24 @@ class SessionOut(BaseModel):
     created_at: datetime
     expires_at: datetime
     is_current: bool
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
+class SecurityActivityOut(BaseModel):
+    """Failed-login summary for the caller's own account.
+
+    Counts and a timestamp only — the individual attempt rows are not
+    exposed, because the addresses in them are attacker-supplied and
+    rendering them verbatim in a dashboard is an injection surface for no
+    added value.
+    """
+
+    failed_attempts: int
+    window_minutes: int
+    lockout_threshold: int
+    distinct_ip_count: int
+    last_failed_at: datetime | None
 
 
 class DeleteAccountRequest(BaseModel):

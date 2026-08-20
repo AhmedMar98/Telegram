@@ -55,7 +55,7 @@ def client():
 
 
 def register_workspace(
-    client: TestClient, *, email: str, workspace_name: str, password: str = "password123"
+    client: TestClient, *, email: str, workspace_name: str, password: str = "j8Kd0-slwQ2x"
 ) -> TestClient:
     response = client.post(
         "/auth/register",

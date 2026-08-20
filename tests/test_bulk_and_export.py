@@ -43,7 +43,7 @@ def test_bulk_delete_is_scoped_to_workspace(client: TestClient):
     assert resp.json()["affected"] == 0  # nothing in *this* workspace
 
     client.post("/auth/logout")
-    client.post("/auth/login", json={"email": "bdiso@example.com", "password": "password123"})
+    client.post("/auth/login", json={"email": "bdiso@example.com", "password": "j8Kd0-slwQ2x"})
     assert client.get("/links").json()["total"] == 1  # untouched
 
 

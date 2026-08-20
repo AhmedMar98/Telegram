@@ -22,7 +22,7 @@ def test_email_is_normalized_on_register_and_login(client: TestClient):
 
     client.post("/auth/logout")
     # Logging in with different casing must reach the same account.
-    login = client.post("/auth/login", json={"email": "MIXED.CASE@example.com", "password": "password123"})
+    login = client.post("/auth/login", json={"email": "MIXED.CASE@example.com", "password": "j8Kd0-slwQ2x"})
     assert login.status_code == 200
 
 
@@ -30,7 +30,7 @@ def test_duplicate_registration_is_case_insensitive(client: TestClient):
     register_workspace(client, email="dup@example.com", workspace_name="A")
     clash = client.post(
         "/auth/register",
-        json={"email": "DUP@Example.com", "password": "password123", "workspace_name": "B"},
+        json={"email": "DUP@Example.com", "password": "j8Kd0-slwQ2x", "workspace_name": "B"},
     )
     assert clash.status_code == 409
 
@@ -44,7 +44,7 @@ def test_repeated_failures_lock_the_account_out(client: TestClient):
         assert rejected.status_code == 401
 
     # Even the *correct* password is refused once the threshold is crossed.
-    locked = client.post("/auth/login", json={"email": "target@example.com", "password": "password123"})
+    locked = client.post("/auth/login", json={"email": "target@example.com", "password": "j8Kd0-slwQ2x"})
     assert locked.status_code == 429
 
 
@@ -55,7 +55,7 @@ def test_successful_login_clears_prior_failures(client: TestClient):
     for _ in range(LOGIN_MAX_FAILURES - 1):
         client.post("/auth/login", json={"email": "clears@example.com", "password": "nope"})
 
-    good = client.post("/auth/login", json={"email": "clears@example.com", "password": "password123"})
+    good = client.post("/auth/login", json={"email": "clears@example.com", "password": "j8Kd0-slwQ2x"})
     assert good.status_code == 200
 
     db = SessionLocal()
@@ -96,7 +96,7 @@ def test_invite_code_is_enforced_when_configured(client: TestClient, monkeypatch
 
     without = client.post(
         "/auth/register",
-        json={"email": "nocode@example.com", "password": "password123", "workspace_name": "X"},
+        json={"email": "nocode@example.com", "password": "j8Kd0-slwQ2x", "workspace_name": "X"},
     )
     assert without.status_code == 403
 
@@ -104,7 +104,7 @@ def test_invite_code_is_enforced_when_configured(client: TestClient, monkeypatch
         "/auth/register",
         json={
             "email": "badcode@example.com",
-            "password": "password123",
+            "password": "j8Kd0-slwQ2x",
             "workspace_name": "X",
             "invite_code": "guess",
         },
@@ -115,7 +115,7 @@ def test_invite_code_is_enforced_when_configured(client: TestClient, monkeypatch
         "/auth/register",
         json={
             "email": "goodcode@example.com",
-            "password": "password123",
+            "password": "j8Kd0-slwQ2x",
             "workspace_name": "X",
             "invite_code": "secret-invite",
         },

@@ -61,7 +61,7 @@ def test_cannot_delete_another_workspaces_link(client: TestClient):
     assert client.delete(f"/links/{victim_id}").status_code == 404
 
     client.post("/auth/logout")
-    client.post("/auth/login", json={"email": "owner@example.com", "password": "password123"})
+    client.post("/auth/login", json={"email": "owner@example.com", "password": "j8Kd0-slwQ2x"})
     assert client.get("/links").json()["total"] == 1  # untouched
 
 

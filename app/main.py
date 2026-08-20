@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -68,6 +68,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
+
+# Largest request body accepted, in bytes. The biggest legitimate payload
+# is a manual paste, capped at 50,000 characters by LinkImportRequest —
+# 1 MiB leaves generous room for multi-byte UTF-8 (Arabic is 2 bytes per
+# character) plus JSON overhead, while still refusing a body that could
+# only be an attempt to exhaust the 512 MB free tier's memory.
+MAX_REQUEST_BODY_BYTES = 1024 * 1024
+
+
+@app.middleware("http")
+async def limit_request_body(request: Request, call_next):
+    """Reject oversized bodies before anything tries to parse them.
+
+    Pydantic's ``max_length`` validation only fires *after* FastAPI has
+    read and JSON-decoded the whole body, so a 500 MB request would be
+    fully buffered in memory first and only then rejected. Checking
+    Content-Length up front costs nothing and refuses it at the door.
+
+    A body with no Content-Length (chunked transfer) is not blocked here:
+    it cannot be checked without consuming it, and inventing a limit for a
+    case this app's clients never produce would be guessing.
+    """
+    raw_length = request.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            declared = int(raw_length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "invalid Content-Length"})
+        if declared > MAX_REQUEST_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"},
+            )
+    return await call_next(request)
+
+
 app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(links.router)

@@ -28,7 +28,7 @@ from app.models import (
 )
 from tests.conftest import register_workspace
 
-PASSWORD = "password123"
+PASSWORD = "j8Kd0-slwQ2x"
 
 
 def _seed(client: TestClient, email: str, name: str) -> int:

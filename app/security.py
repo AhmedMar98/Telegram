@@ -78,9 +78,9 @@ def _window_start():
     return utcnow() - timedelta(minutes=LOGIN_WINDOW_MINUTES)
 
 
-def record_login_attempt(db: Session, identifier: str, *, successful: bool) -> None:
+def record_login_attempt(db: Session, identifier: str, *, successful: bool, ip_address: str | None = None) -> None:
     """Log an attempt and opportunistically prune ones outside the window."""
-    db.add(LoginAttempt(identifier=identifier, successful=successful))
+    db.add(LoginAttempt(identifier=identifier, successful=successful, ip_address=ip_address))
     db.execute(delete(LoginAttempt).where(LoginAttempt.created_at < _window_start()))
     db.commit()
 
@@ -112,7 +112,9 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_session(db: Session, user: User) -> str:
+def create_session(
+    db: Session, user: User, *, ip_address: str | None = None, user_agent: str | None = None
+) -> str:
     """Create a new server-side session and return the raw cookie token."""
     settings = get_settings()
     token = secrets.token_urlsafe(32)
@@ -120,6 +122,11 @@ def create_session(db: Session, user: User) -> str:
         user_id=user.id,
         token_hash=_hash_token(token),
         expires_at=utcnow() + timedelta(hours=settings.session_ttl_hours),
+        ip_address=ip_address,
+        # Truncated to the column width rather than rejected: a client is
+        # free to send a header of any length, and losing the tail of a
+        # long one is better than failing the login over it.
+        user_agent=(user_agent or None) and user_agent[:300],
     )
     db.add(record)
     db.commit()
@@ -233,3 +240,23 @@ def is_action_rate_limited(db: Session, scope: str, identifier: str, *, limit: i
         .count()
     )
     return count >= limit
+
+
+def recent_failed_attempts(db: Session, identifier: str, *, limit: int = 20) -> list[LoginAttempt]:
+    """Failed sign-in attempts for one account inside the throttle window.
+
+    Deliberately scoped to the window rather than all of history: the rows
+    are pruned past it anyway (see ``record_login_attempt``), so promising
+    a longer view would be a promise the storage does not keep.
+    """
+    return (
+        db.query(LoginAttempt)
+        .filter(
+            LoginAttempt.identifier == identifier,
+            LoginAttempt.successful.is_(False),
+            LoginAttempt.created_at >= _window_start(),
+        )
+        .order_by(LoginAttempt.created_at.desc())
+        .limit(limit)
+        .all()
+    )
