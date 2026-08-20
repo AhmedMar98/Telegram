@@ -98,8 +98,11 @@ def test_export_json_matches_csv_content(client: TestClient):
             "posted_at",
             "collected_at",
             "is_alive",
+            "status_category",
             "http_status",
             "last_checked_at",
+            "last_alive_at",
+            "is_archived",
             "context",
         }
         for r in rows

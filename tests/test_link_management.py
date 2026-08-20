@@ -122,8 +122,11 @@ def test_export_returns_csv_of_the_workspace(client: TestClient):
         "posted_at",
         "collected_at",
         "is_alive",
+        "status_category",
         "http_status",
         "last_checked_at",
+        "last_alive_at",
+        "is_archived",
         "context",
     ]
     urls = {r[0] for r in rows[1:]}

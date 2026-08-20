@@ -177,8 +177,34 @@ class Link(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_alive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The last time a check actually succeeded. Kept separately from
+    # last_checked_at so a currently-dead link can still answer "when was
+    # this last working?" — which is what decides whether it is worth
+    # hunting for a mirror or just deleting.
+    last_alive_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Consecutive non-alive checks. Resets to 0 on any successful check.
+    # Drives two things: the re-check backoff (a link that has failed
+    # repeatedly is not worth probing every six hours), and the decision to
+    # finally call a merely-unreachable link dead.
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Hides a link from default search results without deleting it. Dead
+    # links accumulate and drown out live ones; deleting them loses the
+    # record that the content once existed and where.
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     channel: Mapped[Channel] = relationship(back_populates="links")
+
+    @property
+    def status_category(self) -> str:
+        """Human-meaningful reading of ``http_status`` / ``is_alive``.
+
+        A plain Python property rather than a stored column: it is a pure
+        function of two columns that are already there, so persisting it
+        would only create a third value that can disagree with them.
+        """
+        from app.vitality import status_category
+
+        return status_category(self.http_status, self.is_alive)
 
 
 class BotLinkCode(Base):
