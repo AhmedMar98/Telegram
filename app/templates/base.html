@@ -26,7 +26,13 @@
     --bg: #ffffff;
     --fg: #1a1a1a;
     --muted: #5a5a5a;
-    --border: #d0d0d0;
+    /* #919191, not the original #d0d0d0: measured against WCAG 2.1 AA
+       non-text contrast (1.4.11), the old value scored 1.54 against the
+       page and 1.51 against a card, where the minimum is 3.0 — form field
+       boundaries were effectively invisible to low-vision users. This value
+       is the lightest grey that clears 3.0 against both surfaces (3.15 and
+       3.02), so the visual weight changes as little as the standard allows. */
+    --border: #919191;
     --card-bg: #fafafa;
     --tag-bg: #ececec;
     --accent: #0b57d0;
@@ -38,7 +44,8 @@
       --bg: #14171c;
       --fg: #e6e6e6;
       --muted: #a0a6b0;
-      --border: #333a44;
+      /* Same 1.4.11 fix as the light palette: #333a44 measured 1.56/1.51. */
+      --border: #636a74;
       --card-bg: #1b1f26;
       --tag-bg: #2a3038;
       --accent: #7ca9f5;
@@ -50,7 +57,7 @@
     --bg: #14171c;
     --fg: #e6e6e6;
     --muted: #a0a6b0;
-    --border: #333a44;
+    --border: #636a74;
     --card-bg: #1b1f26;
     --tag-bg: #2a3038;
     --accent: #7ca9f5;
@@ -68,8 +75,51 @@
   input, select, button, textarea {
     font-size: 1rem; padding: .5rem; border-radius: .4rem;
     border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+    /* Touch targets: WCAG 2.5.8 asks for 24x24 CSS px minimum, and the
+       icon buttons (★, 🗄, ×) were under that on a phone once their text
+       was a single character. min-height/min-width rather than padding so
+       the change cannot be undone by a more specific padding rule. */
+    min-height: 2.25rem; min-width: 2.25rem;
   }
   button { cursor: pointer; }
+
+  /* Keyboard focus must be visible on every interactive element. The
+     browser default outline is removed by some resets and is invisible
+     against the dark palette anyway; this is defined once, in terms of the
+     accent token, so it works in both themes. :focus-visible rather than
+     :focus keeps it off mouse clicks, where it reads as a bug. */
+  :focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: .3rem;
+  }
+
+  /* A URL is Latin text inside an RTL document. Without an explicit
+     direction the bidi algorithm reorders its trailing punctuation and
+     path segments, so "example.com/a-b.pdf?x=1" can render with pieces in
+     the wrong places — the link looks wrong even though it is stored
+     correctly. unicode-bidi isolates it from the surrounding Arabic. */
+  .ltr, a[href^="http"] { direction: ltr; unicode-bidi: isolate; display: inline-block; }
+
+  /* Screen-reader-only text: present in the accessibility tree, invisible
+     on screen. Used to give icon-only buttons a real name and to announce
+     status changes. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* Respect a system-level request to reduce motion. Nothing here animates
+     heavily today, but the rule is the cheap half of honouring it and it
+     also disables smooth scrolling introduced by the keyboard shortcuts. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
   .card { border: 1px solid var(--border); background: var(--card-bg); border-radius: .6rem; padding: 1rem; margin-bottom: .75rem; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .muted { color: var(--muted); font-size: .9rem; }
@@ -80,6 +130,19 @@
      wide screen without a media query per breakpoint. */
   .grid-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .75rem; }
   .grid-results .card { margin-bottom: 0; overflow-wrap: anywhere; }
+  /* Compact density: one link per row for scanning a long result set.
+     Padding and margin shrink; nothing is hidden by CSS — the card itself
+     omits the context line and origin badges in this mode, so a screen
+     reader is not told about content that is only visually absent. */
+  .card.compact { padding: .4rem .6rem; margin-bottom: .3rem; }
+  /* The undo bar's layout lives here, not in a style attribute. An inline
+     display:flex outranks the user-agent's [hidden] { display: none }, so
+     the bar stayed in the layout and its "undo" button stayed in the tab
+     order while invisible — a keyboard user could focus and press a button
+     they could not see. [hidden] is restated first so the guarantee does
+     not depend on rule order. */
+  [hidden] { display: none !important; }
+  .undo-bar { display: flex; gap: .5rem; align-items: center; }
   /* Search-term highlight. Defined against the theme tokens so it stays
      readable in dark mode, where a browser's default yellow-on-white
      <mark> becomes unreadable. */

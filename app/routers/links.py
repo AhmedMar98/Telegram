@@ -26,12 +26,13 @@ from app.classifier import CATEGORIES
 from app.database import get_db
 from app.deps import get_current_user
 from app.ingest import ingest_text, manual_channel
-from app.models import Channel, ClassificationFeedback, Link, SavedSearch, User
+from app.models import AuditLog, Channel, ClassificationFeedback, Link, SavedSearch, User
 from app.schemas import (
     BulkDeleteRequest,
     BulkRecategorizeRequest,
     BulkResult,
     ClassificationFeedbackOut,
+    CollectionHealth,
     FeedbackListResponse,
     LinkCategoryUpdate,
     LinkImportRequest,
@@ -55,6 +56,11 @@ def _dialect(db: Session) -> str:
 
 
 SORT_OPTIONS = ("date", "domain", "category", "confidence", "checked", "domain_frequency")
+
+# The collector runs every six hours. A day of silence is well past a single
+# missed run, a FloodWait, or a slow schedule, so it is worth telling the
+# user about rather than letting the collection quietly stop growing.
+COLLECTOR_STALL_HOURS = 24
 
 
 def _filtered_query(
@@ -264,6 +270,22 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         or 0
     )
 
+    # The collector writes one audit row per channel per run, so the most
+    # recent of them is when collection last actually happened. Read from
+    # the audit trail rather than a new column: the fact is already
+    # recorded, and a second copy could disagree with it.
+    last_run_at = (
+        db.query(func.max(AuditLog.created_at))
+        .filter(AuditLog.workspace_id == ws_id, AuditLog.action == "collector.run")
+        .scalar()
+    )
+    hours_since = (now - last_run_at).total_seconds() / 3600 if last_run_at else None
+    # The schedule is six-hourly; a full day of silence is well past a
+    # missed run or a FloodWait, and is worth surfacing. A workspace that
+    # has never run the collector is not stalled — it may simply be
+    # manual-only — so a missing timestamp is never a warning.
+    looks_stalled = hours_since is not None and hours_since > COLLECTOR_STALL_HOURS
+
     return StatsResponse(
         total_links=total_links,
         total_channels=total_channels,
@@ -277,6 +299,11 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
             unchecked=vitality_counts.get(None, 0),
             archived=archived,
             deadest_domains=[(row[0], row[1]) for row in deadest_rows],
+        ),
+        collection=CollectionHealth(
+            last_run_at=last_run_at,
+            hours_since_last_run=round(hours_since, 1) if hours_since is not None else None,
+            looks_stalled=looks_stalled,
         ),
     )
 

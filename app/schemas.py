@@ -147,6 +147,22 @@ class VitalityStats(BaseModel):
     deadest_domains: list[tuple[str, int]]
 
 
+class CollectionHealth(BaseModel):
+    """Whether the scheduled collector is still running at all.
+
+    A stopped collector is the failure mode with no symptom: the dashboard
+    keeps working, search keeps working, and the collection simply stops
+    growing. Nothing on screen said so until this existed.
+    """
+
+    last_run_at: datetime | None
+    hours_since_last_run: float | None
+    # True once the gap exceeds the expected schedule by a wide margin.
+    # Advisory, not an alarm: a workspace that has never run the collector
+    # (manual-only use) is not unhealthy, so this stays False for it.
+    looks_stalled: bool
+
+
 class StatsResponse(BaseModel):
     total_links: int
     total_channels: int
@@ -155,6 +171,7 @@ class StatsResponse(BaseModel):
     added_this_week: int
     added_this_month: int
     vitality: VitalityStats
+    collection: CollectionHealth
 
 
 class LinkImportRequest(BaseModel):
