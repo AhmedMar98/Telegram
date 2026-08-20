@@ -1,13 +1,35 @@
 {% extends "base.html" %}
 {% block title %}لوحة التحكم{% endblock %}
 {% block content %}
+<!-- Shown once to a workspace that has never collected anything. Dismissed
+     permanently on click, and never shown again once links exist. -->
+<div id="quickStart" class="card" hidden>
+  <h3>بداية سريعة</h3>
+  <ol>
+    <li>الصق أي روابط في صندوق «إضافة يدوية» بالأسفل — يعمل فوراً بلا أي إعداد.</li>
+    <li>لجمع تلقائي من قنوات تيليجرام: أضف القناة في قسم «القنوات»، ثم اضبط أسرار المجمّع في GitHub Actions كما في README.</li>
+    <li>اربط بوت تيليجرام من قسم «البوت» إن أردت البحث من داخل تيليجرام.</li>
+  </ol>
+  <button onclick="dismissQuickStart()">فهمت، أخفِ هذا</button>
+</div>
+
 <h2>البحث في الروابط</h2>
+<!-- role=alert, not aria-live=polite: an undo offer expires in five
+     seconds, so waiting for a pause would make it useless. -->
+<div id="undoBar" class="card undo-bar" role="alert" hidden>
+  <span id="undoText"></span>
+  <button onclick="undoDelete()">تراجع</button>
+</div>
 <div class="row">
-  <input id="q" placeholder="ابحث..." style="flex: 1;">
+  <label class="sr-only" for="q">ابحث في الروابط</label>
+  <input id="q" placeholder="ابحث... (اكتب / للانتقال هنا)" style="flex: 1;" aria-describedby="qHint">
+  <span id="qHint" class="sr-only">اكتب كلمة قبلها شرطة لاستبعادها، مثل: بايثون -مدفوع</span>
+  <label class="sr-only" for="category">التصنيف</label>
   <select id="category">
     <option value="">كل التصنيفات</option>
     {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
   </select>
+  <label class="sr-only" for="sort">ترتيب النتائج</label>
   <select id="sort">
     <option value="date">الأحدث أولاً</option>
     <option value="domain">النطاق</option>
@@ -17,14 +39,17 @@
   </select>
   <label class="muted"><input type="checkbox" id="favoriteOnly" onchange="search()"> المفضّلة فقط</label>
   <label class="muted"><input type="checkbox" id="includeArchived" onchange="search()"> إظهار المؤرشفة</label>
+  <label class="sr-only" for="aliveFilter">حالة الحيوية</label>
   <select id="aliveFilter">
     <option value="">كل الروابط (حيويّة أو لا)</option>
     <option value="true">الحيّة فقط</option>
     <option value="false">الميتة فقط</option>
   </select>
+  <label class="sr-only" for="channelFilter">القناة</label>
   <select id="channelFilter" onchange="search()">
     <option value="">كل القنوات</option>
   </select>
+  <label class="sr-only" for="languageFilter">لغة الرسالة</label>
   <select id="languageFilter" onchange="search()">
     <option value="">كل اللغات</option>
     <option value="ar">عربي</option>
@@ -32,6 +57,7 @@
     <option value="mixed">مختلط</option>
   </select>
   <button onclick="search()">بحث</button>
+  <span id="liveCount" class="muted" aria-hidden="true"></span>
   <button onclick="exportCsv()">تصدير CSV</button>
   <button onclick="exportJson()">تصدير JSON</button>
   <button onclick="exportMarkdown()" title="نتائج البحث الحالية كملف Markdown قابل للقراءة والمشاركة">تصدير Markdown</button>
@@ -49,16 +75,21 @@
   <button onclick="bulkRecategorize()">نقل كل النتائج الحالية إلى تصنيف آخر</button>
   <button onclick="bulkDelete()">حذف كل النتائج الحالية</button>
 </div>
+<p id="collectorWarning" class="error" role="status" hidden></p>
 <p id="stats" class="muted"></p>
+<!-- Status changes are announced to a screen reader, not only shown.
+     aria-live="polite" waits for a pause rather than interrupting, which
+     is right for a result count that updates as the user types. -->
+<p id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
 <!-- A proportion bar rather than a chart library: three divs sized by
      percentage say the same thing as a pie, cost nothing, and cannot
      break the strict no-external-asset rule this page runs under. -->
-<div id="vitalityBar" style="display:flex; height:.5rem; border-radius:.25rem; overflow:hidden; margin-bottom:.75rem;"></div>
-<div id="results"></div>
+<div id="vitalityBar" role="img" aria-label="نسبة الروابط الحيّة والميتة وغير المفحوصة" style="display:flex; height:.5rem; border-radius:.25rem; overflow:hidden; margin-bottom:.75rem;"></div>
+<div id="results" role="region" aria-label="نتائج البحث"></div>
 <div class="row" style="align-items:center;">
-  <button id="prevBtn" onclick="changePage(-1)">السابق</button>
+  <button id="prevBtn" onclick="changePage(-1)" aria-label="الصفحة السابقة">السابق</button>
   <span id="pageInfo" class="muted"></span>
-  <button id="nextBtn" onclick="changePage(1)">التالي</button>
+  <button id="nextBtn" onclick="changePage(1)" aria-label="الصفحة التالية">التالي</button>
 </div>
 
 <h2>إضافة روابط يدوياً</h2>
@@ -130,6 +161,35 @@ async function loadStats() {
     (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "") +
     (deadest ? ` | الأكثر موتاً: ${deadest}` : "");
   renderVitalityBar(v);
+  renderCollectorHealth(data.collection);
+  renderQuickStart(data.total_links);
+}
+
+// A stopped collector is the failure with no symptom: everything keeps
+// working, the collection just stops growing. This is the only place that
+// says so.
+function renderCollectorHealth(c) {
+  const el = document.getElementById("collectorWarning");
+  if (!c || !c.looks_stalled) { el.hidden = true; return; }
+  const days = Math.floor(c.hours_since_last_run / 24);
+  el.hidden = false;
+  el.textContent = days >= 1
+    ? `⚠️ لم يعمل الجمع التلقائي منذ ${days} يوم${days > 1 ? "اً" : ""}. تحقّق من GitHub Actions.`
+    : `⚠️ لم يعمل الجمع التلقائي منذ ${Math.round(c.hours_since_last_run)} ساعة. تحقّق من GitHub Actions.`;
+}
+
+// Shown only to a workspace with nothing in it, and only until dismissed.
+// A "getting started" panel that keeps reappearing to an established user
+// is noise, not help.
+function renderQuickStart(totalLinks) {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem("quickStartDismissed") === "1"; } catch (e) { /* private mode */ }
+  document.getElementById("quickStart").hidden = dismissed || totalLinks > 0;
+}
+
+function dismissQuickStart() {
+  try { localStorage.setItem("quickStartDismissed", "1"); } catch (e) { /* private mode */ }
+  document.getElementById("quickStart").hidden = true;
 }
 
 function renderVitalityBar(v) {
@@ -156,12 +216,60 @@ function changePage(delta) {
   search(false);
 }
 
+// Deleting one link used to be a modal confirm: a decision demanded before
+// the consequence is visible, and irreversible once taken. An undo window
+// inverts that — the row disappears immediately, and the request is only
+// sent if the five seconds pass without an undo. Nothing is deleted
+// server-side until then, so undo is a genuine cancellation rather than a
+// re-insert that would lose the link's id and history.
+const UNDO_SECONDS = 5;
+let pendingDelete = null;
+
 async function removeLink(id) {
-  if (!confirm("حذف هذا الرابط؟")) return;
+  if (pendingDelete) await flushPendingDelete();
+
+  const row = document.getElementById(`cat-${id}`)?.closest(".card");
+  if (row) row.style.display = "none";
+
+  const bar = document.getElementById("undoBar");
+  bar.hidden = false;
+  bar.querySelector("#undoText").textContent = `حُذف رابط. التراجع خلال ${UNDO_SECONDS} ثوانٍ.`;
+  announce("حُذف رابط. يمكنك التراجع.");
+
+  const timer = setTimeout(flushPendingDelete, UNDO_SECONDS * 1000);
+  pendingDelete = { id, timer, row };
+}
+
+async function flushPendingDelete() {
+  if (!pendingDelete) return;
+  const { id, timer } = pendingDelete;
+  clearTimeout(timer);
+  pendingDelete = null;
+  document.getElementById("undoBar").hidden = true;
   await api(`/links/${id}`, { method: "DELETE" });
   search(false);
   loadStats();
 }
+
+function undoDelete() {
+  if (!pendingDelete) return;
+  clearTimeout(pendingDelete.timer);
+  if (pendingDelete.row) pendingDelete.row.style.display = "";
+  pendingDelete = null;
+  document.getElementById("undoBar").hidden = true;
+  announce("أُلغي الحذف.");
+}
+
+// A pending delete must not be lost by navigating away — either it happens
+// or it does not, and leaving it ambiguous is worse than either.
+window.addEventListener("beforeunload", () => {
+  // keepalive lets the request outlive the page; sendBeacon cannot be used
+  // because it only issues POST. If the browser drops it anyway the link
+  // simply survives, which is the safe direction for a delete to fail in.
+  if (pendingDelete) {
+    fetch(`/links/${pendingDelete.id}`, { method: "DELETE", keepalive: true, credentials: "same-origin" });
+  }
+});
 
 async function recategorize(id, category) {
   await api(`/links/${id}`, { method: "PATCH", body: JSON.stringify({ category }) });
@@ -315,24 +423,59 @@ function standoutBadge(i) {
   return `<span class="muted" title="مفضّلة وحيّة وحديثة">✨</span>`;
 }
 
+// Every automatic tier explained once, where the value is shown, rather
+// than in documentation nobody opens.
+const CLASSIFIER_EXPLANATION = {
+  rules: "قواعد محلية: امتداد الملف أو كلمة مفتاحية في نص الرسالة. بلا شبكة وبلا تكلفة.",
+  llm: "نموذج لغوي على الطبقة المجانية، يُستدعى فقط حين تكون ثقة القواعد منخفضة.",
+  manual: "تصحيح بشري. لا تعيد أي طبقة تلقائية الكتابة فوقه.",
+};
+
+function classifierTitle(i) {
+  return escapeText((CLASSIFIER_EXPLANATION[i.classified_by] || "") + " — " + classificationReason(i));
+}
+
+// Icon-only buttons need a real accessible name; the emoji alone reads as
+// "star" or nothing at all. title= is a tooltip, not a name, so both are
+// set — aria-label names it, title explains it on hover.
 function linkCard(i, terms) {
-  return `<div class="card">
+  const favLabel = i.is_favorite ? "أزل من المفضّلة" : "أضف إلى المفضّلة";
+  const archLabel = i.is_archived ? "أعد من الأرشيف" : "أرشف (إخفاء من النتائج دون حذف)";
+  const compact = VIEW_MODE === "compact";
+  return `<div class="card${compact ? " compact" : ""}">
        <a href="${escapeText(i.url)}" target="_blank" rel="noopener">${highlighted(i.url, terms)}</a>
-       ${contextLine(i, terms)}
+       ${compact ? "" : contextLine(i, terms)}
        <div style="margin-top:.5rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
-         <select onchange="recategorize(${i.id}, this.value)">
+         <label class="sr-only" for="cat-${i.id}">تصنيف ${escapeText(i.domain)}</label>
+         <select id="cat-${i.id}" onchange="recategorize(${i.id}, this.value)">
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
          </select>
-         <span class="muted" title="${classificationReason(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
-         ${originBadge(i)}
+         <span class="muted" title="${classifierTitle(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         ${compact ? "" : originBadge(i)}
          <span class="muted" title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
          ${standoutBadge(i)}
+         <button onclick="copyLink('${escapeText(i.url)}')" aria-label="انسخ الرابط" title="انسخ الرابط">⧉</button>
          <button onclick="showSimilar('${escapeText(i.domain)}', '${i.category}')" title="روابط أخرى من نفس النطاق والتصنيف">مشابهة</button>
-         <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
-         <button onclick="toggleArchive(${i.id}, ${!i.is_archived})" title="${i.is_archived ? "إعادة من الأرشيف" : "أرشفة (إخفاء من النتائج دون حذف)"}">${i.is_archived ? "↩" : "🗄"}</button>
-         <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
+         <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" aria-label="${favLabel}" aria-pressed="${!!i.is_favorite}" title="${favLabel}">${i.is_favorite ? "★" : "☆"}</button>
+         <button onclick="toggleArchive(${i.id}, ${!i.is_archived})" aria-label="${archLabel}" title="${archLabel}">${i.is_archived ? "↩" : "🗄"}</button>
+         <button onclick="removeLink(${i.id})" aria-label="احذف الرابط" style="margin-inline-start:auto;">حذف</button>
        </div>
      </div>`;
+}
+
+async function copyLink(url) {
+  try {
+    await navigator.clipboard.writeText(url);
+    announce("نُسخ الرابط.");
+  } catch (e) {
+    prompt("انسخ الرابط يدوياً:", url);
+  }
+}
+
+// One place that both shows a message and announces it, so a status can
+// never end up visible-only or announced-only.
+function announce(text) {
+  document.getElementById("srStatus").textContent = text;
 }
 
 // Suggesting categories that *have* links beats an empty page: the usual
@@ -373,6 +516,8 @@ async function search(resetPage = true) {
 
   renderActiveDomain();
   writePermalink(params);
+  rememberFilters(params);
+  document.getElementById("liveCount").textContent = "";
   document.getElementById("pageInfo").textContent =
     data.total === 0 ? "" : `صفحة ${data.page} — عرض ${data.items.length} من ${data.total}`;
   document.getElementById("prevBtn").disabled = data.page <= 1;
@@ -479,14 +624,34 @@ async function deleteSavedSearch(id) {
 
 // --- view mode and discovery ----------------------------------------------
 
-let VIEW_MODE = "list";
-try { VIEW_MODE = localStorage.getItem("viewMode") || "list"; } catch (e) { /* private mode */ }
+// Three densities, cycled by one button rather than three: list (full
+// context), grid (cards side by side), compact (one row per link, for
+// scanning a long result set). Declared before the initialiser below,
+// which reads them.
+const VIEW_MODES = ["list", "grid", "compact"];
+const VIEW_LABEL = { list: "عرض شبكي", grid: "عرض مضغوط", compact: "عرض قائمة" };
 
+let VIEW_MODE = "list";
+try {
+  const stored = localStorage.getItem("viewMode");
+  // Validated, not trusted: a value left behind by an older build (or an
+  // edited localStorage) would otherwise put the page in a mode that has
+  // no styling and no way back except clearing site data.
+  if (VIEW_MODES.includes(stored)) VIEW_MODE = stored;
+} catch (e) { /* private mode */ }
+
+// Three densities, cycled by one button rather than three: list (full
+// context), grid (cards side by side), compact (one row per link, for
+// scanning a long result set).
 function toggleView() {
-  VIEW_MODE = VIEW_MODE === "grid" ? "list" : "grid";
+  VIEW_MODE = VIEW_MODES[(VIEW_MODES.indexOf(VIEW_MODE) + 1) % VIEW_MODES.length];
   try { localStorage.setItem("viewMode", VIEW_MODE); } catch (e) { /* private mode */ }
-  document.getElementById("viewBtn").textContent = VIEW_MODE === "grid" ? "عرض قائمة" : "عرض شبكي";
+  refreshViewButton();
   search(false);
+}
+
+function refreshViewButton() {
+  document.getElementById("viewBtn").textContent = VIEW_LABEL[VIEW_MODE] || VIEW_LABEL.list;
 }
 
 async function discover() {
@@ -729,8 +894,82 @@ async function revokeSession(id) {
 // loaded; applying it before the first search is still correct because the
 // select simply has no matching option yet and falls back to "all".
 document.getElementById("pasteBox").addEventListener("input", updatePasteCount);
-applyPermalink();
-document.getElementById("viewBtn").textContent = VIEW_MODE === "grid" ? "عرض قائمة" : "عرض شبكي";
+
+// --- keyboard shortcuts ----------------------------------------------------
+//
+// Deliberately only two, both conventional: "/" focuses search (the same
+// key GitHub, Gmail and Slack use) and Escape backs out. A page full of
+// invented single-key bindings is a trap for anyone typing into a field.
+document.addEventListener("keydown", (event) => {
+  const inField = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+
+  if (event.key === "/" && !inField) {
+    event.preventDefault();
+    document.getElementById("q").focus();
+    return;
+  }
+
+  if (event.key === "Escape") {
+    // Escape means "undo the last thing", in the order the user would
+    // expect it: cancel a pending delete first, then clear the search.
+    if (pendingDelete) { undoDelete(); return; }
+    const q = document.getElementById("q");
+    if (document.activeElement === q && q.value) {
+      q.value = "";
+      search();
+      announce("أُفرغ حقل البحث.");
+    } else if (document.activeElement === q) {
+      q.blur();
+    }
+  }
+});
+
+// --- live result count while typing (#123) ---------------------------------
+//
+// A count, not a full re-render: page_size=1 makes the server do the same
+// COUNT it does anyway and return one row instead of twenty-five, so the
+// keystroke feedback costs a fraction of a real search. Debounced so a
+// typed word is one request, not one per letter.
+let countTimer = null;
+
+document.getElementById("q").addEventListener("input", () => {
+  clearTimeout(countTimer);
+  countTimer = setTimeout(async () => {
+    const params = currentParams();
+    params.set("page_size", "1");
+    params.set("page", "1");
+    try {
+      const res = await api("/links?" + params.toString());
+      if (!res.ok) return;
+      const total = (await res.json()).total;
+      const hint = document.getElementById("liveCount");
+      hint.textContent = `${total} نتيجة`;
+      announce(`${total} نتيجة`);
+    } catch (e) { /* a failed preview must never block typing */ }
+  }, 300);
+});
+
+// --- remembered filters (#126) ---------------------------------------------
+//
+// Only consulted when the URL carries no filters of its own: a shared
+// permalink must show what it says, not what this browser last looked at.
+function rememberFilters(params) {
+  try { localStorage.setItem("lastFilters", params.toString()); } catch (e) { /* private mode */ }
+}
+
+function restoreRememberedFilters() {
+  try {
+    const stored = localStorage.getItem("lastFilters");
+    if (!stored) return false;
+    history.replaceState(null, "", "?" + stored);
+    return applyPermalink();
+  } catch (e) {
+    return false;
+  }
+}
+
+if (!applyPermalink()) restoreRememberedFilters();
+refreshViewButton();
 loadStats();
 search();
 loadSavedSearches();
