@@ -25,6 +25,8 @@ from app.schemas import (
     LoginRequest,
     RegisterRequest,
     SessionOut,
+    WorkspaceOut,
+    WorkspaceRenameRequest,
 )
 from app.security import (
     clear_login_failures,
@@ -147,8 +149,14 @@ def logout(
 
 
 @router.get("/me")
-def me(current_user: User = Depends(get_current_user)) -> dict:
-    return {"id": current_user.id, "email": current_user.email, "workspace_id": current_user.workspace_id}
+def me(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict:
+    workspace = db.get(Workspace, current_user.workspace_id)
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "workspace_id": current_user.workspace_id,
+        "workspace_name": workspace.name if workspace else None,
+    }
 
 
 @router.post("/change-password")
@@ -297,3 +305,42 @@ def delete_my_workspace(
 
     removed = delete_workspace(db, current_user.workspace_id)
     return DeleteAccountResponse(deleted=removed)
+
+
+@router.patch("/workspace", response_model=WorkspaceOut)
+def rename_workspace(
+    payload: WorkspaceRenameRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Workspace:
+    """Rename the caller's own workspace.
+
+    The workspace is resolved from the session rather than from a path or
+    body parameter, so there is no id a caller could substitute to rename
+    somebody else's.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="name cannot be blank",
+        )
+
+    workspace = db.get(Workspace, current_user.workspace_id)
+    if workspace is None:  # pragma: no cover - a live session implies a workspace
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workspace not found")
+
+    previous = workspace.name
+    workspace.name = name
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="workspace.rename",
+        target_type="workspace",
+        target_id=str(workspace.id),
+        detail=f"{previous} -> {name}",
+    )
+    db.commit()
+    db.refresh(workspace)
+    return workspace

@@ -51,10 +51,10 @@ in-conversation approval.
 | Runtime | Python, FastAPI + SQLAlchemy 2 + Alembic + Pydantic v2 | `requirements.txt` |
 | Deployment | Render free web service, `runtime: python`, no Dockerfile | `render.yaml` |
 | Database | Render Postgres (free); SQLite for local dev/test only | `app/config.py`, `app/database.py` |
-| API + UI endpoints | 33 (29 distinct paths) | `app.openapi()["paths"]`, count values |
+| API + UI endpoints | 34 (30 distinct paths) | `app.openapi()["paths"]`, count values |
 | Alembic migrations | 7 | `ls alembic/versions \| wc -l` |
-| Test suite | 213 passing, 12 skipped (Postgres-only, skip on SQLite) | `pytest -q` in a clean venv |
-| Coverage | 82% (`app` + `scripts`) | `pytest --cov=app --cov=scripts` |
+| Test suite | 227 passing, 12 skipped (Postgres-only, skip on SQLite) | `pytest -q` in a clean venv |
+| Coverage | 85% (`app` + `scripts`) | `pytest --cov=app --cov=scripts` |
 | Ingestion paths | 3: manual paste, Telegram Desktop JSON export, scheduled Telethon collector (GitHub Actions cron, credential-required, optional) | `app/ingest.py`, `scripts/import_telegram_export.py`, `scripts/collect.py` |
 | Classification tiers | 2: local rules (always-on, zero network) → optional Groq LLM (only below 0.6 confidence, never blocking) | `app/classifier/` |
 | Collection accounts | Many per workspace; channels bind via `Channel.account_id`, unassigned fall to the default; per-account failure isolation | `scripts/collect.py`, `scripts/add_account.py` |
@@ -210,9 +210,9 @@ what is easiest to describe impressively.
 | ~~2~~ | ~~Multi-account collection~~ | **done** | Shipped: collector iterates every active account, `Channel.account_id` binding, per-account failure isolation |
 | ~~3~~ | ~~Search precision for multi-link messages~~ | **done** | Shipped: `split_context()` gives each URL its own segment instead of the whole message |
 | ~~4~~ | ~~Self-service data export + delete~~ | **done** | Shipped: `app/account_data.py`, with a metadata-driven test that fails if a new `workspace_id` table escapes deletion |
-| 5 | Dashboard dark mode, channel-scoped search filter, workspace rename | P2 | Low-risk product polish from the existing 50-idea backlog, no architectural impact — the only item left on this list |
+| ~~5~~ | ~~Dashboard dark mode, channel-scoped search filter, workspace rename~~ | **done** | Shipped: three-state theme toggle (system/light/dark, verified in a real browser), `?channel_id=` filter, `PATCH /auth/workspace` |
 
-Anything not on this list — a second LLM provider, database-native RLS,
+**Every item on this roadmap is now shipped.** Anything not on this list — a second LLM provider, database-native RLS,
 semantic/vector search, billing, federated learning, WhatsApp, a mobile
 app, SOC 2 / ISO 27001 — is explicitly **out of scope** per §6, not merely
 deprioritized.

@@ -151,3 +151,15 @@ class DeleteAccountRequest(BaseModel):
 
 class DeleteAccountResponse(BaseModel):
     deleted: dict[str, int]
+
+
+class WorkspaceRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class WorkspaceOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
