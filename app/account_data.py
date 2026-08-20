@@ -28,6 +28,7 @@ from app.models import (
     BotLink,
     BotLinkCode,
     Channel,
+    ClassificationFeedback,
     Link,
     LoginAttempt,
     TelegramAccount,
@@ -40,7 +41,7 @@ from app.models import (
 # something else and are handled separately in ``delete_workspace``:
 # AuthSession (user_id), LoginAttempt (email) and ActionEvent (scope +
 # identifier).
-WORKSPACE_TABLES = (Link, AuditLog, BotLink, BotLinkCode, Channel, TelegramAccount, User)
+WORKSPACE_TABLES = (ClassificationFeedback, Link, AuditLog, BotLink, BotLinkCode, Channel, TelegramAccount, User)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -107,6 +108,10 @@ def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
                 "category": link.category,
                 "confidence": link.confidence,
                 "classified_by": link.classified_by,
+                "matched_rule": link.matched_rule,
+                "source_type": link.source_type,
+                "forwarded_from": link.forwarded_from,
+                "language": link.language,
                 "is_favorite": link.is_favorite,
                 "raw_text": link.raw_text,
                 "is_alive": link.is_alive,
@@ -116,6 +121,19 @@ def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
                 "created_at": _iso(link.created_at),
             }
             for link in rows(Link)
+        ],
+        "classification_feedback": [
+            {
+                "id": f.id,
+                "link_id": f.link_id,
+                "url": f.url,
+                "previous_category": f.previous_category,
+                "new_category": f.new_category,
+                "previous_confidence": f.previous_confidence,
+                "previous_matched_rule": f.previous_matched_rule,
+                "created_at": _iso(f.created_at),
+            }
+            for f in rows(ClassificationFeedback)
         ],
         "bot_links": [{"chat_id": b.chat_id, "created_at": _iso(b.created_at)} for b in rows(BotLink)],
         "bot_link_codes": [

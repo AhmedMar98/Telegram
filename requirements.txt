@@ -2,6 +2,13 @@
 # Telethon and other collector-only dependencies live in
 # requirements-collector.txt and never ship to this process.
 fastapi>=0.115,<1.0
+# Declared directly, not left to FastAPI's transitive pin: the routers use
+# starlette's HTTP_422_UNPROCESSABLE_CONTENT, which does not exist before
+# starlette 0.48 (verified — 0.47 raises AttributeError). FastAPI caps
+# starlette's upper bound, so this floor is what actually forces a FastAPI
+# new enough to run this code; the fastapi floor above alone resolved to a
+# combination that imports but fails at request time.
+starlette>=0.48,<2.0
 uvicorn[standard]>=0.32,<1.0
 sqlalchemy>=2.0,<3.0
 psycopg[binary]>=3.2,<4.0

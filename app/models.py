@@ -155,6 +155,20 @@ class Link(Base):
     confidence: Mapped[float] = mapped_column(default=0.0)
     classified_by: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Which rule actually fired, e.g. "extension:pdf" or "keyword:فيلم".
+    # The classifier always computed this; it used to be thrown away, so a
+    # wrong category could not be explained or debugged after the fact.
+    matched_rule: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Where inside the message this URL came from: visible text, an inline
+    # keyboard button, or a forward. A link only reachable through a button
+    # looks identical to a pasted one once stored, which makes "why is this
+    # here?" unanswerable without recording it.
+    source_type: Mapped[str] = mapped_column(String(20), default="text", index=True)
+    # For forwarded messages: the channel the content originally came from.
+    forwarded_from: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # "ar", "en", or "mixed". Derived from the stored context, not declared
+    # by the source, so it is a heuristic rather than metadata.
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -220,4 +234,32 @@ class AuditLog(Base):
     target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ClassificationFeedback(Base):
+    """A human correcting the classifier, kept as an auditable trail.
+
+    Serves two purposes that would otherwise need two tables. It is the
+    "this is wrong" signal a person sends from the dashboard, and it is the
+    history of how one link's category changed over time — the same rows
+    answer both questions.
+
+    Rows outlive the link they describe (``link_id`` is not a foreign key
+    with a cascade) on purpose: the most useful correction to learn from is
+    often on a link that was later deleted, and losing it with the link
+    would throw away exactly the data that improves the rules.
+    """
+
+    __tablename__ = "classification_feedback"
+    __table_args__ = (Index("ix_feedback_workspace_created", "workspace_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    link_id: Mapped[int] = mapped_column(Integer, index=True)
+    url: Mapped[str] = mapped_column(Text)
+    previous_category: Mapped[str] = mapped_column(String(50))
+    new_category: Mapped[str] = mapped_column(String(50))
+    previous_confidence: Mapped[float] = mapped_column(default=0.0)
+    previous_matched_rule: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -6,6 +6,7 @@ from app.classifier import llm, rules
 from app.classifier.rules import (
     CATEGORIES,
     ClassificationResult,
+    detect_language,
     extract_url_spans,
     extract_urls,
     hash_url,
@@ -26,6 +27,7 @@ __all__ = [
     "CATEGORIES",
     "ClassificationResult",
     "classify_link",
+    "detect_language",
     "extract_url_spans",
     "extract_urls",
     "hash_url",

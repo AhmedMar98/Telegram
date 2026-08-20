@@ -48,7 +48,7 @@ from telethon.sessions import StringSession  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.ingest import IngestSummary, ingest_text  # noqa: E402
+from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 
 logger = logging.getLogger("collector")
@@ -78,6 +78,49 @@ def _entity_ref(channel: Channel) -> str | int:
     return int(channel.tg_channel_id)
 
 
+def _button_urls(message: object) -> list[str]:
+    """URL targets on a message's inline keyboard.
+
+    Telegram bots routinely post the actual download link on a button and
+    leave the message body as pure marketing copy, so a collector that only
+    reads ``raw_text`` misses precisely the link the post exists to share.
+
+    ``reply_markup`` is absent on most messages and its shape varies by
+    button type (URL buttons carry ``.url``; callback and switch-inline
+    buttons do not), so every access is guarded rather than assumed.
+    """
+    markup = getattr(message, "reply_markup", None)
+    urls: list[str] = []
+    for row in getattr(markup, "rows", None) or []:
+        for button in getattr(row, "buttons", None) or []:
+            url = getattr(button, "url", None)
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                urls.append(url)
+    return urls
+
+
+def _forward_origin(message: object) -> str | None:
+    """Human-readable name of where a forwarded message came from.
+
+    Telethon exposes the origin through several mutually exclusive fields
+    depending on whether the source was a channel, a user, or a sender who
+    hid their account, so each is tried in turn and a missing origin simply
+    means the message was not forwarded.
+    """
+    forward = getattr(message, "forward", None)
+    if forward is None:
+        return None
+    name = getattr(forward, "from_name", None)
+    if isinstance(name, str) and name:
+        return name
+    chat = getattr(forward, "chat", None) or getattr(forward, "sender", None)
+    for attribute in ("title", "username", "first_name"):
+        value = getattr(chat, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 async def _collect_channel(client: TelegramClient, db: Session, channel: Channel) -> int:
     label = channel.username or channel.tg_channel_id
     try:
@@ -105,6 +148,8 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
                 text=message.raw_text or "",
                 message_id=message.id,
                 posted_at=message.date.replace(tzinfo=None) if message.date else None,
+                button_urls=_button_urls(message),
+                forwarded_from=_forward_origin(message),
                 summary=summary,
             )
             new_watermark = max(new_watermark, message.id)
@@ -132,6 +177,15 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
         summary.duplicates,
         new_watermark,
     )
+    if summary.truncated_messages:
+        logger.warning(
+            "channel %s (%s): %d message(s) exceeded the %d-link cap, %d link(s) not stored",
+            channel.id,
+            label,
+            summary.truncated_messages,
+            MAX_LINKS_PER_MESSAGE,
+            summary.dropped_links,
+        )
     return summary.stored
 
 

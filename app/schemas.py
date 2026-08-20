@@ -68,6 +68,12 @@ class LinkOut(BaseModel):
     confidence: float
     classified_by: str
     is_favorite: bool
+    # Why this category was chosen, e.g. "extension:pdf". Nullable because
+    # links stored before the column existed have no recorded reason.
+    matched_rule: str | None
+    source_type: str
+    forwarded_from: str | None
+    language: str | None
     raw_text: str | None
     created_at: datetime
     last_checked_at: datetime | None
@@ -75,6 +81,26 @@ class LinkOut(BaseModel):
     is_alive: bool | None
 
     model_config = {"from_attributes": True}
+
+
+class ClassificationFeedbackOut(BaseModel):
+    """One recorded correction: what the classifier said, and what a human said."""
+
+    id: int
+    link_id: int
+    url: str
+    previous_category: str
+    new_category: str
+    previous_confidence: float
+    previous_matched_rule: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackListResponse(BaseModel):
+    total: int
+    items: list[ClassificationFeedbackOut]
 
 
 class SearchResponse(BaseModel):
