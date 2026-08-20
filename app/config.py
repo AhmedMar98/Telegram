@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # minimum instead of burning CI minutes on deliberate key stretching.
     bcrypt_rounds: int = 12
 
+    # --- Collecting accounts ---------------------------------------------
+    # Cap on Telegram accounts per workspace. Not a licensing limit: each
+    # account is a real Telegram login whose session string sits encrypted
+    # in the database, so an unbounded number is an unbounded pile of
+    # bearer credentials. Configurable because the right number depends on
+    # how many channels a deployment follows, not on anything this code
+    # can know.
+    max_accounts_per_workspace: int = 5
+
     # --- Telegram bot (webhook mode; no polling worker required) --------
     bot_token: str | None = None
     bot_webhook_secret: str | None = None

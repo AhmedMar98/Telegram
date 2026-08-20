@@ -49,12 +49,25 @@ class ChannelOut(BaseModel):
 
 
 class TelegramAccountOut(BaseModel):
-    """A collecting account. The session string is never exposed."""
+    """A collecting account and its health. The session string is never exposed."""
 
     id: int
     label: str
     is_active: bool
     created_at: datetime
+    # Two timestamps, not one "last run": a failed run says nothing about
+    # when the account last actually worked, which is the question you ask
+    # when deciding whether it needs re-authorising.
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    last_error: str | None
+    consecutive_failures: int
+    # Set only when the system disabled the account itself. NULL on one a
+    # human disabled — the two need different responses, and a single
+    # is_active boolean cannot say which happened.
+    disabled_reason: str | None
+    links_collected: int
+    channel_count: int
 
     model_config = {"from_attributes": True}
 

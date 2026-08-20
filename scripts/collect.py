@@ -45,6 +45,7 @@ from telethon import TelegramClient  # noqa: E402
 from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
+from app.accounts import record_failure, record_success  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
@@ -54,6 +55,9 @@ from app.models import Channel, TelegramAccount  # noqa: E402
 logger = logging.getLogger("collector")
 
 DEFAULT_MESSAGE_LIMIT = 200
+
+# Telegram's rate limits are per account, so this bound is per account too.
+DEFAULT_MAX_CHANNELS_PER_ACCOUNT = 20
 
 
 def _message_limit() -> int:
@@ -206,6 +210,28 @@ def _ensure_primary_account(db: Session, workspace_id: int, session_string: str)
         db.commit()
 
 
+def _max_channels_per_account() -> int:
+    """Cap on channels one account handles per run, read at call time.
+
+    Telegram rate-limits per *account*, not per workspace, so a workspace
+    that assigns forty channels to one account is asking that one account
+    to trip a FloodWait — which costs the whole run, not just that channel.
+    Spreading the work is the point of multiple accounts; this is the limit
+    that makes the spread matter.
+
+    Channels beyond the cap are not dropped: ordering is by id, and each
+    channel keeps its own watermark, so the ones skipped this run are
+    picked up next run from exactly where they were left.
+    """
+    try:
+        return max(1, int(os.environ.get("COLLECTOR_MAX_CHANNELS_PER_ACCOUNT", DEFAULT_MAX_CHANNELS_PER_ACCOUNT)))
+    except ValueError:
+        logger.warning(
+            "invalid COLLECTOR_MAX_CHANNELS_PER_ACCOUNT, falling back to %d", DEFAULT_MAX_CHANNELS_PER_ACCOUNT
+        )
+        return DEFAULT_MAX_CHANNELS_PER_ACCOUNT
+
+
 def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, is_default: bool) -> list[Channel]:
     """Which channels this account is responsible for.
 
@@ -215,9 +241,14 @@ def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, i
     assign anything.
     """
     query = db.query(Channel).filter(Channel.workspace_id == workspace_id, Channel.is_active.is_(True))
+    limit = _max_channels_per_account()
     if is_default:
-        return query.filter((Channel.account_id == account.id) | (Channel.account_id.is_(None))).all()
-    return query.filter(Channel.account_id == account.id).all()
+        query = query.filter((Channel.account_id == account.id) | (Channel.account_id.is_(None)))
+    else:
+        query = query.filter(Channel.account_id == account.id)
+    # Ordered by id so the cap takes a stable prefix; each channel carries
+    # its own watermark, so a capped run resumes rather than skipping.
+    return query.order_by(Channel.id).limit(limit).all()
 
 
 async def _collect_with_account(
@@ -238,6 +269,10 @@ async def _collect_with_account(
             account.id,
             account.label,
         )
+        # A key mismatch will not fix itself on the next run, so it counts
+        # as a failure like any other and will eventually disable the
+        # account rather than being retried hourly forever.
+        record_failure(db, account, "session string could not be decrypted (FIELD_ENCRYPTION_KEY mismatch)")
         return 0
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
@@ -245,6 +280,7 @@ async def _collect_with_account(
         await client.start()
     except Exception as exc:  # noqa: BLE001 - one bad account must not end the run
         logger.error("account %s (%s): cannot connect: %s", account.id, account.label, exc)
+        record_failure(db, account, f"cannot connect: {exc}")
         return 0
 
     try:
@@ -258,9 +294,11 @@ async def _collect_with_account(
             total,
             len(channels),
         )
+        record_success(db, account, links_collected=total)
         return total
     except Exception as exc:  # noqa: BLE001 - same reasoning as above
         logger.error("account %s (%s): run aborted: %s", account.id, account.label, exc)
+        record_failure(db, account, f"run aborted: {exc}")
         return 0
     finally:
         await client.disconnect()

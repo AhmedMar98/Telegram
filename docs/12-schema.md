@@ -96,6 +96,12 @@
 | `label` | `VARCHAR(100)` | لا | — |
 | `session_string` | `TEXT` | لا | — |
 | `is_active` | `BOOLEAN` | لا | — |
+| `last_success_at` | `DATETIME` | نعم | — |
+| `last_failure_at` | `DATETIME` | نعم | — |
+| `last_error` | `VARCHAR(300)` | نعم | — |
+| `consecutive_failures` | `INTEGER` | لا | — |
+| `disabled_reason` | `VARCHAR(300)` | نعم | — |
+| `links_collected` | `INTEGER` | لا | — |
 | `created_at` | `DATETIME` | لا | — |
 
 **الفهارس:** `ix_telegram_accounts_workspace_id` (workspace_id)
