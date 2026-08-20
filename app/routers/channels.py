@@ -190,7 +190,7 @@ def add_channel(
     return channel
 
 
-@router.patch("/{channel_id}", response_model=ChannelOut)
+@router.patch("/{channel_id:int}", response_model=ChannelOut)
 def reassign_channel(
     channel_id: int,
     payload: ChannelUpdate,
@@ -226,7 +226,24 @@ def reassign_channel(
     return channel
 
 
-@router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+# int converter for the same reason as GET /links/{link_id:int}: a bare
+# path parameter here would also match /channels/accounts.
+@router.get("/{channel_id:int}", response_model=ChannelOut)
+def get_channel(
+    channel_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> Channel:
+    """One channel's details. A foreign id reads as 404, like a missing one."""
+    channel = (
+        db.query(Channel)
+        .filter(Channel.id == channel_id, Channel.workspace_id == current_user.workspace_id)
+        .first()
+    )
+    if channel is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="channel not found")
+    return channel
+
+
+@router.delete("/{channel_id:int}", status_code=status.HTTP_204_NO_CONTENT)
 def deactivate_channel(
     channel_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> Response:

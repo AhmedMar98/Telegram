@@ -131,6 +131,7 @@
   <button onclick="renameWorkspace()">إعادة التسمية</button>
 </div>
 <p id="wsResult" class="muted"></p>
+<p id="accountSummary" class="muted"></p>
 
 <h3>بياناتي</h3>
 <div class="row">
@@ -790,9 +791,18 @@ async function loadChannels() {
 }
 
 async function loadWorkspace() {
-  const res = await api("/auth/me");
+  // /auth/me/summary carries the workspace name plus the counts below, so
+  // this panel costs one request instead of four.
+  const res = await api("/auth/me/summary");
   const data = await res.json();
   document.getElementById("wsName").value = data.workspace_name || "";
+  const since = new Date(data.member_since).toLocaleDateString("ar");
+  const accounts = data.disabled_accounts
+    ? `${data.active_accounts} حساب تجميع نشط و${data.disabled_accounts} معطّل`
+    : `${data.active_accounts} حساب تجميع`;
+  document.getElementById("accountSummary").textContent =
+    `${data.email} — منذ ${since} · ${data.total_links} رابطاً في ${data.total_channels} قناة · ` +
+    `${accounts} · ${data.active_sessions} جلسة مفتوحة`;
 }
 
 async function renameWorkspace() {

@@ -11,11 +11,12 @@ filtered by ``workspace_id`` — this is what makes cross-tenant data leaks
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from app.audit import record as audit_record
 from app.classifier import CATEGORIES
 from app.database import get_db
 from app.deps import get_current_user
+from app.errors import ErrorCode, rate_limited, unprocessable
 from app.ingest import ingest_text, manual_channel
 from app.linkquery import filtered_links as _filtered_query
 from app.models import AuditLog, Channel, ClassificationFeedback, Link, SavedSearch, User
@@ -64,6 +66,7 @@ COLLECTOR_STALL_HOURS = 24
 
 @router.get("", response_model=SearchResponse)
 def search_links(
+    response: Response,
     q: str | None = Query(default=None, max_length=300),
     category: str | None = Query(default=None),
     favorite: bool | None = Query(default=None),
@@ -79,10 +82,7 @@ def search_links(
     current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     if sort not in SORT_OPTIONS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"sort must be one of: {', '.join(SORT_OPTIONS)}",
-        )
+        raise unprocessable(ErrorCode.UNKNOWN_SORT, f"sort must be one of: {', '.join(SORT_OPTIONS)}")
 
     query, ranked = _filtered_query(
         db,
@@ -127,13 +127,37 @@ def search_links(
         query = query.order_by(Link.created_at.desc())
 
     items = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    # Duplicates `total` from the body deliberately: a client that streams
+    # the response, or issues HEAD, can read the count without parsing
+    # JSON — which is the whole point of the convention.
+    response.headers["X-Total-Count"] = str(total)
+
     return SearchResponse(
         total=total, page=page, page_size=page_size, items=[LinkOut.model_validate(i) for i in items]
     )
 
 
 @router.get("/stats", response_model=StatsResponse)
-def stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> StatsResponse:
+def stats(
+    response: Response,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StatsResponse | Response:
+    """Workspace statistics, with a weak ETag.
+
+    The dashboard reloads this after every mutation and on every page
+    load, and most of the time nothing has changed. The tag is derived
+    from the values that would be rendered, so a matching tag means the
+    body would have been byte-identical — not merely "probably the same".
+
+    Deliberately computed *after* the queries rather than from a cheap
+    proxy like a row count: a recategorised link changes the answer
+    without changing any count, and an ETag that misses that is worse
+    than no ETag at all. The saving here is bandwidth and JSON parsing,
+    not database work, and that is stated rather than implied.
+    """
     ws_id = current_user.workspace_id
     total_links = db.query(Link).filter(Link.workspace_id == ws_id).count()
     total_channels = db.query(Channel).filter(Channel.workspace_id == ws_id).count()
@@ -207,7 +231,7 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
     # manual-only — so a missing timestamp is never a warning.
     looks_stalled = hours_since is not None and hours_since > COLLECTOR_STALL_HOURS
 
-    return StatsResponse(
+    payload = StatsResponse(
         total_links=total_links,
         total_channels=total_channels,
         by_category=by_category,
@@ -233,6 +257,16 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         ),
     )
 
+    # Weak validator (W/): the body is semantically, not byte-for-byte,
+    # guaranteed — JSON key order is stable here but nothing in HTTP
+    # requires us to promise that.
+    etag = 'W/"' + hashlib.sha256(payload.model_dump_json().encode("utf-8")).hexdigest()[:32] + '"'
+    if if_none_match == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+
+    response.headers["ETag"] = etag
+    return payload
+
 
 # Generous on purpose: a person pasting several messages in a row must
 # never be throttled. This stops a scripted flood of calls, not normal use.
@@ -256,9 +290,13 @@ def add_links(
     if is_action_rate_limited(
         db, "link_add", scope_id, limit=LINK_ADD_LIMIT, window_minutes=LINK_ADD_WINDOW_MINUTES
     ):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="too many submissions, please slow down",
+        # The window is a known constant, so Retry-After is a fact rather
+        # than an estimate. Without it a client's usual guess is "retry
+        # immediately", which is exactly what the throttle exists to stop.
+        raise rate_limited(
+            ErrorCode.RATE_LIMITED,
+            "too many submissions, please slow down",
+            retry_after_seconds=LINK_ADD_WINDOW_MINUTES * 60,
         )
     record_action_event(db, "link_add", scope_id)
 
@@ -288,7 +326,24 @@ def _owned_link(db: Session, link_id: int, user: User) -> Link:
     return link
 
 
-@router.delete("/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+# ``{link_id:int}`` rather than ``{link_id}``: this route sits before the
+# literal paths declared later in the file (/export.csv, /export.md,
+# /saved, /random), and a bare path parameter matches those too — adding
+# it plainly broke thirty tests by swallowing every one of them. The int
+# converter makes the match structural instead of depending on the order
+# routes happen to be declared in.
+@router.get("/{link_id:int}", response_model=LinkOut)
+def get_link(link_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> Link:
+    """One link in full.
+
+    Everything here was already reachable, but only by paging the list
+    until the row appeared — not a reasonable way to fetch a known id. A
+    foreign id reads as 404, exactly like a nonexistent one.
+    """
+    return _owned_link(db, link_id, current_user)
+
+
+@router.delete("/{link_id:int}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_link(
     link_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> Response:
@@ -313,7 +368,7 @@ def delete_link(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.patch("/{link_id}", response_model=LinkOut)
+@router.patch("/{link_id:int}", response_model=LinkOut)
 def recategorize_link(
     link_id: int,
     payload: LinkCategoryUpdate,
@@ -326,10 +381,7 @@ def recategorize_link(
     ``manual`` so it is never silently revised by a later automatic pass.
     """
     if payload.category not in CATEGORIES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"category must be one of: {', '.join(CATEGORIES)}",
-        )
+        raise unprocessable(ErrorCode.UNKNOWN_CATEGORY, f"category must be one of: {', '.join(CATEGORIES)}")
 
     link = _owned_link(db, link_id, current_user)
     previous = link.category
@@ -402,10 +454,7 @@ def create_saved_search(
     """Store a filter combination under a name. Re-using a name replaces it."""
     unknown = sorted(set(payload.filters) - SAVEABLE_FILTERS)
     if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"unknown filter(s): {', '.join(unknown)}",
-        )
+        raise unprocessable(ErrorCode.UNKNOWN_FILTER, f"unknown filter(s): {', '.join(unknown)}")
 
     existing = (
         db.query(SavedSearch)
@@ -419,9 +468,8 @@ def create_saved_search(
             .scalar()
         )
         if count and count >= MAX_SAVED_SEARCHES:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"at most {MAX_SAVED_SEARCHES} saved searches per workspace",
+            raise unprocessable(
+                ErrorCode.SAVED_SEARCH_LIMIT, f"at most {MAX_SAVED_SEARCHES} saved searches per workspace"
             )
         existing = SavedSearch(workspace_id=current_user.workspace_id, name=payload.name, filters="{}")
         db.add(existing)
@@ -458,7 +506,7 @@ def delete_saved_search(
 _REDIRECTABLE_SCHEMES = ("http://", "https://")
 
 
-@router.get("/{link_id}/open")
+@router.get("/{link_id:int}/open")
 def open_link(
     link_id: int,
     db: Session = Depends(get_db),
@@ -479,10 +527,7 @@ def open_link(
     link = _owned_link(db, link_id, current_user)
 
     if not link.url.lower().startswith(_REDIRECTABLE_SCHEMES):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="this link cannot be opened through the redirect",
-        )
+        raise unprocessable(ErrorCode.NOT_REDIRECTABLE, "this link cannot be opened through the redirect")
 
     link.click_count = (link.click_count or 0) + 1
     db.commit()
@@ -546,7 +591,7 @@ def list_feedback(
     return FeedbackListResponse(total=total, items=[ClassificationFeedbackOut.model_validate(r) for r in rows])
 
 
-@router.post("/{link_id}/archive", response_model=LinkOut)
+@router.post("/{link_id:int}/archive", response_model=LinkOut)
 def set_archived(
     link_id: int,
     is_archived: bool = True,
@@ -574,7 +619,7 @@ def set_archived(
     return link
 
 
-@router.patch("/{link_id}/notes", response_model=LinkOut)
+@router.patch("/{link_id:int}/notes", response_model=LinkOut)
 def set_notes(
     link_id: int,
     payload: LinkNotesUpdate,
@@ -596,7 +641,7 @@ def set_notes(
     return link
 
 
-@router.post("/{link_id}/pin", response_model=LinkOut)
+@router.post("/{link_id:int}/pin", response_model=LinkOut)
 def set_pinned(
     link_id: int,
     is_pinned: bool = True,
@@ -616,7 +661,7 @@ def set_pinned(
     return link
 
 
-@router.post("/{link_id}/favorite", response_model=LinkOut)
+@router.post("/{link_id:int}/favorite", response_model=LinkOut)
 def set_favorite(
     link_id: int,
     is_favorite: bool = True,
@@ -667,10 +712,7 @@ def bulk_recategorize(
 ) -> BulkResult:
     """Recategorize every link matching the given search/category filter."""
     if payload.new_category not in CATEGORIES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"category must be one of: {', '.join(CATEGORIES)}",
-        )
+        raise unprocessable(ErrorCode.UNKNOWN_CATEGORY, f"category must be one of: {', '.join(CATEGORIES)}")
 
     query, _ = _filtered_query(db, current_user.workspace_id, q=payload.q, category=payload.category)
     count = query.update(
