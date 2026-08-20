@@ -82,6 +82,9 @@ class LinkOut(BaseModel):
     last_alive_at: datetime | None
     consecutive_failures: int
     is_archived: bool
+    is_pinned: bool
+    notes: str | None
+    click_count: int
     # A stable label ("ok", "redirect", "blocked", "missing", "throttled",
     # "server_error", "unreachable", "unchecked") derived from the two
     # fields above. Computed server-side so every client agrees on what a
@@ -172,6 +175,7 @@ class StatsResponse(BaseModel):
     added_this_month: int
     vitality: VitalityStats
     collection: CollectionHealth
+    storage: StorageStats
 
 
 class LinkImportRequest(BaseModel):
@@ -190,6 +194,26 @@ class LinkCategoryUpdate(BaseModel):
     """Correct a classification the automatic tiers got wrong."""
 
     category: str
+
+
+class LinkNotesUpdate(BaseModel):
+    """A user's own note about a link. Empty string clears it."""
+
+    notes: str = Field(max_length=2000)
+
+
+class StorageStats(BaseModel):
+    """How much of the free tier's room is used.
+
+    Shown because the plan this runs on is size-limited and the failure
+    mode is writes starting to fail — which is worth seeing coming rather
+    than discovering. ``database_bytes`` is None on SQLite and on any
+    Postgres role without permission to read the size.
+    """
+
+    database_bytes: int | None
+    link_count: int
+    largest_table: str | None
 
 
 class ChangePasswordRequest(BaseModel):

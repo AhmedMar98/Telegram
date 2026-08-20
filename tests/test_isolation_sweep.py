@@ -77,6 +77,9 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/links/{link_id}",
         "/links/{link_id}/favorite",
         "/links/{link_id}/archive",
+        "/links/{link_id}/notes",
+        "/links/{link_id}/pin",
+        "/links/{link_id}/open",
         "/links/saved/{saved_id}",
     }
     assert discovered == expected, (
@@ -109,13 +112,30 @@ def attacker(client: TestClient, victim_ids):
     return client
 
 
+# A body that each PATCH endpoint will actually accept. Sending the wrong
+# shape makes the endpoint answer 422 from validation before it ever looks
+# the resource up, so the probe would pass without testing ownership at all.
+_VALID_PATCH_BODIES = {
+    "/links/{link_id}": {"category": "games"},
+    "/links/{link_id}/notes": {"notes": "probe"},
+    "/channels/{channel_id}": {"account_id": None},
+}
+
+
 def _probe(attacker: TestClient, path: str, method: str, ids: dict[str, int]):
     url = path.format(**ids)
-    body = {
-        "PATCH": {"category": "games"} if "links" in path else {"account_id": None},
-        "POST": {},
-    }.get(method)
+    body = _VALID_PATCH_BODIES.get(path) if method == "PATCH" else ({} if method == "POST" else None)
     return attacker.request(method, url, json=body)
+
+
+def test_every_patch_path_has_a_valid_probe_body():
+    """Guards the guard: a PATCH path with no body here is probed with
+    None, gets a 422 from validation, and never reaches the ownership
+    check it is supposed to be testing."""
+    patch_paths = {path for path, method in _parameterised_paths() if method == "PATCH"}
+    assert patch_paths <= set(_VALID_PATCH_BODIES), (
+        f"no probe body for: {sorted(patch_paths - set(_VALID_PATCH_BODIES))}"
+    )
 
 
 @pytest.mark.parametrize(("path", "method"), _parameterised_paths())
