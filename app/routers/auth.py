@@ -9,14 +9,23 @@ isolated from every other from the very first row it ever writes.
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from app.account_data import delete_workspace, export_workspace
 from app.audit import record as audit_record
 from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
 from app.models import User, Workspace
-from app.schemas import ChangePasswordRequest, LoginRequest, RegisterRequest, SessionOut
+from app.schemas import (
+    ChangePasswordRequest,
+    DeleteAccountRequest,
+    DeleteAccountResponse,
+    LoginRequest,
+    RegisterRequest,
+    SessionOut,
+)
 from app.security import (
     clear_login_failures,
     constant_time_equals,
@@ -233,3 +242,58 @@ def revoke_session_endpoint(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/me/export")
+def export_my_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> JSONResponse:
+    """Download everything this workspace holds, as one JSON document.
+
+    Portability matters more than usual here: the free database tier this
+    runs on is time-limited, so being able to take the whole workspace out
+    — not just its links — is part of the product rather than a nicety.
+
+    This is a technical portability tool. It is deliberately *not* labelled
+    a GDPR/CCPA subject-access response: the platform makes no compliance
+    claim, and calling it one would be the claim.
+    """
+    payload = export_workspace(db, current_user.workspace_id)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="workspace.export",
+        detail=f"{len(payload['links'])} link(s)",
+    )
+    db.commit()
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": 'attachment; filename="workspace-export.json"'},
+    )
+
+
+@router.post("/me/delete", response_model=DeleteAccountResponse)
+def delete_my_workspace(
+    payload: DeleteAccountRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DeleteAccountResponse:
+    """Erase this workspace and everything in it. There is no undo.
+
+    Two independent confirmations are required — the account password and
+    a typed literal — because the failure mode is unrecoverable and the
+    request is otherwise indistinguishable from any other authenticated
+    call.
+    """
+    if payload.confirm != "DELETE":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="confirm must be the literal string DELETE",
+        )
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="password is incorrect")
+
+    removed = delete_workspace(db, current_user.workspace_id)
+    return DeleteAccountResponse(deleted=removed)

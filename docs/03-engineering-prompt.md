@@ -51,12 +51,14 @@ in-conversation approval.
 | Runtime | Python, FastAPI + SQLAlchemy 2 + Alembic + Pydantic v2 | `requirements.txt` |
 | Deployment | Render free web service, `runtime: python`, no Dockerfile | `render.yaml` |
 | Database | Render Postgres (free); SQLite for local dev/test only | `app/config.py`, `app/database.py` |
-| API + UI endpoints | 29 (26 distinct paths) | `app.openapi()["paths"]`, count values |
+| API + UI endpoints | 33 (29 distinct paths) | `app.openapi()["paths"]`, count values |
 | Alembic migrations | 7 | `ls alembic/versions \| wc -l` |
-| Test suite | 163 passing, 12 skipped (Postgres-only, skip on SQLite) | `pytest -q` in a clean venv |
-| Coverage | 83% (`app` + `scripts`) | `pytest --cov=app --cov=scripts` |
+| Test suite | 213 passing, 12 skipped (Postgres-only, skip on SQLite) | `pytest -q` in a clean venv |
+| Coverage | 82% (`app` + `scripts`) | `pytest --cov=app --cov=scripts` |
 | Ingestion paths | 3: manual paste, Telegram Desktop JSON export, scheduled Telethon collector (GitHub Actions cron, credential-required, optional) | `app/ingest.py`, `scripts/import_telegram_export.py`, `scripts/collect.py` |
 | Classification tiers | 2: local rules (always-on, zero network) → optional Groq LLM (only below 0.6 confidence, never blocking) | `app/classifier/` |
+| Collection accounts | Many per workspace; channels bind via `Channel.account_id`, unassigned fall to the default; per-account failure isolation | `scripts/collect.py`, `scripts/add_account.py` |
+| Self-service data | `GET /auth/me/export`, `POST /auth/me/delete` (password + literal `DELETE`) | `app/account_data.py` |
 | Tenant isolation | Application-layer (`workspace_id` on every row, every query filtered) — not database-native RLS | `app/models.py`, isolation tests in `tests/test_auth_and_isolation.py` |
 | Session security | bcrypt password hashes; random 256-bit session tokens, SHA-256 hash stored, revocable per-device | `app/security.py` |
 | Field encryption | Telegram session strings encrypted at rest with Fernet (`FIELD_ENCRYPTION_KEY`) | `app/crypto.py`, shipped in PR #15 |
@@ -204,11 +206,11 @@ what is easiest to describe impressively.
 
 | # | Item | Priority | Why |
 |---|---|---|---|
-| 1 | Link vitality checking (HTTP reachability, scheduled, zero-cost) | P0 | Named as the strongest candidate in `docs/02-core-idea.md` since before this prompt existed; the product's core value ("the collection stays retrievable") is undermined by not knowing which links are already dead |
-| 2 | Multi-account collection (the `TelegramAccount` model already supports it; the collector uses one session) | P1 | Real gap, bounded scope, no new infrastructure required |
-| 3 | Search precision for multi-link messages (currently the whole message is indexed, so pasting twenty links in one message makes them all match any shared word) | P1 | Named limitation in `docs/02-core-idea.md`; fixable by storing/searching per-URL context instead of whole-message text |
-| 4 | Self-service data export + delete (`/me/export`, `/me/delete`) | P2 | Real technical value even without a compliance claim attached to it; keep the claim honest per §4.7 |
-| 5 | Dashboard dark mode, channel-scoped search filter, workspace rename | P2 | Low-risk product polish from the existing 50-idea backlog, no architectural impact |
+| ~~1~~ | ~~Link vitality checking~~ | **done** | Shipped: `scripts/check_link_vitality.py` + `.github/workflows/vitality.yml`, `?alive=` filter |
+| ~~2~~ | ~~Multi-account collection~~ | **done** | Shipped: collector iterates every active account, `Channel.account_id` binding, per-account failure isolation |
+| ~~3~~ | ~~Search precision for multi-link messages~~ | **done** | Shipped: `split_context()` gives each URL its own segment instead of the whole message |
+| ~~4~~ | ~~Self-service data export + delete~~ | **done** | Shipped: `app/account_data.py`, with a metadata-driven test that fails if a new `workspace_id` table escapes deletion |
+| 5 | Dashboard dark mode, channel-scoped search filter, workspace rename | P2 | Low-risk product polish from the existing 50-idea backlog, no architectural impact — the only item left on this list |
 
 Anything not on this list — a second LLM provider, database-native RLS,
 semantic/vector search, billing, federated learning, WhatsApp, a mobile

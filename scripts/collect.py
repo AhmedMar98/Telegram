@@ -46,7 +46,7 @@ from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.audit import record as audit_record  # noqa: E402
-from app.crypto import encrypt_field  # noqa: E402
+from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.ingest import IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
@@ -135,6 +135,83 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
     return summary.stored
 
 
+def _ensure_primary_account(db: Session, workspace_id: int, session_string: str) -> None:
+    """Bootstrap the workspace's first account from the environment.
+
+    Only the *first* account comes from ``TG_SESSION_STRING``; further
+    accounts are registered with scripts/add_account.py, which is why this
+    is a no-op once any account exists.
+    """
+    exists = db.query(TelegramAccount).filter(TelegramAccount.workspace_id == workspace_id).first()
+    if exists is None:
+        db.add(
+            TelegramAccount(
+                workspace_id=workspace_id, label="primary", session_string=encrypt_field(session_string)
+            )
+        )
+        db.commit()
+
+
+def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, is_default: bool) -> list[Channel]:
+    """Which channels this account is responsible for.
+
+    A channel names its collecting account through ``account_id``. Channels
+    that name nobody fall to the default account, so a single-account
+    workspace keeps working exactly as before without anyone having to
+    assign anything.
+    """
+    query = db.query(Channel).filter(Channel.workspace_id == workspace_id, Channel.is_active.is_(True))
+    if is_default:
+        return query.filter((Channel.account_id == account.id) | (Channel.account_id.is_(None))).all()
+    return query.filter(Channel.account_id == account.id).all()
+
+
+async def _collect_with_account(
+    db: Session, account: TelegramAccount, channels: list[Channel], api_id: int, api_hash: str
+) -> int:
+    """Run one account's share of the channels. Never raises.
+
+    Per-account isolation is the point: a revoked session, a banned
+    account or a network failure on one account must not cost the run the
+    channels every *other* account could still have collected.
+    """
+    try:
+        session_string = decrypt_field(account.session_string)
+    except InvalidToken:
+        logger.error(
+            "account %s (%s): session string could not be decrypted — wrong FIELD_ENCRYPTION_KEY, "
+            "or the row predates encryption; skipping",
+            account.id,
+            account.label,
+        )
+        return 0
+
+    client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    try:
+        await client.start()
+    except Exception as exc:  # noqa: BLE001 - one bad account must not end the run
+        logger.error("account %s (%s): cannot connect: %s", account.id, account.label, exc)
+        return 0
+
+    try:
+        total = 0
+        for channel in channels:
+            total += await _collect_channel(client, db, channel)
+        logger.info(
+            "account %s (%s): %d new link(s) across %d channel(s)",
+            account.id,
+            account.label,
+            total,
+            len(channels),
+        )
+        return total
+    except Exception as exc:  # noqa: BLE001 - same reasoning as above
+        logger.error("account %s (%s): run aborted: %s", account.id, account.label, exc)
+        return 0
+    finally:
+        await client.disconnect()
+
+
 async def collect() -> None:
     api_id = int(os.environ["TG_API_ID"])
     api_hash = os.environ["TG_API_HASH"]
@@ -143,34 +220,41 @@ async def collect() -> None:
 
     db = SessionLocal()
     try:
-        account = (
+        _ensure_primary_account(db, workspace_id, session_string)
+
+        accounts = (
             db.query(TelegramAccount)
             .filter(TelegramAccount.workspace_id == workspace_id, TelegramAccount.is_active.is_(True))
-            .first()
+            .order_by(TelegramAccount.id)
+            .all()
         )
-        if account is None:
-            account = TelegramAccount(
-                workspace_id=workspace_id, label="primary", session_string=encrypt_field(session_string)
-            )
-            db.add(account)
-            db.commit()
-
-        channels = (
-            db.query(Channel).filter(Channel.workspace_id == workspace_id, Channel.is_active.is_(True)).all()
-        )
-        if not channels:
-            logger.info("no active channels configured for this workspace; nothing to do")
+        if not accounts:
+            logger.info("no active collecting accounts for this workspace; nothing to do")
             return
 
-        client = TelegramClient(StringSession(session_string), api_id, api_hash)
-        await client.start()
-        try:
-            total = 0
-            for channel in channels:
-                total += await _collect_channel(client, db, channel)
-            logger.info("done: %d new link(s) across %d channel(s)", total, len(channels))
-        finally:
-            await client.disconnect()
+        # The lowest-numbered account is the default, and inherits every
+        # channel that has not been assigned to a specific account.
+        default_account_id = accounts[0].id
+
+        total = 0
+        collected_channels = 0
+        for account in accounts:
+            channels = _channels_for(db, workspace_id, account, is_default=account.id == default_account_id)
+            if not channels:
+                logger.info("account %s (%s): no channels assigned", account.id, account.label)
+                continue
+            collected_channels += len(channels)
+            total += await _collect_with_account(db, account, channels, api_id, api_hash)
+
+        if collected_channels == 0:
+            logger.info("no active channels configured for this workspace; nothing to do")
+            return
+        logger.info(
+            "done: %d new link(s) across %d channel(s) using %d account(s)",
+            total,
+            collected_channels,
+            len(accounts),
+        )
     finally:
         db.close()
 

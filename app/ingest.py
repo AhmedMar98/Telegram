@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.classifier import classify_link, extract_urls, hash_url
+from app.classifier import classify_link, extract_url_spans, hash_url, split_context
 from app.models import Channel, Link
 
 # Synthetic channel identifiers for links that did not arrive from a real
@@ -127,19 +127,26 @@ def ingest_text(
     summary = summary or IngestSummary()
     summary.scanned += 1
 
-    urls = extract_urls(text)
-    for url in extra_urls or []:
-        if url not in urls:
-            urls.append(url)
+    spans = extract_url_spans(text)
+    contexts = split_context(text, spans)
+    pairs = list(zip([url for url, _, _ in spans], contexts, strict=True))
 
-    for url in urls:
+    # Hidden hyperlink targets have no position in the visible text, so
+    # there is no segment to attribute to them; they take the whole message.
+    seen = {url for url, _ in pairs}
+    for url in extra_urls or []:
+        if url not in seen:
+            seen.add(url)
+            pairs.append((url, text))
+
+    for url, context in pairs:
         if store_link(
             db,
             workspace_id=workspace_id,
             channel_id=channel_id,
             message_id=message_id,
             url=url,
-            raw_text=text,
+            raw_text=context,
             posted_at=posted_at,
         ):
             summary.stored += 1
