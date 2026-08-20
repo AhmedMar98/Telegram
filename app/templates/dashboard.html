@@ -13,8 +13,10 @@
     <option value="domain">النطاق</option>
     <option value="category">التصنيف</option>
     <option value="confidence">الثقة</option>
+    <option value="checked">الأحدث فحصاً</option>
   </select>
   <label class="muted"><input type="checkbox" id="favoriteOnly" onchange="search()"> المفضّلة فقط</label>
+  <label class="muted"><input type="checkbox" id="includeArchived" onchange="search()"> إظهار المؤرشفة</label>
   <select id="aliveFilter">
     <option value="">كل الروابط (حيويّة أو لا)</option>
     <option value="true">الحيّة فقط</option>
@@ -38,6 +40,10 @@
   <button onclick="bulkDelete()">حذف كل النتائج الحالية</button>
 </div>
 <p id="stats" class="muted"></p>
+<!-- A proportion bar rather than a chart library: three divs sized by
+     percentage say the same thing as a pie, cost nothing, and cannot
+     break the strict no-external-asset rule this page runs under. -->
+<div id="vitalityBar" style="display:flex; height:.5rem; border-radius:.25rem; overflow:hidden; margin-bottom:.75rem;"></div>
 <div id="results"></div>
 <div class="row" style="align-items:center;">
   <button id="prevBtn" onclick="changePage(-1)">السابق</button>
@@ -103,9 +109,32 @@ async function loadStats() {
   const res = await api("/links/stats");
   const data = await res.json();
   const topDomains = data.top_domains.slice(0, 5).map(([d, n]) => `${d} (${n})`).join("، ");
+  const v = data.vitality;
+  const deadest = v.deadest_domains.slice(0, 3).map(([d, n]) => `${d} (${n})`).join("، ");
   document.getElementById("stats").textContent =
     `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}` +
-    (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "");
+    ` | هذا الأسبوع: ${data.added_this_week} | هذا الشهر: ${data.added_this_month}` +
+    ` | 🟢 ${v.alive} · 🔴 ${v.dead} · ⚪ ${v.unchecked}` +
+    (v.archived ? ` · 🗄 ${v.archived}` : "") +
+    (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "") +
+    (deadest ? ` | الأكثر موتاً: ${deadest}` : "");
+  renderVitalityBar(v);
+}
+
+function renderVitalityBar(v) {
+  const bar = document.getElementById("vitalityBar");
+  const total = v.alive + v.dead + v.unchecked;
+  if (!total) { bar.innerHTML = ""; return; }
+  const segments = [
+    ["#16a34a", v.alive, "حيّة"],
+    ["#dc2626", v.dead, "ميتة"],
+    ["#9ca3af", v.unchecked, "لم تُفحص"],
+  ];
+  bar.innerHTML = segments
+    .filter(([, count]) => count > 0)
+    .map(([colour, count, label]) =>
+      `<div style="width:${(count / total * 100).toFixed(1)}%; background:${colour};" title="${label}: ${count}"></div>`)
+    .join("");
 }
 
 const CATEGORIES = {{ categories | tojson }};
@@ -131,6 +160,12 @@ async function recategorize(id, category) {
 async function toggleFavorite(id, makeFavorite) {
   await api(`/links/${id}/favorite?is_favorite=${makeFavorite}`, { method: "POST" });
   search(false);
+}
+
+async function toggleArchive(id, makeArchived) {
+  await api(`/links/${id}/archive?is_archived=${makeArchived}`, { method: "POST" });
+  search(false);
+  loadStats();
 }
 
 function exportCsv() {
@@ -171,10 +206,33 @@ async function bulkRecategorize() {
   search(false);
 }
 
-function vitalityBadge(isAlive) {
-  if (isAlive === true) return "🟢 حيّة";
-  if (isAlive === false) return "🔴 ميتة";
-  return "⚪ لم تُفحص بعد";
+// The server decides the category; the page only decides the wording. Keeps
+// "what does a 403 mean" in one place instead of two.
+const STATUS_LABEL = {
+  ok: "🟢 حيّة",
+  redirect: "🟢 حيّة (تحويل)",
+  blocked: "🟠 محجوبة عن الفاحص",
+  missing: "🔴 غير موجودة",
+  throttled: "🟡 الخادم يحدّ الطلبات",
+  server_error: "🟡 عطل مؤقّت في الخادم",
+  unreachable: "🟡 تعذّر الوصول",
+  unchecked: "⚪ لم تُفحص بعد",
+  client_error: "🔴 خطأ في الطلب",
+};
+
+function vitalityBadge(i) {
+  return STATUS_LABEL[i.status_category] || STATUS_LABEL.unchecked;
+}
+
+function vitalityTitle(i) {
+  const parts = [];
+  parts.push(i.last_checked_at ? "آخر فحص: " + new Date(i.last_checked_at).toLocaleString("ar") : "لم يُفحص بعد");
+  if (i.http_status) parts.push("HTTP " + i.http_status);
+  // The question a dead link actually raises is "when did this last work?",
+  // which last_checked_at cannot answer.
+  if (i.last_alive_at) parts.push("آخر مرة كانت حيّة: " + new Date(i.last_alive_at).toLocaleString("ar"));
+  if (i.consecutive_failures > 0) parts.push(`إخفاقات متتالية: ${i.consecutive_failures}`);
+  return escapeText(parts.join(" · "));
 }
 
 async function search(resetPage = true) {
@@ -195,6 +253,7 @@ async function search(resetPage = true) {
   if (channelId) params.set("channel_id", channelId);
   const language = document.getElementById("languageFilter").value;
   if (language) params.set("language", language);
+  if (document.getElementById("includeArchived").checked) params.set("include_archived", "true");
   const res = await api("/links?" + params.toString());
   const data = await res.json();
   const el = document.getElementById("results");
@@ -207,8 +266,9 @@ async function search(resetPage = true) {
          </select>
          <span class="muted" title="${classificationReason(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
          ${originBadge(i)}
-         <span class="muted" title="${i.last_checked_at ? "آخر فحص: " + new Date(i.last_checked_at).toLocaleString("ar") + (i.http_status ? " (HTTP " + i.http_status + ")" : "") : "لم يُفحص بعد"}">${vitalityBadge(i.is_alive)}</span>
+         <span class="muted" title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
          <button onclick="toggleFavorite(${i.id}, ${!i.is_favorite})" title="مفضّلة">${i.is_favorite ? "★" : "☆"}</button>
+         <button onclick="toggleArchive(${i.id}, ${!i.is_archived})" title="${i.is_archived ? "إعادة من الأرشيف" : "أرشفة (إخفاء من النتائج دون حذف)"}">${i.is_archived ? "↩" : "🗄"}</button>
          <button onclick="removeLink(${i.id})" style="margin-inline-start:auto;">حذف</button>
        </div>
      </div>`

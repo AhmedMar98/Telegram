@@ -74,9 +74,9 @@ def test_check_one_reports_alive_on_200():
         async with httpx.AsyncClient(transport=_transport(handler)) as client:
             return await check_one(client, "https://example.com/a")
 
-    is_alive, status = asyncio.run(run())
-    assert is_alive is True
-    assert status == 200
+    result = asyncio.run(run())
+    assert result.outcome == "alive"
+    assert result.http_status == 200
 
 
 def test_check_one_reports_dead_on_404():
@@ -87,9 +87,9 @@ def test_check_one_reports_dead_on_404():
         async with httpx.AsyncClient(transport=_transport(handler)) as client:
             return await check_one(client, "https://example.com/gone")
 
-    is_alive, status = asyncio.run(run())
-    assert is_alive is False
-    assert status == 404
+    result = asyncio.run(run())
+    assert result.outcome == "dead"
+    assert result.http_status == 404
 
 
 def test_check_one_falls_back_to_get_when_head_is_rejected():
@@ -105,13 +105,17 @@ def test_check_one_falls_back_to_get_when_head_is_rejected():
         async with httpx.AsyncClient(transport=_transport(handler)) as client:
             return await check_one(client, "https://example.com/head-not-allowed")
 
-    is_alive, status = asyncio.run(run())
+    result = asyncio.run(run())
     assert calls == ["HEAD", "GET"]
-    assert is_alive is True
-    assert status == 200
+    assert result.outcome == "alive"
+    assert result.http_status == 200
 
 
-def test_check_one_treats_network_failure_as_dead_with_no_status():
+def test_check_one_treats_network_failure_as_unreachable_not_dead():
+    """A retired domain and a momentary DNS failure look identical from
+    here, so one connection error is not a death sentence — only a streak
+    of them is."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
 
@@ -119,12 +123,12 @@ def test_check_one_treats_network_failure_as_dead_with_no_status():
         async with httpx.AsyncClient(transport=_transport(handler)) as client:
             return await check_one(client, "https://unreachable.example/x")
 
-    is_alive, status = asyncio.run(run())
-    assert is_alive is False
-    assert status is None
+    result = asyncio.run(run())
+    assert result.outcome == "unreachable"
+    assert result.http_status is None
 
 
-def test_check_one_treats_timeout_as_dead_with_no_status():
+def test_check_one_treats_timeout_as_unreachable_not_dead():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.TimeoutException("timed out", request=request)
 
@@ -132,9 +136,9 @@ def test_check_one_treats_timeout_as_dead_with_no_status():
         async with httpx.AsyncClient(transport=_transport(handler)) as client:
             return await check_one(client, "https://slow.example/x")
 
-    is_alive, status = asyncio.run(run())
-    assert is_alive is False
-    assert status is None
+    result = asyncio.run(run())
+    assert result.outcome == "unreachable"
+    assert result.http_status is None
 
 
 # --- _select_batch: never-checked first, then oldest-checked ----------------------

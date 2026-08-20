@@ -79,6 +79,15 @@ class LinkOut(BaseModel):
     last_checked_at: datetime | None
     http_status: int | None
     is_alive: bool | None
+    last_alive_at: datetime | None
+    consecutive_failures: int
+    is_archived: bool
+    # A stable label ("ok", "redirect", "blocked", "missing", "throttled",
+    # "server_error", "unreachable", "unchecked") derived from the two
+    # fields above. Computed server-side so every client agrees on what a
+    # 403 means, and machine-readable so it can be filtered rather than
+    # parsed out of prose.
+    status_category: str
 
     model_config = {"from_attributes": True}
 
@@ -110,11 +119,27 @@ class SearchResponse(BaseModel):
     items: list[LinkOut]
 
 
+class VitalityStats(BaseModel):
+    """The alive/dead/unchecked split, plus where the rot is concentrated."""
+
+    alive: int
+    dead: int
+    unchecked: int
+    archived: int
+    # Domains with the most dead links, worst first. A source that mostly
+    # posts links that stop working is a quality signal about the source,
+    # which is not visible one link at a time.
+    deadest_domains: list[tuple[str, int]]
+
+
 class StatsResponse(BaseModel):
     total_links: int
     total_channels: int
     by_category: dict[str, int]
     top_domains: list[tuple[str, int]]
+    added_this_week: int
+    added_this_month: int
+    vitality: VitalityStats
 
 
 class LinkImportRequest(BaseModel):

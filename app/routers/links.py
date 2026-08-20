@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
@@ -38,9 +39,11 @@ from app.schemas import (
     LinkOut,
     SearchResponse,
     StatsResponse,
+    VitalityStats,
 )
 from app.search import fts_document, fts_query, fts_rank
 from app.security import is_action_rate_limited, record_action_event
+from app.timeutil import utcnow
 
 router = APIRouter(prefix="/links", tags=["links"])
 
@@ -49,7 +52,7 @@ def _dialect(db: Session) -> str:
     return db.bind.dialect.name if db.bind is not None else "sqlite"
 
 
-SORT_OPTIONS = ("date", "domain", "category", "confidence")
+SORT_OPTIONS = ("date", "domain", "category", "confidence", "checked")
 
 
 def _filtered_query(
@@ -62,6 +65,7 @@ def _filtered_query(
     alive: bool | None = None,
     channel_id: int | None = None,
     language: str | None = None,
+    include_archived: bool = False,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
 
@@ -70,6 +74,12 @@ def _filtered_query(
     """
     query = db.query(Link).filter(Link.workspace_id == workspace_id)
     ranked = False
+
+    if not include_archived:
+        # Archiving is the point of the feature: dead links accumulate and
+        # drown out live ones. They stay reachable via ?include_archived=true
+        # and are never removed from exports, which are about completeness.
+        query = query.filter(Link.is_archived.is_(False))
 
     if category:
         query = query.filter(Link.category == category)
@@ -115,6 +125,7 @@ def search_links(
     alive: bool | None = Query(default=None),
     channel_id: int | None = Query(default=None),
     language: str | None = Query(default=None, max_length=10),
+    include_archived: bool = Query(default=False),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
@@ -136,6 +147,7 @@ def search_links(
         alive=alive,
         channel_id=channel_id,
         language=language,
+        include_archived=include_archived,
     )
     total = query.count()
 
@@ -145,6 +157,11 @@ def search_links(
         query = query.order_by(Link.category.asc(), Link.created_at.desc())
     elif sort == "confidence":
         query = query.order_by(Link.confidence.desc(), Link.created_at.desc())
+    elif sort == "checked":
+        # Most recently verified first. Different question from "newest":
+        # this answers "what do I currently know to be working?", which the
+        # collection date cannot.
+        query = query.order_by(Link.last_checked_at.desc(), Link.created_at.desc())
     elif ranked and q:
         # Default "date" sort yields to relevance when there is a search
         # term and Postgres can actually rank it — a plain date order would
@@ -178,11 +195,54 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         .limit(10)
     ).all()
 
+    # One grouped query for the vitality split rather than three counts:
+    # is_alive has exactly three states (True / False / NULL = never
+    # checked), so grouping on it answers all three at once.
+    vitality_rows = db.execute(
+        select(Link.is_alive, func.count(Link.id)).where(Link.workspace_id == ws_id).group_by(Link.is_alive)
+    ).all()
+    vitality_counts = {row[0]: row[1] for row in vitality_rows}
+
+    archived = (
+        db.query(func.count(Link.id)).filter(Link.workspace_id == ws_id, Link.is_archived.is_(True)).scalar() or 0
+    )
+
+    deadest_rows = db.execute(
+        select(Link.domain, func.count(Link.id))
+        .where(Link.workspace_id == ws_id, Link.is_alive.is_(False))
+        .group_by(Link.domain)
+        .order_by(func.count(Link.id).desc())
+        .limit(10)
+    ).all()
+
+    now = utcnow()
+    added_this_week = (
+        db.query(func.count(Link.id))
+        .filter(Link.workspace_id == ws_id, Link.created_at >= now - timedelta(days=7))
+        .scalar()
+        or 0
+    )
+    added_this_month = (
+        db.query(func.count(Link.id))
+        .filter(Link.workspace_id == ws_id, Link.created_at >= now - timedelta(days=30))
+        .scalar()
+        or 0
+    )
+
     return StatsResponse(
         total_links=total_links,
         total_channels=total_channels,
         by_category=by_category,
         top_domains=[(row[0], row[1]) for row in domain_rows],
+        added_this_week=added_this_week,
+        added_this_month=added_this_month,
+        vitality=VitalityStats(
+            alive=vitality_counts.get(True, 0),
+            dead=vitality_counts.get(False, 0),
+            unchecked=vitality_counts.get(None, 0),
+            archived=archived,
+            deadest_domains=[(row[0], row[1]) for row in deadest_rows],
+        ),
     )
 
 
@@ -356,6 +416,34 @@ def list_feedback(
     return FeedbackListResponse(total=total, items=[ClassificationFeedbackOut.model_validate(r) for r in rows])
 
 
+@router.post("/{link_id}/archive", response_model=LinkOut)
+def set_archived(
+    link_id: int,
+    is_archived: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Link:
+    """Hide a link from default results without deleting it.
+
+    The intended use is dead links: they pile up and bury the working ones,
+    but deleting them loses the record that the content existed and where
+    it was posted. Pass ``?is_archived=false`` to bring one back.
+    """
+    link = _owned_link(db, link_id, current_user)
+    link.is_archived = is_archived
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="link.archive" if is_archived else "link.unarchive",
+        target_type="link",
+        target_id=str(link.id),
+    )
+    db.commit()
+    db.refresh(link)
+    return link
+
+
 @router.post("/{link_id}/favorite", response_model=LinkOut)
 def set_favorite(
     link_id: int,
@@ -444,8 +532,11 @@ def _export_row(link: Link) -> dict:
         "posted_at": link.posted_at.isoformat() if link.posted_at else None,
         "collected_at": link.created_at.isoformat() if link.created_at else None,
         "is_alive": link.is_alive,
+        "status_category": link.status_category,
         "http_status": link.http_status,
         "last_checked_at": link.last_checked_at.isoformat() if link.last_checked_at else None,
+        "last_alive_at": link.last_alive_at.isoformat() if link.last_alive_at else None,
+        "is_archived": link.is_archived,
         "context": (link.raw_text or "")[:300],
     }
 
@@ -498,7 +589,10 @@ def export_links_csv(
     Rows are streamed rather than materialised so a large collection does
     not have to fit in memory on a small free instance.
     """
-    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category)
+    # include_archived: an export is about completeness. Archiving hides a
+    # link from the dashboard; silently omitting it from the user's own
+    # data export would make the export a lie.
+    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category, include_archived=True)
 
     audit_record(
         db,
@@ -545,7 +639,10 @@ def export_links_json(
     Symmetric with the CSV export (same rows, same filter), for callers
     that want structured data rather than a spreadsheet.
     """
-    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category)
+    # include_archived: an export is about completeness. Archiving hides a
+    # link from the dashboard; silently omitting it from the user's own
+    # data export would make the export a lie.
+    query, _ = _filtered_query(db, current_user.workspace_id, q=None, category=category, include_archived=True)
 
     audit_record(
         db,

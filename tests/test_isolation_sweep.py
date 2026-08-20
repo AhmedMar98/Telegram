@@ -73,6 +73,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/channels/{channel_id}",
         "/links/{link_id}",
         "/links/{link_id}/favorite",
+        "/links/{link_id}/archive",
     }
     assert discovered == expected, (
         f"Tenant-scoped paths changed. New ones must be probed below or "
