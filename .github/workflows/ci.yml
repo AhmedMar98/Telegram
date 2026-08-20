@@ -32,6 +32,14 @@ jobs:
       - name: bandit (security scan)
         run: bandit -r app scripts -lll -iii
 
+      # Catches known CVEs in pinned dependencies. A one-off audit rots the
+      # moment a new advisory lands, so it runs on every push rather than
+      # whenever somebody remembers to check.
+      - name: pip-audit (dependency vulnerabilities)
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-collector.txt
+
       - name: Alembic migrations apply and match the models
         env:
           DATABASE_URL: "sqlite:///./_ci_alembic.db"
