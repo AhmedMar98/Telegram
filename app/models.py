@@ -104,6 +104,29 @@ class TelegramAccount(Base):
     label: Mapped[str] = mapped_column(String(100))
     session_string: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # When this account last completed a collection run, and last failed
+    # one. Kept as two timestamps rather than one "last run": a run that
+    # failed tells you nothing about when the account last actually worked,
+    # which is the question you ask when deciding whether to re-authorise it.
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The most recent failure's message, truncated. Shown to the operator
+    # because "this account is failing" without saying how is a dead end —
+    # a revoked session and a network blip need opposite responses.
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Consecutive failed runs. Reset to zero by any success. Drives the
+    # automatic disable, so that a revoked account stops being retried
+    # every hour forever with nobody noticing.
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Why the account is not active, when it was disabled automatically.
+    # NULL on an account a human disabled, which is the distinction that
+    # matters: one needs investigating, the other was intended.
+    disabled_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Links this account has ever collected. A running counter rather than
+    # a join through channels: channels can be reassigned between accounts,
+    # so a computed join would retroactively credit one account's history
+    # to another. The counter records what actually happened.
+    links_collected: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

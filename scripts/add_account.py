@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import get_settings  # noqa: E402
 from app.crypto import encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import TelegramAccount, Workspace  # noqa: E402
@@ -51,6 +52,18 @@ def add_account(workspace_id: int, label: str, session_string: str) -> int:
         )
         if clash is not None:
             raise SystemExit(f"workspace {workspace_id} already has an account labelled {label!r}")
+
+        # Not a licensing limit: every account is a real Telegram login
+        # whose session string sits encrypted in this database, so an
+        # unbounded number is an unbounded pile of bearer credentials.
+        limit = get_settings().max_accounts_per_workspace
+        existing = db.query(TelegramAccount).filter(TelegramAccount.workspace_id == workspace_id).count()
+        if existing >= limit:
+            raise SystemExit(
+                f"workspace {workspace_id} already has {existing} accounts "
+                f"(limit {limit}). Raise MAX_ACCOUNTS_PER_WORKSPACE, or remove one "
+                f"with scripts/remove_account.py."
+            )
 
         account = TelegramAccount(
             workspace_id=workspace_id, label=label, session_string=encrypt_field(session_string)

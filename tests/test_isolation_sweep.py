@@ -17,7 +17,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database import SessionLocal
 from app.main import app
+from app.models import TelegramAccount, User
 from tests.conftest import register_workspace
 
 # Paths that legitimately take no resource id, or are not tenant-scoped at
@@ -81,6 +83,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/links/{link_id}/pin",
         "/links/{link_id}/open",
         "/links/saved/{saved_id}",
+        "/channels/accounts/{account_id}/reactivate",
     }
     assert discovered == expected, (
         f"Tenant-scoped paths changed. New ones must be probed below or "
@@ -97,12 +100,27 @@ def victim_ids(client: TestClient) -> dict[str, int]:
     link = client.get("/links").json()["items"][0]
     session = client.get("/auth/sessions").json()[0]
     saved = client.post("/links/saved", json={"name": "victim search", "filters": {"q": "secret"}}).json()
+
+    # A collecting account exists only once the collector has registered
+    # one, so the fixture creates it directly — the sweep needs a real id
+    # of every kind the API exposes, not only the ones the API creates.
+    db = SessionLocal()
+    try:
+        workspace_id = db.query(User).filter(User.email == "victim@example.com").one().workspace_id
+        account = TelegramAccount(workspace_id=workspace_id, label="victim account", session_string="x")
+        db.add(account)
+        db.commit()
+        account_id = account.id
+    finally:
+        db.close()
+
     client.post("/auth/logout")
     return {
         "channel_id": channel["id"],
         "link_id": link["id"],
         "session_id": session["id"],
         "saved_id": saved["id"],
+        "account_id": account_id,
     }
 
 

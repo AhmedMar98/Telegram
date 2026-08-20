@@ -101,6 +101,10 @@
   <p id="addResult" class="muted"></p>
 </div>
 
+<h2>حسابات الجمع</h2>
+<p class="muted">حساب الجمع ليس البوت: هو حساب تيليجرام عادي يقرأ القنوات. البوت واحد فقط وللبحث.</p>
+<div id="accountHealth"></div>
+
 <h2>القنوات</h2>
 <div class="row">
   <input id="chId" placeholder="معرّف القناة (tg_channel_id)">
@@ -706,6 +710,45 @@ let ACCOUNTS = [];
 async function loadAccounts() {
   const res = await api("/channels/accounts");
   ACCOUNTS = await res.json();
+  renderAccountHealth();
+}
+
+// A silently failing collecting account is the same class of problem as a
+// stopped collector: everything looks fine and nothing arrives. This panel
+// is the only place that says which account is broken and why.
+function renderAccountHealth() {
+  const el = document.getElementById("accountHealth");
+  if (!ACCOUNTS.length) {
+    el.innerHTML = "<p class='muted'>لا حسابات جمع مسجّلة. النظام يعمل يدوياً بدونها.</p>";
+    return;
+  }
+  el.innerHTML = ACCOUNTS.map(a => {
+    const when = t => t ? new Date(t).toLocaleString("ar") : "لم يحدث بعد";
+    // An automatic disable and one a human chose need different responses,
+    // so they are shown differently rather than both as "معطّل".
+    const state = a.is_active
+      ? "🟢 نشط"
+      : (a.disabled_reason ? "🔴 عُطِّل تلقائياً" : "⚪ معطّل يدوياً");
+    const problem = a.disabled_reason || a.last_error;
+    return `<div class="card">
+      <strong>${escapeText(a.label)}</strong> — ${state}
+      <div class="muted" style="margin-top:.35rem;">
+        آخر نجاح: ${when(a.last_success_at)} ·
+        آخر فشل: ${when(a.last_failure_at)} ·
+        إخفاقات متتالية: ${a.consecutive_failures} ·
+        القنوات: ${a.channel_count} ·
+        الروابط المجموعة: ${a.links_collected.toLocaleString("ar")}
+      </div>
+      ${problem ? `<div class="error" style="margin-top:.35rem;">${escapeText(problem)}</div>` : ""}
+      ${a.is_active ? "" : `<button onclick="reactivateAccount(${a.id})" style="margin-top:.5rem;">أعد التفعيل بعد إصلاح السبب</button>`}
+    </div>`;
+  }).join("");
+}
+
+async function reactivateAccount(id) {
+  await api(`/channels/accounts/${id}/reactivate`, { method: "POST" });
+  announce("أُعيد تفعيل الحساب.");
+  loadAccounts();
 }
 
 function accountOptions(selectedId) {
