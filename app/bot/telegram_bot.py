@@ -19,7 +19,14 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -306,18 +313,27 @@ async def handle_help(message: Message, db: Session) -> None:
 @dispatcher.callback_query(F.data.startswith("pg:"))
 async def handle_page(callback: CallbackQuery, db: Session) -> None:
     """Next/previous on a result list."""
-    if callback.message is None or callback.data is None:
+    # callback.message is Message | InaccessibleMessage | None. Telegram
+    # sends InaccessibleMessage when the original message is too old for
+    # the bot to read back. It is not a Message subclass, and answering
+    # through it means an API call about a message the bot cannot access —
+    # so the user gets an explanation instead of a button that spins and
+    # then fails. Written as an InaccessibleMessage rejection rather than a
+    # Message acceptance so the narrowing does not also reject anything
+    # that merely behaves like a Message.
+    origin = callback.message
+    if callback.data is None or origin is None or isinstance(origin, InaccessibleMessage):
+        await callback.answer("هذه الرسالة أقدم من أن يصل إليها البوت. أعد البحث من جديد.", show_alert=True)
         return
-    workspace_id = _resolve_workspace(db, str(callback.message.chat.id))
+
+    workspace_id = _resolve_workspace(db, str(origin.chat.id))
     if workspace_id is None:
         await callback.answer(NOT_LINKED, show_alert=True)
         return
 
     _, page_text, token = callback.data.split(":", 2)
     q, favorite, category = _decode_filter(token)
-    await _answer_results(
-        callback.message, db, workspace_id, q=q, page=int(page_text), favorite=favorite, category=category
-    )
+    await _answer_results(origin, db, workspace_id, q=q, page=int(page_text), favorite=favorite, category=category)
     # Telegram shows a loading spinner on the button until this is called.
     await callback.answer()
 

@@ -549,3 +549,75 @@ def test_every_command_refuses_an_unlinked_chat():
         message = FakeMessage(chat_id=9999)
         _run(handler, message, *args)
         assert "غير مرتبطة" in message.sent[0], f"{handler.__name__} answered an unlinked chat"
+
+
+class FakeCallback:
+    """A callback query, with the message it came from."""
+
+    def __init__(self, data: str, message: object):
+        self.data = data
+        self.message = message
+        self.answers: list[tuple[str | None, bool]] = []
+
+    async def answer(self, text: str | None = None, show_alert: bool = False) -> None:
+        self.answers.append((text, show_alert))
+
+
+def _inaccessible(chat_id: int):
+    """A real aiogram InaccessibleMessage — what Telegram sends when the
+    original message is too old for the bot to read back. Built from the
+    library's own type rather than a stand-in, because the handler's whole
+    job here is to recognise that exact type."""
+    from aiogram.types import Chat, InaccessibleMessage
+
+    return InaccessibleMessage(chat=Chat(id=chat_id, type="private"), message_id=1, date=0)
+
+
+def test_paging_returns_the_next_page():
+    workspace_id = _linked(2016)
+    _seed(workspace_id, [f"https://example.com/{i}.pdf" for i in range(bot.PAGE_SIZE + 2)])
+
+    message = FakeMessage(chat_id=2016)
+    callback = FakeCallback(data=f"pg:1:{bot._encode_filter(None, None, None)}", message=message)
+    db = SessionLocal()
+    try:
+        asyncio.run(bot.handle_page(callback, db))
+    finally:
+        db.close()
+
+    assert "النتائج 6" in message.sent[0]
+    # The spinner on the button only stops once the callback is answered.
+    assert callback.answers
+
+
+def test_paging_an_inaccessible_message_explains_instead_of_crashing():
+    """callback.message is Message | InaccessibleMessage | None. Answering
+    through the inaccessible variant means an API call about a message the
+    bot cannot access, so the user gets an explanation and the button stops
+    spinning instead."""
+    _linked(2017)
+    callback = FakeCallback(
+        data=f"pg:1:{bot._encode_filter(None, None, None)}",
+        message=_inaccessible(2017),
+    )
+    db = SessionLocal()
+    try:
+        asyncio.run(bot.handle_page(callback, db))
+    finally:
+        db.close()
+
+    assert callback.answers, "the callback was never answered"
+    text, show_alert = callback.answers[0]
+    assert "أقدم" in (text or "")
+    assert show_alert is True
+
+
+def test_paging_from_an_unlinked_chat_is_refused():
+    callback = FakeCallback(data=f"pg:1:{bot._encode_filter(None, None, None)}", message=FakeMessage(chat_id=2018))
+    db = SessionLocal()
+    try:
+        asyncio.run(bot.handle_page(callback, db))
+    finally:
+        db.close()
+
+    assert any("غير مرتبطة" in (t or "") for t, _ in callback.answers)
