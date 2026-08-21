@@ -14,16 +14,18 @@ import csv
 import hashlib
 import io
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit import record as audit_record
 from app.classifier import CATEGORIES
 from app.clientinfo import client_ip
+from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.errors import ErrorCode, rate_limited, unprocessable
@@ -269,6 +271,37 @@ def stats(
     return payload
 
 
+async def _link_import_body(request: Request) -> LinkImportRequest:
+    """Read the request body as either JSON or plain text.
+
+    Validation stays in ``LinkImportRequest`` for both paths, so the size
+    cap and the empty-body rejection are identical no matter which content
+    type was used — two code paths agreeing by construction rather than by
+    being written twice.
+    """
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    raw = await request.body()
+
+    if content_type == "text/plain":
+        text = raw.decode("utf-8", errors="replace")
+    else:
+        try:
+            parsed = json.loads(raw or b"")
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise unprocessable(ErrorCode.MALFORMED_BODY, "body is not valid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise unprocessable(ErrorCode.MALFORMED_BODY, "expected a JSON object with a 'text' field")
+        candidate = parsed.get("text")
+        if not isinstance(candidate, str):
+            raise unprocessable(ErrorCode.MALFORMED_BODY, "expected a JSON object with a 'text' field")
+        text = candidate
+
+    try:
+        return LinkImportRequest(text=text)
+    except ValidationError as exc:
+        raise unprocessable(ErrorCode.MALFORMED_BODY, "text must be between 1 and 50000 characters") from exc
+
+
 # Generous on purpose: a person pasting several messages in a row must
 # never be throttled. This stops a scripted flood of calls, not normal use.
 LINK_ADD_LIMIT = 60
@@ -276,8 +309,8 @@ LINK_ADD_WINDOW_MINUTES = 5
 
 
 @router.post("", response_model=LinkImportResponse, status_code=status.HTTP_201_CREATED)
-def add_links(
-    payload: LinkImportRequest,
+async def add_links(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> LinkImportResponse:
@@ -286,7 +319,21 @@ def add_links(
     This is the entry point that does not depend on Telegram API access at
     all, so the platform is usable before (or without) the automated
     collector being wired up.
+
+    Accepts two content types (idea 180):
+
+    - ``application/json`` — ``{"text": "..."}``, what the dashboard sends
+      and what every existing client sends.
+    - ``text/plain`` — the text itself, nothing else. That is the shape a
+      shell one-liner or an automation tool produces without help, and
+      requiring those callers to wrap a URL in JSON is friction for no
+      gain now that a key makes programmatic use a supported path.
+
+    The body is read once and dispatched on Content-Type, rather than
+    declared as a Pydantic model, because FastAPI binds a model to JSON
+    only — a text/plain body would be rejected before this function ran.
     """
+    payload = await _link_import_body(request)
     scope_id = str(current_user.workspace_id)
     if is_action_rate_limited(
         db, "link_add", scope_id, limit=LINK_ADD_LIMIT, window_minutes=LINK_ADD_WINDOW_MINUTES
@@ -794,6 +841,8 @@ def export_links_csv(
     request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
+    since: date | None = Query(default=None, description="only links collected on or after this date"),
+    until: date | None = Query(default=None, description="only links collected on or before this date"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -809,14 +858,16 @@ def export_links_csv(
     # include_archived: an export is about completeness. Archiving hides a
     # link from the dashboard; silently omitting it from the user's own
     # data export would make the export a lie.
-    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
+    query, _ = _filtered_query(
+        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
+    )
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=csv category={category or 'all'} q={q or ''}",
+        detail=f"format=csv category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
         ip_address=client_ip(request),
     )
     db.commit()
@@ -851,6 +902,8 @@ def export_links_json(
     request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
+    since: date | None = Query(default=None, description="only links collected on or after this date"),
+    until: date | None = Query(default=None, description="only links collected on or before this date"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -862,14 +915,16 @@ def export_links_json(
     # include_archived: an export is about completeness. Archiving hides a
     # link from the dashboard; silently omitting it from the user's own
     # data export would make the export a lie.
-    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
+    query, _ = _filtered_query(
+        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
+    )
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=json category={category or 'all'} q={q or ''}",
+        detail=f"format=json category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
         ip_address=client_ip(request),
     )
     db.commit()
@@ -896,6 +951,16 @@ def export_links_json(
 _MARKDOWN_ESCAPES = str.maketrans({"[": r"\[", "]": r"\]", "(": r"\(", ")": r"\)", "\\": "\\\\"})
 
 
+def _yaml_safe(value: str) -> str:
+    """A value safe to sit inside a double-quoted YAML scalar.
+
+    Quotes and newlines are the two characters that would end the scalar
+    early and turn the front matter into a parse error for every reader
+    that actually reads it — which is the whole audience for the block.
+    """
+    return value.replace("\\", "").replace('"', "'").replace("\n", " ").replace("\r", " ").strip()
+
+
 def _markdown_safe(text: str) -> str:
     return text.translate(_MARKDOWN_ESCAPES).replace("\n", " ").strip()
 
@@ -905,6 +970,8 @@ def export_links_markdown(
     request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
+    since: date | None = Query(default=None, description="only links collected on or after this date"),
+    until: date | None = Query(default=None, description="only links collected on or before this date"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -919,19 +986,38 @@ def export_links_markdown(
     a curated share is the point — exporting the whole workspace as prose
     would not be.
     """
-    query, _ = _filtered_query(db, current_user.workspace_id, q=q, category=category, include_archived=True)
+    query, _ = _filtered_query(
+        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
+    )
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=md category={category or 'all'} q={q or ''}",
+        detail=f"format=md category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
         ip_address=client_ip(request),
     )
     db.commit()
 
+    settings = get_settings()
+
     def rows():
+        # YAML front matter (idea 166). Obsidian and Notion read it as
+        # note properties; anything else shows it as three lines of text
+        # at the top, which is why it is deliberately short. Values are
+        # quoted and the search term is stripped of quotes and newlines,
+        # because an unescaped one would break the block for every reader
+        # that does parse it.
+        yield "---\n"
+        yield f'exported_at: "{utcnow().isoformat(timespec="seconds")}"\n'
+        yield f'source: "{settings.app_name}"\n'
+        if q:
+            yield f'query: "{_yaml_safe(q)}"\n'
+        if category:
+            yield f'category: "{_yaml_safe(category)}"\n'
+        yield "---\n\n"
+
         heading = "# روابط" + (f" — بحث: {_markdown_safe(q)}" if q else "")
         yield heading + "\n\n"
 

@@ -10,6 +10,8 @@ depending on which surface asked. One builder, one behaviour.
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
+
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Query as OrmQuery
 from sqlalchemy.orm import Session
@@ -33,6 +35,8 @@ def filtered_links(
     channel_id: int | None = None,
     language: str | None = None,
     domain: str | None = None,
+    since: date | None = None,
+    until: date | None = None,
     include_archived: bool = False,
 ) -> tuple[OrmQuery[Link], bool]:
     """The base query shared by search, export and bulk actions.
@@ -58,6 +62,16 @@ def filtered_links(
             query = query.filter(Link.category == wanted[0])
         elif wanted:
             query = query.filter(Link.category.in_(wanted))
+
+    # A date window on when the link was collected (idea 179). Compared
+    # against midnight boundaries rather than the bare dates so a
+    # DateTime column is not silently truncated: `created_at <= until`
+    # with a date would exclude everything collected *during* the last
+    # day, which reads as an off-by-one to anyone using it.
+    if since is not None:
+        query = query.filter(Link.created_at >= datetime.combine(since, time.min))
+    if until is not None:
+        query = query.filter(Link.created_at < datetime.combine(until, time.min) + timedelta(days=1))
 
     if favorite is not None:
         query = query.filter(Link.is_favorite == favorite)

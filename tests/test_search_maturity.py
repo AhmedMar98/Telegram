@@ -349,10 +349,18 @@ def test_markdown_export_marks_dead_links(client: TestClient):
     assert "رابط ميت" in client.get("/links/export.md").text
 
 
-def test_markdown_export_of_an_empty_workspace_is_just_a_heading(client: TestClient):
+def test_markdown_export_of_an_empty_workspace_is_just_front_matter_and_a_heading(client: TestClient):
+    """Idea 166 added the YAML block, so this is no longer only the
+    heading — but the point it was written to pin still holds: an empty
+    workspace produces no link lines and no empty category sections."""
     register_workspace(client, email="mdempty@example.com", workspace_name="MDEmpty")
+
     body = client.get("/links/export.md").text
-    assert body.strip() == "# روابط"
+
+    assert body.startswith("---\n")
+    assert body.rstrip().endswith("# روابط")
+    assert "- [" not in body
+    assert "\n## " not in body
 
 
 def test_markdown_export_requires_authentication(client: TestClient):
