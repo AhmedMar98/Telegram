@@ -25,7 +25,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.alerts import default_for, is_known
+from app.alerts import ADULT_CONTENT, default_for, is_known
 from app.models import AuthSession, BotLink, Notification, NotificationPreference
 from app.timeutil import utcnow
 
@@ -160,6 +160,40 @@ async def raise_alert(
     notification.delivered_count = delivered
     db.commit()
     return notification
+
+
+# How many adult URLs a single alert lists before it summarises the rest.
+# A collection run over a channel that posts nothing else would otherwise
+# paste hundreds of them into a chat.
+_ADULT_URLS_LISTED = 5
+
+
+async def report_adult_links(db: Session, workspace_id: int, urls: list[str]) -> Notification | None:
+    """Idea 152: say that adult-classified links were just stored.
+
+    Called by every ingestion path *after* it commits, never from inside
+    ``store_link`` — see ``app.ingest.IngestSummary.adult_urls`` for why.
+
+    The URLs come from message text somebody else wrote, so they go through
+    the same escaping as a User-Agent does: a link is content here, not
+    markup, and a chat that renders it as markup is a chat that can be
+    aimed by whoever posts to the channel.
+    """
+    if not urls:
+        return None
+
+    shown = [_escape(url)[:200] for url in urls[:_ADULT_URLS_LISTED]]
+    remainder = len(urls) - len(shown)
+    body = "\n".join(
+        [
+            f"صُنِّف {len(urls)} رابط جديد ضمن محتوى البالغين:",
+            *(f"  • {url}" for url in shown),
+            *([f"  و{remainder} غيرها."] if remainder > 0 else []),
+            "",
+            "التصنيف آليّ ويخطئ. صحِّحه من اللوحة إن كان في غير محلّه.",
+        ]
+    )
+    return await raise_alert(db, workspace_id, ADULT_CONTENT.key, title="🔞 محتوى للبالغين", body=body)
 
 
 def set_preference(db: Session, workspace_id: int, alert_type: str, enabled: bool) -> bool:

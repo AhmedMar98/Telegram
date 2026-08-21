@@ -30,6 +30,11 @@ def test_malformed_json_response_falls_back(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "fake-key")
 
     class FakeResponse:
+        # Real httpx responses always carry headers, and the classifier now
+        # reads rate-limit information off them (idea 160). A double without
+        # them is a double that does not model the thing it stands in for.
+        headers: dict[str, str] = {}
+
         def raise_for_status(self):
             return None
 
@@ -47,6 +52,11 @@ def test_valid_response_improves_result(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "fake-key")
 
     class FakeResponse:
+        # Real httpx responses always carry headers, and the classifier now
+        # reads rate-limit information off them (idea 160). A double without
+        # them is a double that does not model the thing it stands in for.
+        headers: dict[str, str] = {}
+
         def raise_for_status(self):
             return None
 
@@ -76,6 +86,11 @@ def test_the_groq_request_is_given_a_bounded_timeout(monkeypatch):
     captured: dict = {}
 
     class FakeResponse:
+        # Real httpx responses always carry headers, and the classifier now
+        # reads rate-limit information off them (idea 160). A double without
+        # them is a double that does not model the thing it stands in for.
+        headers: dict[str, str] = {}
+
         def raise_for_status(self):
             return None
 

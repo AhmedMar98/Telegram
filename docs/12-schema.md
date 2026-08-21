@@ -67,13 +67,14 @@
 | `workspace_id` | `INTEGER` | لا | FK → workspaces.id |
 | `link_id` | `INTEGER` | لا | — |
 | `url` | `TEXT` | لا | — |
+| `domain` | `VARCHAR(300)` | لا | — |
 | `previous_category` | `VARCHAR(50)` | لا | — |
 | `new_category` | `VARCHAR(50)` | لا | — |
 | `previous_confidence` | `FLOAT` | لا | — |
 | `previous_matched_rule` | `VARCHAR(100)` | نعم | — |
 | `created_at` | `DATETIME` | لا | — |
 
-**الفهارس:** `ix_classification_feedback_link_id` (link_id)، `ix_classification_feedback_workspace_id` (workspace_id)، `ix_feedback_workspace_created` (workspace_id, created_at)
+**الفهارس:** `ix_classification_feedback_link_id` (link_id)، `ix_classification_feedback_workspace_id` (workspace_id)، `ix_feedback_workspace_created` (workspace_id, created_at)، `ix_feedback_workspace_domain` (workspace_id, domain)
 
 ## `notification_preferences`
 

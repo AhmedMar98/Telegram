@@ -36,6 +36,7 @@ from app.database import SessionLocal
 from app.ingest import ingest_text, manual_channel
 from app.linkquery import filtered_links
 from app.models import BotLink, BotLinkCode, Channel, Link
+from app.notify import report_adult_links
 from app.timeutil import utcnow
 from app.vitality import status_category
 
@@ -361,6 +362,11 @@ async def handle_other(message: Message, db: Session) -> None:
         await message.answer(
             f"وُجد {summary.total_found} رابط — أُضيف {summary.stored} جديد، و{summary.duplicates} موجود مسبقاً."
         )
+        # Redundant-looking on this path — the person is right here and just
+        # sent the link — but the alert is what makes the *record* exist in
+        # the notification centre, and a path that skipped it would make
+        # "every adult link is reported" false depending on how it arrived.
+        await report_adult_links(db, workspace_id, summary.adult_urls)
         return
 
     if text and not text.startswith("/"):

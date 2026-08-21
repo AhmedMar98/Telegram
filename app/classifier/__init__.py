@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.classifier import llm, rules
 from app.classifier.rules import (
+    ADULT_CATEGORY,
     CATEGORIES,
     ClassificationResult,
     detect_language,
@@ -24,6 +25,7 @@ def classify_link(url: str, raw_text: str | None = None) -> ClassificationResult
 
 
 __all__ = [
+    "ADULT_CATEGORY",
     "CATEGORIES",
     "ClassificationResult",
     "classify_link",

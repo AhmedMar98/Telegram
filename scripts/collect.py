@@ -46,13 +46,15 @@ from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.accounts import record_failure, record_success  # noqa: E402
-from app.alerts import COLLECTOR_FAILED  # noqa: E402
+from app.alerts import COLLECTOR_FAILED, GROQ_QUOTA  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
+from app.classifier.llm import lowest_quota  # noqa: E402
+from app.config import get_settings  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
-from app.notify import raise_alert  # noqa: E402
+from app.notify import raise_alert, report_adult_links  # noqa: E402
 
 logger = logging.getLogger("collector")
 
@@ -127,7 +129,9 @@ def _forward_origin(message: object) -> str | None:
     return None
 
 
-async def _collect_channel(client: TelegramClient, db: Session, channel: Channel) -> int:
+async def _collect_channel(
+    client: TelegramClient, db: Session, channel: Channel, run: IngestSummary | None = None
+) -> int:
     label = channel.username or channel.tg_channel_id
     try:
         entity = await client.get_entity(_entity_ref(channel))
@@ -175,6 +179,10 @@ async def _collect_channel(client: TelegramClient, db: Session, channel: Channel
         detail=f"{summary.stored} new link(s)",
     )
     db.commit()
+    if run is not None:
+        # After the commit, not before: these URLs are only real once the
+        # transaction that stored them succeeded.
+        run.adult_urls.extend(summary.adult_urls)
     logger.info(
         "channel %s (%s): %d new link(s), %d duplicate(s), watermark -> %d",
         channel.id,
@@ -254,7 +262,12 @@ def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, i
 
 
 async def _collect_with_account(
-    db: Session, account: TelegramAccount, channels: list[Channel], api_id: int, api_hash: str
+    db: Session,
+    account: TelegramAccount,
+    channels: list[Channel],
+    api_id: int,
+    api_hash: str,
+    run: IngestSummary | None = None,
 ) -> int:
     """Run one account's share of the channels. Never raises.
 
@@ -288,7 +301,7 @@ async def _collect_with_account(
     try:
         total = 0
         for channel in channels:
-            total += await _collect_channel(client, db, channel)
+            total += await _collect_channel(client, db, channel, run)
         logger.info(
             "account %s (%s): %d new link(s) across %d channel(s)",
             account.id,
@@ -304,6 +317,41 @@ async def _collect_with_account(
         return 0
     finally:
         await client.disconnect()
+
+
+async def _warn_on_groq_quota(db: Session, workspace_id: int) -> None:
+    """Idea 160: warn while there is still quota left to warn about.
+
+    Reads only what a Groq response actually reported during this run. If
+    the optional tier is unconfigured, was never called, or reports no
+    rate-limit headers at all, ``lowest_quota()`` is None and nothing is
+    sent — the idea is conditional on those headers existing, and this is
+    where that condition is honoured rather than assumed.
+
+    The collector is the right place for the check because it is where
+    classification happens in bulk; the web process classifies one link at
+    a time, on a manual paste.
+    """
+    reading = lowest_quota()
+    if reading is None:
+        return
+
+    fraction = reading.fraction_left
+    if fraction > get_settings().groq_quota_alert_fraction:
+        return
+
+    await raise_alert(
+        db,
+        workspace_id,
+        GROQ_QUOTA.key,
+        title="⏳ اقتراب نفاد حصة Groq",
+        body=(
+            f"المتبقّي من حصّة «{reading.dimension}» هو {reading.remaining:.0f} "
+            f"من {reading.limit:.0f} ({fraction * 100:.0f}٪).\n"
+            "عند النفاد يعود التصنيف إلى القواعد وحدها — وهو السلوك المصمَّم، "
+            "لا عطل: لا يتوقّف الجمع ولا البحث."
+        ),
+    )
 
 
 async def collect() -> None:
@@ -333,6 +381,9 @@ async def collect() -> None:
         total = 0
         collected_channels = 0
         working_accounts = 0
+        # Run-level, not per-channel: a workspace following twenty channels
+        # would otherwise get twenty separate messages from one run.
+        run = IngestSummary()
         for account in accounts:
             channels = _channels_for(db, workspace_id, account, is_default=account.id == default_account_id)
             if not channels:
@@ -340,7 +391,7 @@ async def collect() -> None:
                 continue
             collected_channels += len(channels)
             before = account.consecutive_failures
-            total += await _collect_with_account(db, account, channels, api_id, api_hash)
+            total += await _collect_with_account(db, account, channels, api_id, api_hash, run)
             # A run that raised increments the counter; one that worked
             # resets it. Comparing across the call is how this tells the
             # two apart without duplicating the bookkeeping.
@@ -368,6 +419,11 @@ async def collect() -> None:
                     "افحص «حسابات الجمع» في لوحة التحكم: جلسة ملغاة تحتاج إعادة تفويض."
                 ),
             )
+        # Idea 152. Sent once for the whole run, after every channel has
+        # committed, so nothing is announced that a rollback took back.
+        await report_adult_links(db, workspace_id, run.adult_urls)
+        await _warn_on_groq_quota(db, workspace_id)
+
         logger.info(
             "done: %d new link(s) across %d channel(s) using %d account(s)",
             total,

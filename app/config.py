@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     storage_limit_bytes: int = 1_073_741_824  # 1 GiB
     storage_alert_fraction: float = 0.8
 
+    # Idea 160. Warn while there is still enough quota left to matter: at
+    # 10% of a daily allowance there is usually most of a day to react, and
+    # a threshold much lower would fire only once the tier had effectively
+    # already stopped. Only ever consulted when a Groq response actually
+    # reported a limit — see app/classifier/llm.py.
+    groq_quota_alert_fraction: float = 0.1
+
     # --- Field-level encryption -------------------------------------------
     # Encrypts secrets that (unlike passwords or session tokens) must be
     # recoverable in their original form — today, only a collected Telegram

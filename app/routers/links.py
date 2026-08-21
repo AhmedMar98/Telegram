@@ -30,8 +30,10 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.errors import ErrorCode, rate_limited, unprocessable
 from app.ingest import ingest_text, manual_channel
+from app.instability import report_if_unstable
 from app.linkquery import filtered_links as _filtered_query
 from app.models import AuditLog, Channel, ClassificationFeedback, Link, SavedSearch, User
+from app.notify import report_adult_links
 from app.schemas import (
     BulkDeleteRequest,
     BulkRecategorizeRequest,
@@ -358,6 +360,9 @@ async def add_links(
         detail=f"{summary.stored} new, {summary.duplicates} duplicate(s)",
     )
     db.commit()
+    # After the commit — see app.ingest.IngestSummary.adult_urls. Sending
+    # first would announce links a failed transaction never stored.
+    await report_adult_links(db, current_user.workspace_id, summary.adult_urls)
     return LinkImportResponse(found=summary.total_found, stored=summary.stored, duplicates=summary.duplicates)
 
 
@@ -417,7 +422,7 @@ def delete_link(
 
 
 @router.patch("/{link_id:int}", response_model=LinkOut)
-def recategorize_link(
+async def recategorize_link(
     link_id: int,
     payload: LinkCategoryUpdate,
     db: Session = Depends(get_db),
@@ -444,6 +449,7 @@ def recategorize_link(
                 workspace_id=current_user.workspace_id,
                 link_id=link.id,
                 url=link.url,
+                domain=link.domain,
                 previous_category=previous,
                 new_category=payload.category,
                 previous_confidence=link.confidence,
@@ -463,6 +469,10 @@ def recategorize_link(
         detail=f"{previous} -> {payload.category}",
     )
     db.commit()
+    if payload.category != previous:
+        # After the commit, so the correction that triggers the count is
+        # itself included in it. Idea 163.
+        await report_if_unstable(db, current_user.workspace_id, link.domain)
     db.refresh(link)
     return link
 
