@@ -8,6 +8,34 @@
 
 > المستودع خاص، لذا يجب أن تمنح Render صلاحية الوصول إليه عند أول ربط (زر "Configure account" في شاشة Render).
 
+## الوثائق
+
+**جديد هنا؟** ابدأ بـ[`docs/20-quickstart.md`](docs/20-quickstart.md) — خمس خطوات،
+بلا حساب تلغرام وبلا مفاتيح. أو شاهد [الجولة المصوّرة](docs/30-walkthrough.md)
+بلقطات حقيقية من التطبيق وهو يعمل.
+
+| تريد | الوثيقة |
+|---|---|
+| أوّل ثلاثين دقيقة | [`docs/20-quickstart.md`](docs/20-quickstart.md) |
+| جولة مصوّرة | [`docs/30-walkthrough.md`](docs/30-walkthrough.md) |
+| معنى مصطلح | [`docs/21-glossary.md`](docs/21-glossary.md) |
+| أسئلة صريحة عن حدود الخطة المجانية | [`docs/22-faq.md`](docs/22-faq.md) |
+| شيء لا يعمل | [`docs/23-troubleshooting.md`](docs/23-troubleshooting.md) |
+| لماذا بُنيت هكذا + رسم التدفّق | [`docs/24-decisions.md`](docs/24-decisions.md) |
+| تشغيلها وصيانتها | [`docs/25-operator-guide.md`](docs/25-operator-guide.md) |
+| قراءة نتائج CI | [`docs/26-reading-ci.md`](docs/26-reading-ci.md) |
+| ما تحقّق وما **لن** يُبنى | [`docs/27-roadmap.md`](docs/27-roadmap.md) |
+| أمر `curl` لكل نقطة API | [`docs/28-api-examples.md`](docs/28-api-examples.md) |
+| كل متغيّرات البيئة | [`docs/29-env-vars.md`](docs/29-env-vars.md) |
+| ما رُفض ولماذا | [`docs/06-rejected.md`](docs/06-rejected.md) |
+| ماذا تفعل وقت العطل | [`docs/19-runbook.md`](docs/19-runbook.md) |
+| المساهمة بكود | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| English | [`README.en.md`](README.en.md) |
+
+**ثلاث منها مولَّدة آلياً** — `12-schema` و`28-api-examples` و`29-env-vars` —
+ولكلٍّ اختبار قِدَم يفشل إن تغيّر مصدرها ولم يُعَد توليدها. وثيقةٌ صحيحة
+لأنّها مُولَّدة أفضل من وثيقة صحيحة لأنّ أحداً تذكّر.
+
 ## المعمارية (لماذا هي مجانية 100٪ فعلاً)
 
 | المكوّن | أين يعمل | التكلفة |
