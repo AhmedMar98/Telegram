@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 import httpx
 
@@ -56,6 +58,10 @@ def try_improve(url: str, raw_text: str | None, fallback: ClassificationResult) 
 
     try:
         response = httpx.post(_GROQ_URL, json=payload, headers=headers, timeout=8.0)
+        # Before raise_for_status on purpose: a 429 is the single most
+        # informative response about quota, and raising first would throw
+        # its headers away.
+        record_quota_headers(response.headers)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         parsed = json.loads(content)
@@ -135,3 +141,89 @@ def reset_probe_cache() -> None:
     """Drop the cached probe result. For tests and for key rotation."""
     global _probe_cache
     _probe_cache = None
+
+
+# --- what is left of the free quota, if the response says (idea 160) ------
+
+# The idea is explicitly conditional: *"if the response headers expose
+# it"*. This environment cannot check what Groq actually sends —
+# ``console.groq.com`` is blocked from it by the egress proxy, the same
+# class of gap ``docs/02-core-idea.md`` §5 records for the database's
+# lifetime — so nothing here asserts that any particular header exists.
+#
+# Instead of a hardcoded list of dimension names, any
+# ``x-ratelimit-remaining-<dimension>`` paired with its matching
+# ``x-ratelimit-limit-<dimension>`` is read. That handles requests, tokens
+# and any dimension not thought of here, and it degrades to *nothing*: if
+# the response carries no such pair, the snapshot stays empty, and an
+# empty snapshot cannot raise an alert. A wrong guess about header names
+# therefore costs a missing warning, never a false one.
+_REMAINING_PREFIX = "x-ratelimit-remaining-"
+_LIMIT_PREFIX = "x-ratelimit-limit-"
+
+
+@dataclass(frozen=True)
+class QuotaReading:
+    """One rate-limit dimension as the last response reported it."""
+
+    dimension: str
+    remaining: float
+    limit: float
+
+    @property
+    def fraction_left(self) -> float:
+        return self.remaining / self.limit if self.limit > 0 else 0.0
+
+
+# Last reading per dimension. Process-local by design: it describes the
+# quota this process has been spending, and the collector — which is where
+# bulk classification happens — is a one-shot process that reads it at the
+# end of its own run.
+_quota: dict[str, QuotaReading] = {}
+
+
+def _as_number(raw: str) -> float | None:
+    """A header value as a number, or None if it is not one.
+
+    Reset headers in the same family carry durations like ``7.66s``, and a
+    dimension whose value cannot be read as a plain number is skipped
+    rather than guessed at.
+    """
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def record_quota_headers(headers: Mapping[str, str]) -> None:
+    """Note whatever the response said about remaining quota. Never raises."""
+    lowered = {key.lower(): value for key, value in headers.items()}
+    for key, raw_remaining in lowered.items():
+        if not key.startswith(_REMAINING_PREFIX):
+            continue
+        dimension = key[len(_REMAINING_PREFIX) :]
+        raw_limit = lowered.get(f"{_LIMIT_PREFIX}{dimension}")
+        if raw_limit is None:
+            # A remaining with no limit is a number with no denominator;
+            # "8000 left" says nothing about whether that is a lot.
+            continue
+        remaining, limit = _as_number(raw_remaining), _as_number(raw_limit)
+        if remaining is None or limit is None or limit <= 0:
+            continue
+        _quota[dimension] = QuotaReading(dimension=dimension, remaining=remaining, limit=limit)
+
+
+def quota_readings() -> list[QuotaReading]:
+    """Every dimension seen so far, scarcest first."""
+    return sorted(_quota.values(), key=lambda reading: reading.fraction_left)
+
+
+def lowest_quota() -> QuotaReading | None:
+    """The dimension closest to running out, or None if none was reported."""
+    readings = quota_readings()
+    return readings[0] if readings else None
+
+
+def reset_quota() -> None:
+    """Forget the recorded readings. For tests."""
+    _quota.clear()

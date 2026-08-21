@@ -25,10 +25,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import metrics
+from app.alerts import BACKUP_RESULT
 from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user, get_session_user
 from app.models import User, WorkflowRun
+from app.notify import raise_alert
 from app.schemas import SystemStatus, WorkflowRunOut, WorkflowRunReport
 
 router = APIRouter(prefix="/status", tags=["status"])
@@ -77,8 +79,52 @@ def system_status(db: Session = Depends(get_db), current_user: User = Depends(ge
     )
 
 
+# The workflow whose result is worth a message rather than only a row on
+# the board (idea 158). Matched against the name the run reports, which is
+# set in .github/workflows/backup.yml — and pinned by a test, because a
+# rename there would otherwise silently stop the alert forever while
+# everything still looked like it was working.
+BACKUP_WORKFLOW_NAME = "backup"
+
+SUCCESS_CONCLUSIONS = frozenset({"success"})
+
+
+async def _confirm_backup(db: Session, workspace_id: int, run: WorkflowRun) -> None:
+    """Idea 158: a weekly confirmation, not a weekly silence.
+
+    Sent on **both** outcomes, which is the part that makes it useful. An
+    alert that only fires on success cannot be told apart from an alert
+    that stopped working: in both cases nothing arrives. Sending either way
+    means the message's own absence is the signal — a week with no backup
+    message means the workflow did not run at all.
+
+    Only the backup workflow does this. Every other run lands on the status
+    board and nowhere else: the collector already has a failure alert with
+    far more context (idea 154), and a message per workflow per run would
+    be several an hour, which is how a person learns to ignore all of them.
+    """
+    if run.name != BACKUP_WORKFLOW_NAME:
+        return
+
+    succeeded = run.conclusion in SUCCESS_CONCLUSIONS
+    title = "💾 نسخة احتياطية ناجحة" if succeeded else "⛔ فشل النسخ الاحتياطي"
+    body = (
+        (
+            "اكتملت النسخة الأسبوعية وحُفظت كأثر في GitHub Actions لمدة ٣٥ يوماً.\n"
+            "هذه رسالة تأكيد دورية: غيابها في أسبوع ما يعني أنّ التشغيلة لم تعمل أصلاً."
+        )
+        if succeeded
+        else (
+            f"انتهت تشغيلة النسخ الاحتياطي بالنتيجة «{run.conclusion}».\n"
+            "خطة Render المجانية تُنهي القاعدة بعد ٣٠ يوماً، والنسخة هي ما يجعل ذلك "
+            "استعادةً لا فقداناً — راجع `docs/19-runbook.md` §النسخ الاحتياطي."
+        )
+    )
+    await raise_alert(db, workspace_id, BACKUP_RESULT.key, title=title, body=body)
+
+
 @router.post("/workflow-runs", response_model=WorkflowRunOut, status_code=status.HTTP_201_CREATED)
-def report_workflow_run(
+async def report_workflow_run(
     payload: WorkflowRunReport,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -101,4 +147,5 @@ def report_workflow_run(
     )
     db.add(run)
     db.commit()
+    await _confirm_backup(db, current_user.workspace_id, run)
     return run

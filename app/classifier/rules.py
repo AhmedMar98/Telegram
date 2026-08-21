@@ -19,6 +19,12 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+# Named rather than spelled inline at its one other use site (the idea-152
+# alert in app/ingest.py). A category renamed here would otherwise leave a
+# string comparison that quietly never matches again — an alert that stops
+# firing looks exactly like an alert with nothing to report.
+ADULT_CATEGORY = "adult"
+
 CATEGORIES = (
     "movies_series",
     "software_apps",
@@ -26,7 +32,7 @@ CATEGORIES = (
     "games",
     "music",
     "social_channels",
-    "adult",
+    ADULT_CATEGORY,
     "other",
 )
 

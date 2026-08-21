@@ -498,12 +498,21 @@ class ClassificationFeedback(Base):
     """
 
     __tablename__ = "classification_feedback"
-    __table_args__ = (Index("ix_feedback_workspace_created", "workspace_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_feedback_workspace_created", "workspace_id", "created_at"),
+        # Idea 163 groups corrections by site, and the URL cannot serve as
+        # that key: two corrections on the same domain are two URLs.
+        Index("ix_feedback_workspace_domain", "workspace_id", "domain"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     link_id: Mapped[int] = mapped_column(Integer, index=True)
     url: Mapped[str] = mapped_column(Text)
+    # Derived from ``url`` at write time. Stored rather than computed on
+    # read because it is a grouping key, and a grouping key computed in
+    # Python means loading every row to group any of them.
+    domain: Mapped[str] = mapped_column(String(300), default="", server_default="")
     previous_category: Mapped[str] = mapped_column(String(50))
     new_category: Mapped[str] = mapped_column(String(50))
     previous_confidence: Mapped[float] = mapped_column(default=0.0)

@@ -1,0 +1,46 @@
+name: Weekly digest
+
+# Idea 151. Three facts that are each visible in the dashboard and
+# collectively invisible: how much arrived this week, how much of the
+# archive was confirmed dead, and which followed channels have gone quiet.
+# Nobody opens a dashboard weekly to diff it against last week.
+#
+# Off by default at the application level — the alert type is a digest, and
+# phase 9a's policy is that digests do not fire until asked for. This
+# workflow running does not override that switch; it only offers it the
+# chance to fire.
+
+on:
+  schedule:
+    - cron: "0 7 * * 0" # every Sunday, 07:00 UTC — after the 03:00 backup
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Weekly digest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python scripts/weekly_digest.py --workspace "${{ secrets.COLLECTOR_WORKSPACE_ID }}"
+
+  report:
+    needs: digest
+    if: always()
+    uses: ./.github/workflows/report-run.yml
+    with:
+      name: weekly-digest
+      conclusion: ${{ needs.digest.result }}
+    secrets: inherit

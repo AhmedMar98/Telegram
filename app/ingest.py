@@ -8,14 +8,22 @@ discipline are defined once instead of drifting per entry point.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.classifier import classify_link, detect_language, extract_url_spans, hash_url, split_context
+from app.classifier import (
+    ADULT_CATEGORY,
+    ClassificationResult,
+    classify_link,
+    detect_language,
+    extract_url_spans,
+    hash_url,
+    split_context,
+)
 from app.models import Channel, Link
 
 # Synthetic channel identifiers for links that did not arrive from a real
@@ -44,6 +52,12 @@ class IngestSummary:
     # discovering it only by noticing links that never arrived.
     truncated_messages: int = 0
     dropped_links: int = 0
+    # Idea 152: newly stored links the classifier put in the adult
+    # category. Collected here rather than alerted on at the point of
+    # classification for one reason — store_link runs inside a SAVEPOINT
+    # that a duplicate rolls back, so an alert sent there could announce a
+    # link that was never stored. The caller sends after it commits.
+    adult_urls: list[str] = field(default_factory=list)
 
     @property
     def total_found(self) -> int:
@@ -91,8 +105,14 @@ def store_link(
     posted_at: datetime | None = None,
     source_type: str = "text",
     forwarded_from: str | None = None,
-) -> bool:
-    """Classify and insert one link. Returns True if it was new.
+) -> ClassificationResult | None:
+    """Classify and insert one link. Returns the classification, or None if
+    the link was already present.
+
+    Returning the result rather than a bare boolean is what lets the caller
+    act on *what* was stored — idea 152 needs to know a new link landed in
+    the adult category, and re-classifying it afterwards to find out would
+    be both wasteful and capable of disagreeing with the stored row.
 
     The insert runs inside a SAVEPOINT so a duplicate rolls back only this
     row. A plain rollback would discard every uncommitted link collected
@@ -122,8 +142,8 @@ def store_link(
             db.add(row)
             db.flush()
     except IntegrityError:
-        return False
-    return True
+        return None
+    return result
 
 
 def ingest_text(
@@ -171,7 +191,7 @@ def ingest_text(
         pairs = pairs[:MAX_LINKS_PER_MESSAGE]
 
     for url, context, kind in pairs:
-        if store_link(
+        stored = store_link(
             db,
             workspace_id=workspace_id,
             channel_id=channel_id,
@@ -181,8 +201,11 @@ def ingest_text(
             posted_at=posted_at,
             source_type=kind,
             forwarded_from=forwarded_from,
-        ):
-            summary.stored += 1
-        else:
+        )
+        if stored is None:
             summary.duplicates += 1
+            continue
+        summary.stored += 1
+        if stored.category == ADULT_CATEGORY:
+            summary.adult_urls.append(url)
     return summary
