@@ -149,8 +149,13 @@ class _NetscapeParser(HTMLParser):
 
     def close(self) -> None:
         super().close()
-        # A file truncated mid-element still yields everything before the
-        # break, rather than throwing the whole import away.
+        # Flush an entry whose closing tag never arrived, so a file cut
+        # short mid-element does not lose the bookmark it was midway
+        # through. Best-effort by nature: whether the interpreter reports
+        # a start tag for unterminated markup at EOF differs even between
+        # CPython patch releases (3.11.15 does, 3.11.16 does not). What is
+        # guaranteed either way is that every *completed* entry before the
+        # break survives, and that nothing here raises.
         if self._pending is not None:
             self.result.bookmarks.append(self._pending)
             self._pending = None

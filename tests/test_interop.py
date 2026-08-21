@@ -81,14 +81,24 @@ def test_bookmarklets_and_browser_internal_entries_never_become_links():
     assert result.skipped_unsupported_scheme == 5
 
 
-def test_a_truncated_file_keeps_everything_before_the_break():
+def test_a_truncated_file_keeps_the_entries_completed_before_the_break():
     """Exports get cut short by a full disk or an interrupted download.
-    Losing the last bookmark is acceptable; losing all of them is not."""
+    Losing the last bookmark is acceptable; losing all of them is not.
+
+    Only the *completed* entry is asserted. Whether a half-written final
+    tag is recovered depends on the interpreter: CPython 3.11.15 emits a
+    start tag for unterminated markup at EOF and 3.11.16 does not, which
+    is a hardening change rather than a bug in either. Pinning the
+    recovered one made this pass locally and fail in CI — a test asserting
+    more than the language guarantees."""
     result = parse_netscape_html(
         '<DL><DT><A HREF="https://example.com/one">One</A>\n<DT><A HREF="https://example.com/two">Tw'
     )
 
-    assert [b.url for b in result.bookmarks] == ["https://example.com/one", "https://example.com/two"]
+    urls = [b.url for b in result.bookmarks]
+
+    assert "https://example.com/one" in urls
+    assert set(urls) <= {"https://example.com/one", "https://example.com/two"}
 
 
 @pytest.mark.parametrize(
