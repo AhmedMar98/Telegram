@@ -52,6 +52,15 @@ SESSION_ONLY = {
     ("GET", "/notifications/preferences"),
     ("PATCH", "/notifications/preferences/{alert_type}"),
     ("GET", "/notifications/unread-count"),
+    # The outbound webhook (idea 162). Session-only for a reason worth
+    # stating: an API key that could repoint it would turn a leaked key
+    # into a way to redirect a workspace's alerts to an address the
+    # attacker controls — which is a great deal more than the noise a
+    # leaked key is supposed to be capable of.
+    ("GET", "/notifications/webhook"),
+    ("PUT", "/notifications/webhook"),
+    ("DELETE", "/notifications/webhook"),
+    ("POST", "/notifications/webhook/test"),
     # The status screen exposes deploy identity, live counters and the
     # workflow board. Reporting *into* it takes an API key on purpose
     # (that is the credential inversion); reading it does not.

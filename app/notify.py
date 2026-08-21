@@ -159,7 +159,24 @@ async def raise_alert(
     delivered = await send_to_workspace(db, workspace_id, f"{title}\n\n{body}")
     notification.delivered_count = delivered
     db.commit()
+
+    # The outbound webhook (idea 162) is fanned out from *here*, after the
+    # gate, and never from a caller. Anywhere else would make it a second
+    # channel that the preference switch does not control — which is the
+    # one thing this phase exists to prevent.
+    await _fan_out_to_webhook(db, workspace_id, alert_type=alert_type, title=title, body=body)
     return notification
+
+
+async def _fan_out_to_webhook(db: Session, workspace_id: int, *, alert_type: str, title: str, body: str) -> None:
+    """Copy an alert that already passed the gate to the workspace's webhook."""
+    from app.models import Workspace
+    from app.webhook import deliver, payload_for
+
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None or not workspace.webhook_url:
+        return
+    await deliver(db, workspace, payload_for(alert_type=alert_type, title=title, body=body))
 
 
 # How many adult URLs a single alert lists before it summarises the rest.

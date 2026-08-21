@@ -52,6 +52,8 @@ NOT_TENANT_SCOPED = {
     "/notifications/read-all",
     "/notifications/unread-count",
     "/notifications/preferences",
+    "/notifications/webhook",
+    "/notifications/webhook/test",
     # The parameter here is a global vocabulary key (an alert type), not a
     # tenant-owned identifier, so there is no "another workspace's id" to
     # probe: every workspace addresses the same key set, and the scoping

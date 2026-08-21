@@ -1048,7 +1048,7 @@ loadTotp();
 function toggleNotifications() {
   const panel = document.getElementById("notificationCentre");
   panel.hidden = !panel.hidden;
-  if (!panel.hidden) { loadNotifications(); loadAlertPrefs(); }
+  if (!panel.hidden) { loadNotifications(); loadAlertPrefs(); loadWebhook(); }
 }
 
 async function loadRecentActivity() {
@@ -1129,6 +1129,66 @@ async function setAlertPref(key) {
     return;
   }
   toast(box.checked ? "فُعِّل التنبيه." : "أُطفئ التنبيه.");
+}
+
+// --- the outbound webhook (idea 162) --------------------------------------
+
+function renderWebhook(state) {
+  const el = document.getElementById("webhookState");
+  if (!state.configured) {
+    el.textContent = "لا يوجد webhook مضبوط.";
+    return;
+  }
+  // The masked form is what the server returns; there is no code path
+  // here that could show the whole URL, because it never arrives.
+  const attempt = state.last_attempt_at
+    ? ` · آخر محاولة: ${state.last_status === null ? "لم تصل" : state.last_status}`
+    : " · لم تُجرَّب بعد";
+  el.textContent = `مضبوط: ${state.masked_url}${attempt}`;
+}
+
+async function loadWebhook() {
+  const res = await api("/notifications/webhook");
+  if (res.ok) renderWebhook(await res.json());
+}
+
+async function saveWebhook() {
+  const input = document.getElementById("webhookUrl");
+  const res = await api("/notifications/webhook", {
+    method: "PUT",
+    body: JSON.stringify({ url: input.value.trim() }),
+  });
+  if (!res.ok) {
+    // The refusal reason is meant for the person who typed the URL, so it
+    // is shown rather than replaced with a generic failure.
+    const detail = await res.json().catch(() => ({}));
+    toast(detail.detail || "تعذّر حفظ العنوان.", "error");
+    return;
+  }
+  input.value = "";
+  renderWebhook(await res.json());
+  toast("حُفظ العنوان.");
+}
+
+async function testWebhook() {
+  const res = await api("/notifications/webhook/test", { method: "POST" });
+  if (!res.ok) {
+    toast("تعذّر الإرسال.", "error");
+    return;
+  }
+  const state = await res.json();
+  renderWebhook(state);
+  toast(state.last_status === null ? "لم تصل الرسالة." : `أُرسلت — ردّ الخادم ${state.last_status}.`);
+}
+
+async function clearWebhook() {
+  const res = await api("/notifications/webhook", { method: "DELETE" });
+  if (!res.ok) {
+    toast("تعذّرت الإزالة.", "error");
+    return;
+  }
+  renderWebhook({ configured: false });
+  toast("أُزيل العنوان.");
 }
 
 loadRecentActivity();

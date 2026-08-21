@@ -34,6 +34,17 @@ class Workspace(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Idea 162. Encrypted rather than plain because incoming-webhook URLs
+    # from every major service carry a secret token in the path — holding
+    # one is holding the ability to post into somebody's channel, which
+    # puts it in the same class as a Telegram session string, not in the
+    # same class as a hostname.
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The last attempt's outcome, so "is my webhook working?" is
+    # answerable from the dashboard. Kept for the same reason a
+    # notification is recorded even when it could not be delivered.
+    webhook_last_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    webhook_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     users: Mapped[list[User]] = relationship(back_populates="workspace")
     channels: Mapped[list[Channel]] = relationship(back_populates="workspace")
