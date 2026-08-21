@@ -550,6 +550,62 @@ class AccountSummary(BaseModel):
     )
 
 
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    model_config = _config({"name": "obsidian sync script"})
+
+
+class ApiKeyOut(BaseModel):
+    """A key as it can be shown *after* creation — without the key itself."""
+
+    id: int
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    use_count: int
+
+    model_config = _config(
+        {
+            "id": 7,
+            "name": "obsidian sync script",
+            "prefix": "lipk_A7bQ2f",
+            "created_at": "2026-08-21T09:40:00",
+            "last_used_at": "2026-08-21T10:02:14",
+            "use_count": 38,
+        },
+        from_attributes=True,
+    )
+
+
+class ApiKeyCreated(BaseModel):
+    """The one and only response that carries the raw key.
+
+    ``key`` is not stored anywhere in recoverable form, so this response is
+    the single opportunity to copy it. Said in the field description too,
+    because a caller who assumes they can fetch it later finds out at the
+    worst moment.
+    """
+
+    key: str = Field(description="the raw key — shown once, never retrievable again")
+    api_key: ApiKeyOut
+
+    model_config = _config(
+        {
+            "key": "lipk_A7bQ2fEXAMPLEONLYnotarealkeyvalue0000000000",
+            "api_key": {
+                "id": 7,
+                "name": "obsidian sync script",
+                "prefix": "lipk_A7bQ2f",
+                "created_at": "2026-08-21T09:40:00",
+                "last_used_at": None,
+                "use_count": 0,
+            },
+        }
+    )
+
+
 class WorkspaceOut(BaseModel):
     id: int
     name: str

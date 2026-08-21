@@ -26,6 +26,7 @@ class ErrorCode:
     UNKNOWN_SORT = "unknown_sort"
     UNKNOWN_FILTER = "unknown_filter"
     SAVED_SEARCH_LIMIT = "saved_search_limit"
+    API_KEY_LIMIT = "api_key_limit"
     WEAK_PASSWORD = "weak_password"
     NOT_REDIRECTABLE = "not_redirectable"
     RATE_LIMITED = "rate_limited"

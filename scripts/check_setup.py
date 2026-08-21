@@ -175,6 +175,25 @@ def check_optional_features() -> None:
     else:
         report(WARN, "llm tier", "GROQ_API_KEY not set — rules-only classification (still fully functional)")
 
+    # The session cookie's Secure flag is *conditional on configuration*
+    # (`secure=settings.environment == "production"`), so a service that
+    # serves HTTPS without ENVIRONMENT=production sends its session cookie
+    # marked as safe over plain HTTP — silently, with nothing on screen to
+    # say so. render.yaml sets it; a service created by hand may not.
+    environment = os.environ.get("ENVIRONMENT", "development")
+    base_url = os.environ.get("PUBLIC_BASE_URL") or ""
+    if environment == "production":
+        report(OK, "session cookie", "HttpOnly, SameSite=Lax, Secure (ENVIRONMENT=production)")
+    elif base_url.startswith("https://"):
+        report(
+            FAIL,
+            "session cookie",
+            f"PUBLIC_BASE_URL is https but ENVIRONMENT={environment!r} — the session cookie will be "
+            "sent WITHOUT Secure, so any accidental http:// request leaks it. Set ENVIRONMENT=production",
+        )
+    else:
+        report(WARN, "session cookie", f"ENVIRONMENT={environment!r} — Secure flag off (correct for local http)")
+
     if os.environ.get("INVITE_CODE"):
         report(OK, "registration", "gated by INVITE_CODE")
     else:

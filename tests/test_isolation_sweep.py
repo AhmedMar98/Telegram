@@ -36,6 +36,7 @@ NOT_TENANT_SCOPED = {
     "/auth/logout",
     "/auth/logout-all",
     "/auth/register",
+    "/auth/api-keys",
     "/auth/me",
     "/auth/me/delete",
     "/auth/me/export",
@@ -74,6 +75,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
     """Guards the guard: a new id-taking endpoint must be probed, not skipped."""
     discovered = {path for path, _ in _parameterised_paths()}
     expected = {
+        "/auth/api-keys/{key_id}",
         "/auth/sessions/{session_id}",
         "/channels/{channel_id}",
         "/links/{link_id}",
@@ -100,6 +102,8 @@ def victim_ids(client: TestClient) -> dict[str, int]:
     link = client.get("/links").json()["items"][0]
     session = client.get("/auth/sessions").json()[0]
     saved = client.post("/links/saved", json={"name": "victim search", "filters": {"q": "secret"}}).json()
+    client.post("/auth/api-keys", json={"name": "victim key"})
+    api_key = client.get("/auth/api-keys").json()[0]
 
     # A collecting account exists only once the collector has registered
     # one, so the fixture creates it directly — the sweep needs a real id
@@ -120,6 +124,7 @@ def victim_ids(client: TestClient) -> dict[str, int]:
         "link_id": link["id"],
         "session_id": session["id"],
         "saved_id": saved["id"],
+        "key_id": api_key["id"],
         "account_id": account_id,
     }
 
@@ -178,6 +183,7 @@ def test_foreign_resource_survives_the_probe(attacker, victim_ids, path: str, me
     assert attacker.get("/links").json()["total"] == 1, f"{method} {path} destroyed the victim's link"
     assert len(attacker.get("/channels").json()) == 2  # manual bucket + the added one
     assert len(attacker.get("/links/saved").json()) == 1, f"{method} {path} destroyed the victim's saved search"
+    assert len(attacker.get("/auth/api-keys").json()) == 1, f"{method} {path} revoked the victim's API key"
 
 
 def test_unauthenticated_access_is_rejected_everywhere(client: TestClient, victim_ids):

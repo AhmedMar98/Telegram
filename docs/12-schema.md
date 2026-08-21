@@ -120,6 +120,23 @@
 
 **الفهارس:** `ix_users_email` (email)، `ix_users_workspace_id` (workspace_id)
 
+## `api_keys`
+
+| العمود | النوع | يقبل NULL | مفتاح |
+|---|---|---|---|
+| `id` | `INTEGER` | لا | PK |
+| `workspace_id` | `INTEGER` | لا | FK → workspaces.id |
+| `user_id` | `INTEGER` | لا | FK → users.id |
+| `name` | `VARCHAR(100)` | لا | — |
+| `token_hash` | `VARCHAR(64)` | لا | — |
+| `prefix` | `VARCHAR(16)` | لا | — |
+| `created_at` | `DATETIME` | لا | — |
+| `last_used_at` | `DATETIME` | نعم | — |
+| `revoked_at` | `DATETIME` | نعم | — |
+| `use_count` | `INTEGER` | لا | — |
+
+**الفهارس:** `ix_api_keys_token_hash` (token_hash) فريد، `ix_api_keys_user_id` (user_id)، `ix_api_keys_workspace_id` (workspace_id)
+
 ## `audit_log`
 
 | العمود | النوع | يقبل NULL | مفتاح |
@@ -131,6 +148,7 @@
 | `target_type` | `VARCHAR(50)` | نعم | — |
 | `target_id` | `VARCHAR(50)` | نعم | — |
 | `detail` | `TEXT` | نعم | — |
+| `ip_address` | `VARCHAR(45)` | نعم | — |
 | `created_at` | `DATETIME` | لا | — |
 
 **الفهارس:** `ix_audit_log_workspace_id` (workspace_id)

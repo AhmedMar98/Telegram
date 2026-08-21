@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ActionEvent,
+    ApiKey,
     AuditLog,
     AuthSession,
     BotLink,
@@ -43,6 +44,7 @@ from app.models import (
 # AuthSession (user_id), LoginAttempt (email) and ActionEvent (scope +
 # identifier).
 WORKSPACE_TABLES = (
+    ApiKey,
     ClassificationFeedback,
     SavedSearch,
     Link,
@@ -163,6 +165,10 @@ def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
                 "target_type": a.target_type,
                 "target_id": a.target_id,
                 "detail": a.detail,
+                # The owner's own address, in the owner's own export. It
+                # is data about them, so withholding it from them while
+                # keeping it in the database would be the odd choice.
+                "ip_address": a.ip_address,
                 "created_at": _iso(a.created_at),
             }
             for a in rows(AuditLog)

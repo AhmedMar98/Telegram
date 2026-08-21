@@ -187,3 +187,34 @@ def test_a_dead_llm_tier_never_fails_the_whole_check(monkeypatch):
     check_setup.check_optional_features()
 
     assert _statuses()["llm tier"] != check_setup.FAIL
+
+
+def test_https_without_production_environment_is_a_failure(monkeypatch):
+    """The silent downgrade this check exists for: TLS in front, and a
+    session cookie marked as safe to send over plain HTTP behind it."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://link-intel-web.onrender.com")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.FAIL
+    assert "WITHOUT Secure" in _details()["session cookie"]
+
+
+def test_production_environment_reports_the_real_flags(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.OK
+
+
+def test_local_http_development_is_only_a_warning(monkeypatch):
+    """Secure would break plain-http local development, so its absence
+    there is correct rather than a finding."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.WARN

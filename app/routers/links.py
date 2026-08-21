@@ -16,13 +16,14 @@ import io
 import json
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit import record as audit_record
 from app.classifier import CATEGORIES
+from app.clientinfo import client_ip
 from app.database import get_db
 from app.deps import get_current_user
 from app.errors import ErrorCode, rate_limited, unprocessable
@@ -790,6 +791,7 @@ def _csv_cell(column: str, row: dict) -> str:
 
 @router.get("/export.csv")
 def export_links_csv(
+    request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
     db: Session = Depends(get_db),
@@ -815,6 +817,7 @@ def export_links_csv(
         user_id=current_user.id,
         action="link.export",
         detail=f"format=csv category={category or 'all'} q={q or ''}",
+        ip_address=client_ip(request),
     )
     db.commit()
 
@@ -845,6 +848,7 @@ def export_links_csv(
 
 @router.get("/export.json")
 def export_links_json(
+    request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
     db: Session = Depends(get_db),
@@ -866,6 +870,7 @@ def export_links_json(
         user_id=current_user.id,
         action="link.export",
         detail=f"format=json category={category or 'all'} q={q or ''}",
+        ip_address=client_ip(request),
     )
     db.commit()
 
@@ -897,6 +902,7 @@ def _markdown_safe(text: str) -> str:
 
 @router.get("/export.md")
 def export_links_markdown(
+    request: Request,
     category: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=300),
     db: Session = Depends(get_db),
@@ -921,6 +927,7 @@ def export_links_markdown(
         user_id=current_user.id,
         action="link.export",
         detail=f"format=md category={category or 'all'} q={q or ''}",
+        ip_address=client_ip(request),
     )
     db.commit()
 
