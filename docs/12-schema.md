@@ -151,6 +151,21 @@
 
 **الفهارس:** `ix_users_email` (email)، `ix_users_workspace_id` (workspace_id)
 
+## `workflow_runs`
+
+| العمود | النوع | يقبل NULL | مفتاح |
+|---|---|---|---|
+| `id` | `INTEGER` | لا | PK |
+| `workspace_id` | `INTEGER` | لا | FK → workspaces.id |
+| `name` | `VARCHAR(100)` | لا | — |
+| `conclusion` | `VARCHAR(30)` | لا | — |
+| `detail` | `VARCHAR(500)` | نعم | — |
+| `commit_sha` | `VARCHAR(40)` | نعم | — |
+| `duration_seconds` | `INTEGER` | نعم | — |
+| `started_at` | `DATETIME` | لا | — |
+
+**الفهارس:** `ix_workflow_runs_name` (name)، `ix_workflow_runs_workspace_id` (workspace_id)، `ix_workflow_runs_ws_name_started` (workspace_id, name, started_at)
+
 ## `api_keys`
 
 | العمود | النوع | يقبل NULL | مفتاح |

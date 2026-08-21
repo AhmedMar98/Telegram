@@ -35,3 +35,12 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_KEY: "vitality-check-process-does-not-serve-http"
         run: python scripts/check_link_vitality.py
+
+  report:
+    needs: check-vitality
+    if: always()
+    uses: ./.github/workflows/report-run.yml
+    with:
+      name: vitality
+      conclusion: ${{ needs.check-vitality.result }}
+    secrets: inherit

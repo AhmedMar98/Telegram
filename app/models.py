@@ -417,6 +417,45 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class WorkflowRun(Base):
+    """The outcome of one scheduled GitHub Actions run, as reported by it.
+
+    Ideas 181 and 183 describe *reading* the GitHub Actions API to show
+    workflow history. That would mean storing a GitHub token with repo
+    scope in this database — a credential strictly more powerful than
+    anything else here, held by a service whose whole security model has
+    been built around not holding such things.
+
+    So the direction is inverted: the workflow **pushes** its result here
+    when it finishes, authenticating with a personal API key (phase 8a)
+    that can already do far less than a GitHub token. Nothing new is
+    stored, no new scope is granted, and a leaked key still cannot touch
+    the repository.
+
+    The cost of the inversion is stated rather than hidden: a run that
+    never starts reports nothing, so "no recent row" means *either*
+    healthy-and-idle or the workflow is not running at all. That is
+    exactly what ``looks_stalled`` on the collector already handles, and
+    the same reading applies here.
+    """
+
+    __tablename__ = "workflow_runs"
+    __table_args__ = (Index("ix_workflow_runs_ws_name_started", "workspace_id", "name", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    # "success" | "failure" | "cancelled" — whatever the workflow reports.
+    conclusion: Mapped[str] = mapped_column(String(30))
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The commit the run was made from, so a failure can be tied to code.
+    commit_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    __mapper_args__ = {"eager_defaults": True}
+
+
 class SavedSearch(Base):
     """A filter combination someone wants back with one click.
 

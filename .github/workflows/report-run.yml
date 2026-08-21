@@ -1,0 +1,62 @@
+name: Report run status
+
+# Reusable step: a finished scheduled workflow tells the app how it went
+# (ideas 181 and 183).
+#
+# The credential direction is deliberate. Reading the GitHub Actions API
+# from the app would mean storing a GitHub token with repo scope in the
+# database — strictly more powerful than anything else the app holds. So
+# the workflow reports in instead, using a personal API key (phase 8a)
+# that cannot touch the repository at all.
+#
+# Required repository secrets:
+#   APP_BASE_URL   e.g. https://link-intel-web.onrender.com
+#   APP_API_KEY    a personal API key from the dashboard (lipk_...)
+#
+# Both optional: a repository without them simply reports nothing, and
+# every workflow that calls this keeps working.
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      conclusion:
+        required: true
+        type: string
+      detail:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      APP_BASE_URL:
+        required: false
+      APP_API_KEY:
+        required: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the outcome
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+          KEY: ${{ secrets.APP_API_KEY }}
+          NAME: ${{ inputs.name }}
+          CONCLUSION: ${{ inputs.conclusion }}
+          DETAIL: ${{ inputs.detail }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$BASE" ] || [ -z "$KEY" ]; then
+            echo "APP_BASE_URL or APP_API_KEY not configured — skipping status report."
+            exit 0
+          fi
+          # --fail is deliberately absent: a status board being unreachable
+          # must never turn a successful collection into a red workflow.
+          curl -sS -X POST "$BASE/status/workflow-runs" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg n "$NAME" --arg c "$CONCLUSION" --arg d "$DETAIL" --arg s "$SHA" \
+                  '{name: $n, conclusion: $c, detail: $d, commit_sha: $s}')" \
+            -o /dev/null -w "reported %{http_code}\n" || echo "status report failed; ignoring"

@@ -52,6 +52,10 @@ SESSION_ONLY = {
     ("GET", "/notifications/preferences"),
     ("PATCH", "/notifications/preferences/{alert_type}"),
     ("GET", "/notifications/unread-count"),
+    # The status screen exposes deploy identity, live counters and the
+    # workflow board. Reporting *into* it takes an API key on purpose
+    # (that is the credential inversion); reading it does not.
+    ("GET", "/status"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
 }

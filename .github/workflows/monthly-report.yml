@@ -1,0 +1,42 @@
+name: Monthly report
+
+# Idea 186. Size alone answers "am I near the limit"; size plus growth
+# answers "when will I be", which is the question worth a monthly message.
+#
+# Off by default at the application level: the alert type is a digest, and
+# phase 9a's policy is that digests do not fire until asked for. This
+# workflow running does not override that switch.
+
+on:
+  schedule:
+    - cron: "0 6 1 * *" # 06:00 UTC on the first of each month
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Growth and storage report
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python scripts/growth_report.py --workspace "${{ secrets.COLLECTOR_WORKSPACE_ID }}"
+
+      - name: Storage headroom check
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python scripts/check_storage.py --workspace "${{ secrets.COLLECTOR_WORKSPACE_ID }}"

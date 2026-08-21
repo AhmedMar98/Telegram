@@ -37,6 +37,7 @@ from app.models import (
     SavedSearch,
     TelegramAccount,
     User,
+    WorkflowRun,
     Workspace,
 )
 
@@ -47,6 +48,7 @@ from app.models import (
 # identifier).
 WORKSPACE_TABLES = (
     ApiKey,
+    WorkflowRun,
     Notification,
     NotificationPreference,
     ClassificationFeedback,

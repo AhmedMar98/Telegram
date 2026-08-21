@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
 
+    # --- Deploy identity (idea 187) ----------------------------------------
+    # Render sets RENDER_GIT_COMMIT on every build from a repository, so
+    # the running code identifies itself without anything being written by
+    # hand at release time — a version string somebody has to remember to
+    # bump is a version string that is eventually wrong.
+    render_git_commit: str | None = None
+    render_service_name: str | None = None
+
     # --- Storage headroom (idea 153) ---------------------------------------
     # The size at which the storage alert fires, as a fraction of this
     # limit. **The limit is a configured assumption, not a verified fact:**

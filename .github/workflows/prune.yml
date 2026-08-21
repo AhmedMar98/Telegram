@@ -48,3 +48,12 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_KEY: "prune-process-does-not-serve-http"
         run: python scripts/db_report.py
+
+  report:
+    needs: prune
+    if: always()
+    uses: ./.github/workflows/report-run.yml
+    with:
+      name: prune
+      conclusion: ${{ needs.prune.result }}
+    secrets: inherit

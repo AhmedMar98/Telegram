@@ -737,6 +737,97 @@ class NotificationListResponse(BaseModel):
     )
 
 
+class WorkflowRunReport(BaseModel):
+    """What a finished workflow posts about itself."""
+
+    name: str = Field(min_length=1, max_length=100)
+    conclusion: str = Field(min_length=1, max_length=30)
+    detail: str | None = Field(default=None, max_length=500)
+    commit_sha: str | None = Field(default=None, max_length=40)
+    duration_seconds: int | None = Field(default=None, ge=0, le=86_400)
+
+    model_config = _config(
+        {
+            "name": "collector",
+            "conclusion": "success",
+            "detail": "37 new link(s) across 6 channel(s)",
+            "commit_sha": "d97841c733f29358f242798e89270a389ca5201b",
+            "duration_seconds": 74,
+        }
+    )
+
+
+class WorkflowRunOut(BaseModel):
+    name: str
+    conclusion: str
+    detail: str | None
+    commit_sha: str | None
+    duration_seconds: int | None
+    started_at: datetime
+
+    model_config = _config(
+        {
+            "name": "collector",
+            "conclusion": "success",
+            "detail": "37 new link(s) across 6 channel(s)",
+            "commit_sha": "d97841c733f29358f242798e89270a389ca5201b",
+            "duration_seconds": 74,
+            "started_at": "2026-08-21T02:00:11",
+        },
+        from_attributes=True,
+    )
+
+
+class SystemStatus(BaseModel):
+    """The operator's one screen: what is deployed, and is it healthy.
+
+    Every counter here describes the **current process**. The free tier
+    sleeps after inactivity, so these restart — the uptime is reported
+    beside them precisely so that window is visible rather than implied.
+    """
+
+    deploy_commit: str | None
+    service_name: str | None
+    schema_version: str | None
+    process_uptime_seconds: float
+    requests_since_start: int
+    server_errors_since_start: int
+    mean_response_ms: float
+    median_response_ms: float
+    p95_response_ms: float
+    slowest_response_ms: float
+    sampled_requests: int
+    # Newest run per workflow, so a stopped job is visible by its absence
+    # or its age rather than by scrolling a log.
+    latest_runs: list[WorkflowRunOut]
+
+    model_config = _config(
+        {
+            "deploy_commit": "d97841c733f29358f242798e89270a389ca5201b",
+            "service_name": "link-intel-web",
+            "schema_version": "0017_workflow_runs",
+            "process_uptime_seconds": 3821.4,
+            "requests_since_start": 1044,
+            "server_errors_since_start": 0,
+            "mean_response_ms": 18.2,
+            "median_response_ms": 9.1,
+            "p95_response_ms": 61.0,
+            "slowest_response_ms": 412.7,
+            "sampled_requests": 512,
+            "latest_runs": [
+                {
+                    "name": "collector",
+                    "conclusion": "success",
+                    "detail": "37 new link(s) across 6 channel(s)",
+                    "commit_sha": "d97841c733f29358f242798e89270a389ca5201b",
+                    "duration_seconds": 74,
+                    "started_at": "2026-08-21T02:00:11",
+                }
+            ],
+        }
+    )
+
+
 class WorkspaceOut(BaseModel):
     id: int
     name: str

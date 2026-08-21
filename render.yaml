@@ -29,6 +29,20 @@ services:
         value: 3.11.9
       - key: ENVIRONMENT
         value: production
+      # Idea 187: the running code identifies itself. Render populates
+      # these on every build, so nothing has to be bumped by hand at
+      # release time — a version string somebody must remember to update
+      # is a version string that is eventually wrong.
+      - key: RENDER_GIT_COMMIT
+        fromService:
+          type: web
+          name: link-intel-web
+          envVarKey: RENDER_GIT_COMMIT
+      - key: RENDER_SERVICE_NAME
+        fromService:
+          type: web
+          name: link-intel-web
+          envVarKey: RENDER_SERVICE_NAME
       - key: DATABASE_URL
         fromDatabase:
           name: link-intel-db

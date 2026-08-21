@@ -1132,3 +1132,36 @@ async function setAlertPref(key) {
 }
 
 loadRecentActivity();
+loadSystemStatus();
+
+
+// --- system status (ideas 181, 183, 185, 187, 192) ------------------------
+
+async function loadSystemStatus() {
+  const res = await api("/status");
+  if (!res.ok) return;
+  const s = await res.json();
+
+  // Short SHA in the footer: the fast answer to "is my fix actually live?"
+  const footer = document.getElementById("deployFooter");
+  if (footer) {
+    const sha = s.deploy_commit ? s.deploy_commit.slice(0, 7) : "غير معروف";
+    footer.textContent = `النشر: ${sha} · المخطط: ${s.schema_version || "بلا ترحيلات"}`;
+  }
+
+  const runs = s.latest_runs.map(r => {
+    const age = Math.round((Date.now() - new Date(r.started_at)) / 3600000);
+    const mark = r.conclusion === "success" ? "🟢" : "🔴";
+    return `${mark} ${escapeText(r.name)} — ${escapeText(r.conclusion)} (قبل ${age} ساعة)`;
+  }).join("<br>") || "لا تقارير تشغيل بعد";
+
+  document.getElementById("systemStatus").innerHTML =
+    `<div class="muted small">` +
+    // Named as since-restart, because the free tier sleeps and these
+    // counters restart with the process. Calling them totals would be a
+    // number that quietly means something else.
+    `منذ إقلاع العملية (${Math.round(s.process_uptime_seconds / 60)} دقيقة): ` +
+    `${s.requests_since_start} طلباً · ${s.server_errors_since_start} خطأ خادم · ` +
+    `وسيط ${s.median_response_ms}ms · p95 ${s.p95_response_ms}ms` +
+    `</div><div class="gap-top-s">${runs}</div>`;
+}
