@@ -40,3 +40,15 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SECRET_KEY: "collector-process-does-not-serve-http"
         run: python scripts/collect.py
+
+  # Reports the outcome to the app's status board (ideas 181/183). Runs
+  # whether the collection succeeded or failed — a board that only ever
+  # hears about successes cannot show a failure.
+  report:
+    needs: collect
+    if: always()
+    uses: ./.github/workflows/report-run.yml
+    with:
+      name: collector
+      conclusion: ${{ needs.collect.result }}
+    secrets: inherit

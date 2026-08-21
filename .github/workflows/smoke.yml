@@ -1,0 +1,65 @@
+name: Post-deploy smoke test
+
+# Idea 190. Render deploys on push to main, and a deploy that boots but
+# cannot serve is the failure this catches — the process is "up", the
+# health check passes, and the actual pages are broken.
+#
+# Checks reachability and the security contract, not content: anything
+# depending on a workspace's data would need credentials this workflow
+# should not hold.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "20 */6 * * *" # four times a day, offset off the hour
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe the deployment
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "APP_BASE_URL not configured — nothing to probe."
+            exit 0
+          fi
+
+          fail=0
+          check() {
+            local path="$1" expected="$2"
+            # The free tier sleeps; the first request can take ~a minute,
+            # so the timeout is generous rather than the usual few seconds.
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$BASE$path" || echo 000)
+            if [ "$code" != "$expected" ]; then
+              echo "FAIL $path -> $code (expected $expected)"
+              fail=1
+            else
+              echo "ok   $path -> $code"
+            fi
+          }
+
+          check /healthz 200
+          check /readyz 200
+          check /login 200
+          # Unauthenticated access to data must stay refused. A deploy that
+          # somehow opened this up is worth failing a build over.
+          check /links 401
+
+          echo "--- security headers ---"
+          headers=$(curl -sS -D- -o /dev/null --max-time 90 "$BASE/login" || true)
+          for header in "content-security-policy" "x-content-type-options"; do
+            if echo "$headers" | grep -qi "^$header:"; then
+              echo "ok   $header present"
+            else
+              echo "FAIL $header missing"
+              fail=1
+            fi
+          done
+          if echo "$headers" | grep -qi "unsafe-inline"; then
+            echo "FAIL the deployed CSP contains 'unsafe-inline'"
+            fail=1
+          fi
+
+          exit $fail

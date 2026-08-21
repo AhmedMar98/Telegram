@@ -34,3 +34,12 @@ jobs:
           name: db-backup-${{ github.run_id }}
           path: backup.dump
           retention-days: 35
+
+  report:
+    needs: backup
+    if: always()
+    uses: ./.github/workflows/report-run.yml
+    with:
+      name: backup
+      conclusion: ${{ needs.backup.result }}
+    secrets: inherit

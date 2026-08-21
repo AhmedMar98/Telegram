@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,12 +23,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app import metrics
 from app.classifier import CATEGORIES
 from app.classifier.llm import probe as groq_probe
 from app.config import get_settings
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
 from app.routers import auth, bot_router, channels, links, notifications
+from app.routers import status as status_router
 from app.security import resolve_session
 
 logging.basicConfig(
@@ -147,6 +150,21 @@ _SECURITY_HEADERS = {
 
 
 @app.middleware("http")
+async def record_timing(request: Request, call_next):
+    """Time every request (idea 185).
+
+    In middleware rather than per-route for the same reason the security
+    headers are: a route added later cannot be the one that forgets. The
+    cost is two clock reads and a few additions on an in-memory struct —
+    no I/O, so this cannot itself become the slow thing it measures.
+    """
+    started = time.perf_counter()
+    response = await call_next(request)
+    metrics.record(time.perf_counter() - started, status_code=response.status_code)
+    return response
+
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Attach the security headers to every response.
 
@@ -164,6 +182,7 @@ app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(links.router)
 app.include_router(notifications.router)
+app.include_router(status_router.router)
 app.include_router(bot_router.router)
 
 

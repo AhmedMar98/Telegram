@@ -1,0 +1,46 @@
+name: Changelog
+
+# Idea 189. The changelog is generated from merged pull request titles
+# rather than maintained by hand, because a file somebody has to remember
+# to update is a file that is eventually wrong — and this project squashes
+# every phase into one well-titled commit on main, which is exactly the
+# shape a generated changelog wants.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Regenerate CHANGELOG.md
+        run: |
+          {
+            echo "# سجل التغييرات"
+            echo
+            echo "> مولَّد آلياً من عناوين الدمج في \`main\`. لا تحرّره يدوياً."
+            echo
+            git log --first-parent --pretty=format:'- %ad — %s' --date=short main
+            echo
+          } > CHANGELOG.md
+
+      - name: Commit if it changed
+        run: |
+          if git diff --quiet CHANGELOG.md; then
+            echo "no change"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: regenerate CHANGELOG from merged titles"
+          git push
