@@ -48,6 +48,17 @@ NOT_TENANT_SCOPED = {
     "/channels",
     "/channels/accounts",
     "/links",
+    "/notifications",
+    "/notifications/read-all",
+    "/notifications/unread-count",
+    "/notifications/preferences",
+    # The parameter here is a global vocabulary key (an alert type), not a
+    # tenant-owned identifier, so there is no "another workspace's id" to
+    # probe: every workspace addresses the same key set, and the scoping
+    # comes from the session. The isolation that *does* apply — one
+    # workspace's switch not moving another's — is asserted directly in
+    # tests/test_notifications.py rather than by this sweep.
+    "/notifications/preferences/{alert_type}",
     "/links/stats",
     "/links/bulk/delete",
     "/links/bulk/recategorize",
@@ -76,6 +87,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
     discovered = {path for path, _ in _parameterised_paths()}
     expected = {
         "/auth/api-keys/{key_id}",
+        "/notifications/{notification_id}/read",
         "/auth/sessions/{session_id}",
         "/channels/{channel_id}",
         "/links/{link_id}",
@@ -118,8 +130,23 @@ def victim_ids(client: TestClient) -> dict[str, int]:
     finally:
         db.close()
 
+    # A raised alert, so the sweep has a real foreign notification id to
+    # probe rather than one that never existed.
+    import asyncio as _asyncio
+
+    from app.alerts import COLLECTOR_FAILED as _COLLECTOR_FAILED
+    from app.notify import raise_alert as _raise_alert
+
+    db = SessionLocal()
+    try:
+        _asyncio.run(_raise_alert(db, workspace_id, _COLLECTOR_FAILED.key, title="victim alert", body="secret"))
+    finally:
+        db.close()
+    notification_id = client.get("/notifications").json()["items"][0]["id"]
+
     client.post("/auth/logout")
     return {
+        "notification_id": notification_id,
         "channel_id": channel["id"],
         "link_id": link["id"],
         "session_id": session["id"],
@@ -184,6 +211,9 @@ def test_foreign_resource_survives_the_probe(attacker, victim_ids, path: str, me
     assert len(attacker.get("/channels").json()) == 2  # manual bucket + the added one
     assert len(attacker.get("/links/saved").json()) == 1, f"{method} {path} destroyed the victim's saved search"
     assert len(attacker.get("/auth/api-keys").json()) == 1, f"{method} {path} revoked the victim's API key"
+    assert attacker.get("/notifications").json()["unread"] == 1, (
+        f"{method} {path} marked the victim's notification read"
+    )
 
 
 def test_unauthenticated_access_is_rejected_everywhere(client: TestClient, victim_ids):

@@ -154,3 +154,45 @@ def test_every_referenced_asset_exists(client: TestClient):
         body = client.get(path).text
         for asset in sorted(set(re.findall(r'(?:href|src)="(/static/[^"]+)"', body))):
             assert client.get(asset).status_code == 200, f"{path} references missing {asset}"
+
+
+# --- the dispatcher's click/change split ----------------------------------
+
+
+def test_the_click_listener_excludes_change_driven_controls():
+    """A shipped regression, caught only by driving the real UI.
+
+    The click listener calls preventDefault(), and preventDefault() on a
+    checkbox's *click* event reverts the tick. When delegation replaced the
+    inline handlers, the two filter checkboxes ("favourites only", "show
+    archived") therefore stopped working entirely: one click left the box
+    unchecked and the filter unapplied, with nothing in the console to say
+    so, and every Python test still passing.
+
+    This asserts the exclusion at the source level. It is a weaker check
+    than clicking the box — the real proof is a browser run — but it is
+    the one that runs in CI, and it fails if the exclusion is removed.
+    """
+    source = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert "function isChangeDriven(" in source, "the click/change split was removed"
+    assert '"checkbox"' in source and '"radio"' in source
+    assert "if (el && !isChangeDriven(el)) dispatchAction(el, event);" in source
+    assert "if (el && isChangeDriven(el)) dispatchAction(el, event);" in source
+
+
+def test_every_data_action_checkbox_is_reachable_by_the_change_path():
+    """Guards the guard: if a checkbox carries data-action, the change
+    listener is the only thing that will ever run it."""
+    sources = TEMPLATES + [s for s in STATIC if s.suffix == ".js"]
+    found = 0
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        for match in re.finditer(r"<input[^>]*type=\"checkbox\"[^>]*>", text):
+            if "data-action" in match.group(0):
+                found += 1
+
+    # Three today: two filters plus the alert preference rows. The count is
+    # asserted loosely — the point is that they exist, so the exclusion
+    # above is load-bearing rather than defending nothing.
+    assert found >= 2, "no data-action checkboxes found; is the split still needed?"

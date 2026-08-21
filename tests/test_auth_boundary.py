@@ -43,6 +43,15 @@ SESSION_ONLY = {
     ("POST", "/auth/totp/enable"),
     ("POST", "/auth/totp/recovery-codes"),
     ("POST", "/auth/totp/disable"),
+    # Notification settings are a security surface in their own right: a
+    # leaked key that could switch alerts off would be a way to silence
+    # the very warnings that report the leak.
+    ("GET", "/notifications"),
+    ("POST", "/notifications/{notification_id:int}/read"),
+    ("POST", "/notifications/read-all"),
+    ("GET", "/notifications/preferences"),
+    ("PATCH", "/notifications/preferences/{alert_type}"),
+    ("GET", "/notifications/unread-count"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
 }

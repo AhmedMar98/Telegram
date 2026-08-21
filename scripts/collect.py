@@ -46,11 +46,13 @@ from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.accounts import record_failure, record_success  # noqa: E402
+from app.alerts import COLLECTOR_FAILED  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
+from app.notify import raise_alert  # noqa: E402
 
 logger = logging.getLogger("collector")
 
@@ -330,17 +332,42 @@ async def collect() -> None:
 
         total = 0
         collected_channels = 0
+        working_accounts = 0
         for account in accounts:
             channels = _channels_for(db, workspace_id, account, is_default=account.id == default_account_id)
             if not channels:
                 logger.info("account %s (%s): no channels assigned", account.id, account.label)
                 continue
             collected_channels += len(channels)
+            before = account.consecutive_failures
             total += await _collect_with_account(db, account, channels, api_id, api_hash)
+            # A run that raised increments the counter; one that worked
+            # resets it. Comparing across the call is how this tells the
+            # two apart without duplicating the bookkeeping.
+            if account.consecutive_failures <= before:
+                working_accounts += 1
 
         if collected_channels == 0:
             logger.info("no active channels configured for this workspace; nothing to do")
             return
+
+        if working_accounts == 0:
+            # Idea 154. This is the failure with no symptom: the dashboard
+            # keeps working, search keeps working, and the collection
+            # simply stops growing. Every account failing while channels
+            # are still configured is the one case worth interrupting
+            # somebody for — and it stayed silent before this.
+            await raise_alert(
+                db,
+                workspace_id,
+                COLLECTOR_FAILED.key,
+                title="⛔ توقّف الجمع بالكامل",
+                body=(
+                    f"كل حسابات الجمع ({len(accounts)}) أخفقت في هذه التشغيلة، "
+                    f"بينما ما تزال {collected_channels} قناة نشطة.\n"
+                    "افحص «حسابات الجمع» في لوحة التحكم: جلسة ملغاة تحتاج إعادة تفويض."
+                ),
+            )
         logger.info(
             "done: %d new link(s) across %d channel(s) using %d account(s)",
             total,

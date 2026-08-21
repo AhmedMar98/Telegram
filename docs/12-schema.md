@@ -75,6 +75,33 @@
 
 **الفهارس:** `ix_classification_feedback_link_id` (link_id)، `ix_classification_feedback_workspace_id` (workspace_id)، `ix_feedback_workspace_created` (workspace_id, created_at)
 
+## `notification_preferences`
+
+| العمود | النوع | يقبل NULL | مفتاح |
+|---|---|---|---|
+| `id` | `INTEGER` | لا | PK |
+| `workspace_id` | `INTEGER` | لا | FK → workspaces.id |
+| `alert_type` | `VARCHAR(50)` | لا | — |
+| `enabled` | `BOOLEAN` | لا | — |
+| `updated_at` | `DATETIME` | لا | — |
+
+**الفهارس:** `ix_notification_preferences_workspace_id` (workspace_id)
+
+## `notifications`
+
+| العمود | النوع | يقبل NULL | مفتاح |
+|---|---|---|---|
+| `id` | `INTEGER` | لا | PK |
+| `workspace_id` | `INTEGER` | لا | FK → workspaces.id |
+| `alert_type` | `VARCHAR(50)` | لا | — |
+| `title` | `VARCHAR(200)` | لا | — |
+| `body` | `TEXT` | لا | — |
+| `delivered_count` | `INTEGER` | لا | — |
+| `read_at` | `DATETIME` | نعم | — |
+| `created_at` | `DATETIME` | لا | — |
+
+**الفهارس:** `ix_notifications_alert_type` (alert_type)، `ix_notifications_workspace_id` (workspace_id)، `ix_notifications_ws_created` (workspace_id, created_at)
+
 ## `saved_searches`
 
 | العمود | النوع | يقبل NULL | مفتاح |

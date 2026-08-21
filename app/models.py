@@ -365,6 +365,58 @@ class ApiKey(Base):
     user: Mapped[User] = relationship()
 
 
+class NotificationPreference(Base):
+    """Whether one alert type is on for one workspace.
+
+    Sparse on purpose: a row exists only where the choice *differs* from
+    the default in ``app/alerts.py``. Materialising every type for every
+    workspace would mean a backfill today and another one every time a
+    type is added, and would freeze the defaults at the moment of the
+    migration — so a default the project later decides was wrong would
+    keep applying to everyone who never touched it.
+    """
+
+    __tablename__ = "notification_preferences"
+    __table_args__ = (UniqueConstraint("workspace_id", "alert_type", name="uq_notification_pref_workspace_type"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    alert_type: Mapped[str] = mapped_column(String(50))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Notification(Base):
+    """One alert that was raised, whether or not it reached a chat.
+
+    Serves three backlog items with one table, deliberately: the
+    dashboard's notification centre (156), the auditable record of what
+    was sent (161), and the recent-activity strip (165) are the same rows
+    read three ways. Three tables would have made "was I told about this?"
+    a question with three possible answers.
+
+    Recorded even when delivery fails or no chat is linked, because "the
+    platform noticed" and "you were told" are different facts and the gap
+    between them is the interesting one.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (Index("ix_notifications_ws_created", "workspace_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    alert_type: Mapped[str] = mapped_column(String(50), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    # How many linked chats actually received it. Zero is a normal state
+    # (no bot linked) and is not an error — but it is worth being able to
+    # see, because "no alerts arrived" and "no alerts were raised" look
+    # identical from the outside otherwise.
+    delivered_count: Mapped[int] = mapped_column(Integer, default=0)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class SavedSearch(Base):
     """A filter combination someone wants back with one click.
 

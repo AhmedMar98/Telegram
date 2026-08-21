@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.account_data import delete_workspace, export_workspace
+from app.alerts import NEW_DEVICE
 from app.apikeys import MAX_KEYS_PER_USER, create_api_key, list_api_keys, revoke_api_key
 from app.audit import AUDITED_SECURITY_ACTIONS
 from app.audit import record as audit_record
@@ -23,7 +24,7 @@ from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user, get_session_user
 from app.errors import ErrorCode, rate_limited, unprocessable
 from app.models import AuditLog, Channel, TelegramAccount, User, Workspace
-from app.notify import is_familiar_device, new_device_message, send_to_workspace
+from app.notify import is_familiar_device, new_device_message, raise_alert
 from app.passwords import rejection_reason
 from app.schemas import (
     AccountSummary,
@@ -195,13 +196,21 @@ async def login(
     _set_session_cookie(response, token)
 
     if not familiar:
+        # Routed through raise_alert rather than sent directly, so this —
+        # the first alert the project ever shipped — obeys the same
+        # preference switch as every later one. A single caller talking to
+        # the bot directly would make the phase's "individually
+        # disableable" criterion false.
+        #
         # Best-effort and deliberately last: a notification failure is not
         # an authentication failure, so nothing above this line depends on
-        # it, and send_to_workspace swallows its own errors.
-        await send_to_workspace(
+        # it, and raise_alert swallows its own delivery errors.
+        await raise_alert(
             db,
             user.workspace_id,
-            new_device_message(ip_address=ip, user_agent=user_agent),
+            NEW_DEVICE.key,
+            title="🔐 تسجيل دخول من جهاز جديد",
+            body=new_device_message(ip_address=ip, user_agent=user_agent),
         )
 
     return {"id": user.id, "email": user.email, "workspace_id": user.workspace_id}

@@ -30,6 +30,7 @@ class ErrorCode:
     MALFORMED_BODY = "malformed_body"
     TOTP_REQUIRED = "totp_required"
     TOTP_INVALID = "totp_invalid"
+    UNKNOWN_ALERT_TYPE = "unknown_alert_type"
     WEAK_PASSWORD = "weak_password"
     NOT_REDIRECTABLE = "not_redirectable"
     RATE_LIMITED = "rate_limited"
