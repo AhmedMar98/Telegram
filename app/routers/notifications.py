@@ -21,15 +21,18 @@ from app.audit import record as audit_record
 from app.database import get_db
 from app.deps import get_session_user
 from app.errors import ErrorCode, unprocessable
-from app.models import Notification, NotificationPreference, User
+from app.models import Notification, NotificationPreference, User, Workspace
 from app.notify import set_preference
 from app.schemas import (
     AlertPreferenceOut,
     AlertPreferenceUpdate,
     NotificationListResponse,
     NotificationOut,
+    WebhookOut,
+    WebhookUpdate,
 )
 from app.timeutil import utcnow
+from app.webhook import WebhookRefused, clear_url, deliver, mask, payload_for, store_url
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -159,6 +162,116 @@ def update_preference(
         enabled=payload.enabled,
         is_default=False,
     )
+
+
+# --- the outbound webhook (idea 162) ---------------------------------------
+
+
+def _workspace_of(db: Session, user: User) -> Workspace:
+    """The caller's workspace.
+
+    A live session implies one — ``users.workspace_id`` is a foreign key —
+    so its absence is a server-side inconsistency, not something the
+    caller did, and it is answered as one.
+    """
+    workspace = db.get(Workspace, user.workspace_id)
+    if workspace is None:  # pragma: no cover - the foreign key makes this unreachable
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="workspace not found")
+    return workspace
+
+
+def _webhook_state(workspace: Workspace) -> WebhookOut:
+    from app.webhook import configured_url
+
+    url = configured_url(workspace)
+    return WebhookOut(
+        configured=url is not None,
+        masked_url=mask(url) if url else None,
+        last_status=workspace.webhook_last_status,
+        last_attempt_at=workspace.webhook_last_attempt_at,
+    )
+
+
+@router.get("/webhook", response_model=WebhookOut)
+def get_webhook(db: Session = Depends(get_db), current_user: User = Depends(get_session_user)) -> WebhookOut:
+    """Whether a webhook is set, and how the last attempt went."""
+    workspace = _workspace_of(db, current_user)
+    return _webhook_state(workspace)
+
+
+@router.put("/webhook", response_model=WebhookOut)
+def set_webhook(
+    payload: WebhookUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> WebhookOut:
+    """Point the workspace's alerts at an HTTPS endpoint it controls.
+
+    Refusals carry the reason, because the person typing the URL is the
+    one who can fix it — with one exception: a host resolving to an
+    internal address is refused without naming the address, since that is
+    exactly what somebody probing internal ranges wants to learn.
+    """
+    workspace = _workspace_of(db, current_user)
+
+    try:
+        store_url(db, workspace, payload.url)
+    except WebhookRefused as exc:
+        raise unprocessable(ErrorCode.WEBHOOK_REFUSED, str(exc)) from None
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="notification.webhook_set",
+        # The masked form, not the URL: an audit log is read by more people
+        # and kept longer than the setting it describes.
+        detail=_webhook_state(workspace).masked_url,
+    )
+    db.commit()
+    return _webhook_state(workspace)
+
+
+@router.delete("/webhook", status_code=status.HTTP_204_NO_CONTENT)
+def delete_webhook(db: Session = Depends(get_db), current_user: User = Depends(get_session_user)) -> Response:
+    workspace = _workspace_of(db, current_user)
+
+    clear_url(db, workspace)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="notification.webhook_cleared",
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/webhook/test", response_model=WebhookOut)
+async def test_webhook(
+    db: Session = Depends(get_db), current_user: User = Depends(get_session_user)
+) -> WebhookOut:
+    """Send one obviously-labelled payload, so setup is not a week-long guess.
+
+    It grants no capability that configuring the webhook and waiting for a
+    real alert does not already grant, and the address check runs before
+    the request either way — so an internal target never receives one, and
+    the status code that comes back is only ever from a public host the
+    caller could have reached themselves.
+    """
+    workspace = _workspace_of(db, current_user)
+
+    if workspace.webhook_url:
+        await deliver(
+            db,
+            workspace,
+            payload_for(
+                alert_type="webhook_test",
+                title="اختبار الـwebhook",
+                body="إن وصلتك هذه الرسالة فالإعداد سليم. لم يقع شيء يستدعي تنبيهاً.",
+            ),
+        )
+    return _webhook_state(workspace)
 
 
 @router.get("/unread-count")

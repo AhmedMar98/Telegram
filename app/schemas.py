@@ -688,6 +688,36 @@ class AlertPreferenceUpdate(BaseModel):
     model_config = _config({"enabled": True})
 
 
+class WebhookOut(BaseModel):
+    """The configured webhook, described without being disclosed.
+
+    ``masked_url`` is deliberately not the URL. An incoming-webhook address
+    carries a secret token in its path, so returning it whole would make
+    every read of this endpoint a disclosure of the ability to post into
+    somebody's channel.
+    """
+
+    configured: bool
+    masked_url: str | None = None
+    last_status: int | None = None
+    last_attempt_at: datetime | None = None
+
+    model_config = _config(
+        {
+            "configured": True,
+            "masked_url": "https://hooks.example.com/…a1b2",
+            "last_status": 200,
+            "last_attempt_at": "2026-08-21T09:00:00",
+        }
+    )
+
+
+class WebhookUpdate(BaseModel):
+    url: str
+
+    model_config = _config({"url": "https://hooks.example.com/services/T000/B000/XXXX"})
+
+
 class NotificationOut(BaseModel):
     id: int
     alert_type: str

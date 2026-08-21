@@ -92,6 +92,24 @@
     <p class="muted small">كل نوع يُطفأ على حدة. لا شيء هنا يُرسَل نيابةً عنك إلى أحد — التنبيهات تصل إلى محادثتك المربوطة أنت.</p>
     <div id="alertPrefs"></div>
   </details>
+  <details class="gap-top">
+    <summary>إرسال التنبيهات إلى webhook خارجي</summary>
+    <p class="muted small">
+      عنوان <code>https</code> تملكه أنت — Slack أو Discord أو أي خدمة تقبل webhook وارداً.
+      يصله ما يصلك: التنبيهات التي فعّلتها أعلاه فقط، بلا بريدك ولا معرّفك.
+      لا تُقبل العناوين الداخلية، ولا يُتَّبع أي تحويل، ولا يُعرَض العنوان كاملاً بعد حفظه.
+    </p>
+    <div class="row gap-top-s">
+      <input type="url" id="webhookUrl" class="grow" placeholder="https://hooks.example.com/..."
+             autocomplete="off" spellcheck="false">
+      <button data-action="saveWebhook">حفظ</button>
+    </div>
+    <div class="row gap-top-s">
+      <span id="webhookState" class="muted small grow"></span>
+      <button data-action="testWebhook">إرسال اختبار</button>
+      <button data-action="clearWebhook">إزالة</button>
+    </div>
+  </details>
 </div>
 <p id="stats" class="muted"></p>
 <!-- Status changes are announced to a screen reader, not only shown.

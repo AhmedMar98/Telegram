@@ -36,6 +36,9 @@
 | `id` | `INTEGER` | لا | PK |
 | `name` | `VARCHAR(200)` | لا | — |
 | `created_at` | `DATETIME` | لا | — |
+| `webhook_url` | `TEXT` | نعم | — |
+| `webhook_last_status` | `INTEGER` | نعم | — |
+| `webhook_last_attempt_at` | `DATETIME` | نعم | — |
 
 ## `bot_link_codes`
 

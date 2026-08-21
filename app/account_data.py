@@ -67,6 +67,13 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _masked_webhook(workspace: Workspace) -> str | None:
+    from app.webhook import configured_url, mask
+
+    url = configured_url(workspace)
+    return mask(url) if url else None
+
+
 def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
     """Everything the platform holds for one workspace, as plain JSON.
 
@@ -88,6 +95,12 @@ def export_workspace(db: Session, workspace_id: int) -> dict[str, Any]:
             "id": workspace.id,
             "name": workspace.name,
             "created_at": _iso(workspace.created_at),
+            # Masked, not omitted and not copied. An incoming-webhook URL
+            # carries a secret token in its path, which puts it in the same
+            # class as the session strings above; but unlike those, whether
+            # one is configured is a fact worth carrying to a new
+            # deployment, so the fact travels and the credential does not.
+            "webhook": _masked_webhook(workspace),
         },
         "users": [
             {

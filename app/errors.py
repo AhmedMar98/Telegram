@@ -35,6 +35,7 @@ class ErrorCode:
     NOT_REDIRECTABLE = "not_redirectable"
     RATE_LIMITED = "rate_limited"
     LOGIN_THROTTLED = "login_throttled"
+    WEBHOOK_REFUSED = "webhook_refused"
 
 
 def unprocessable(code: str, message: str) -> HTTPException:
