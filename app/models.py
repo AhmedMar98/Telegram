@@ -304,7 +304,47 @@ class AuditLog(Base):
     target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Where the request came from, when the platform knows. Nullable for
+    # two distinct reasons that both mean "no address": an action taken by
+    # a background job rather than a request, and every row written before
+    # this column existed.
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ApiKey(Base):
+    """A personal credential for programmatic access, in place of the cookie.
+
+    Stored exactly like a session token — hashed, never recoverable — for
+    the same reason: a database dump must not hand anyone a working
+    credential. The raw key is shown once, at creation, and never again.
+
+    What it deliberately cannot do is in ``app/apikeys.py``. The short
+    version: a key reads and writes links, and cannot destroy the account
+    or mint another key.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # The leading characters of the raw key, in the clear. Purely so a
+    # person can tell two keys apart in a list — a name alone stops
+    # helping the moment someone has to match a key they pasted into a
+    # script against a row on screen. Too short to narrow a brute force.
+    prefix: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Nullable because a key that has never been used is a real state, and
+    # the useful question ("is this one still in use?") needs to tell it
+    # apart from "used long ago".
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    user: Mapped[User] = relationship()
 
 
 class SavedSearch(Base):

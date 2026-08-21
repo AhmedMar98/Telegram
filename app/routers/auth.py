@@ -14,15 +14,20 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.account_data import delete_workspace, export_workspace
+from app.apikeys import MAX_KEYS_PER_USER, create_api_key, list_api_keys, revoke_api_key
 from app.audit import record as audit_record
+from app.clientinfo import client_ip, client_origin
 from app.config import get_settings
 from app.database import get_db
-from app.deps import COOKIE_NAME, get_current_user
+from app.deps import COOKIE_NAME, get_current_user, get_session_user
 from app.errors import ErrorCode, rate_limited, unprocessable
 from app.models import Channel, TelegramAccount, User, Workspace
 from app.passwords import rejection_reason
 from app.schemas import (
     AccountSummary,
+    ApiKeyCreate,
+    ApiKeyCreated,
+    ApiKeyOut,
     ChangePasswordRequest,
     DeleteAccountRequest,
     DeleteAccountResponse,
@@ -57,21 +62,6 @@ from app.storage import link_count
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 14  # 14 days, matches Settings.session_ttl_hours default
-
-
-def _client_origin(request: Request) -> tuple[str | None, str | None]:
-    """The caller's IP and User-Agent, as reported by the platform.
-
-    Render terminates TLS at its own proxy, so ``request.client.host`` is
-    the proxy, not the visitor; the real address arrives in
-    ``X-Forwarded-For``. Only the first entry is used — the rest are
-    upstream proxies — and the value is treated as advisory, because a
-    client can send that header itself. It is shown to help a person
-    recognise their own device, never used to make an access decision.
-    """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
-    return (ip or None), request.headers.get("user-agent")
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -126,7 +116,7 @@ def register(
     )
     db.commit()
 
-    ip, user_agent = _client_origin(request)
+    ip, user_agent = client_origin(request)
     token = create_session(db, user, ip_address=ip, user_agent=user_agent)
     _set_session_cookie(response, token)
     return {"id": user.id, "email": user.email, "workspace_id": workspace.id}
@@ -135,7 +125,7 @@ def register(
 @router.post("/login")
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     email = normalize_email(payload.email)
-    ip, user_agent = _client_origin(request)
+    ip, user_agent = client_origin(request)
 
     if is_locked_out(db, email):
         # The lockout window is a known constant, so "later" can be an
@@ -171,7 +161,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
 def logout(
     response: Response,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ) -> dict:
     if session:
@@ -241,7 +231,7 @@ def change_password(
     response: Response,
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> dict:
     """Change the account password and revoke every other active session.
 
@@ -280,7 +270,7 @@ def logout_all(
     response: Response,
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> dict:
     """Sign out of every device, including this one."""
     revoked = revoke_all_sessions(db, current_user.id)
@@ -300,7 +290,7 @@ def logout_all(
 def list_sessions(
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> list[SessionOut]:
     """Every device/browser currently signed into this account."""
     current_id = current_session_id(db, session)
@@ -321,7 +311,7 @@ def list_sessions(
 def revoke_session_endpoint(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> Response:
     """Sign out one specific device without touching any other session."""
     found = revoke_session_by_id(db, current_user.id, session_id)
@@ -341,6 +331,7 @@ def revoke_session_endpoint(
 
 @router.get("/me/export")
 def export_my_data(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> JSONResponse:
@@ -361,6 +352,11 @@ def export_my_data(
         user_id=current_user.id,
         action="workspace.export",
         detail=f"{len(payload['links'])} link(s)",
+        # Idea 81. An export is the one action that moves the whole
+        # workspace out of the platform in a single request, so "it was
+        # exported" without "from where" is the least useful half of the
+        # record — an owner reviewing this is asking whether it was them.
+        ip_address=client_ip(request),
     )
     db.commit()
     return JSONResponse(
@@ -373,7 +369,7 @@ def export_my_data(
 def delete_my_workspace(
     payload: DeleteAccountRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> DeleteAccountResponse:
     """Erase this workspace and everything in it. There is no undo.
 
@@ -433,10 +429,78 @@ def rename_workspace(
     return workspace
 
 
+@router.get("/api-keys", response_model=list[ApiKeyOut])
+def list_my_api_keys(
+    db: Session = Depends(get_db), current_user: User = Depends(get_session_user)
+) -> list[ApiKeyOut]:
+    """Keys this account still holds. Never includes any key's raw value.
+
+    Session-only, like every endpoint on this resource — see
+    ``app/apikeys.py`` for why a key must not be able to enumerate or
+    issue keys.
+    """
+    return [ApiKeyOut.model_validate(k) for k in list_api_keys(db, current_user)]
+
+
+@router.post("/api-keys", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
+def create_my_api_key(
+    payload: ApiKeyCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> ApiKeyCreated:
+    """Issue a key and return it once.
+
+    Capped per user. Not an anti-abuse measure — the cap is on your own
+    account — but a key you have forgotten about is a credential nobody is
+    watching, and an unbounded list makes that the normal state.
+    """
+    if len(list_api_keys(db, current_user)) >= MAX_KEYS_PER_USER:
+        raise unprocessable(
+            ErrorCode.API_KEY_LIMIT,
+            f"at most {MAX_KEYS_PER_USER} active API keys; revoke one first",
+        )
+
+    record, raw = create_api_key(db, current_user, name=payload.name)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="apikey.create",
+        target_type="api_key",
+        target_id=str(record.id),
+        detail=record.prefix,
+    )
+    db.commit()
+    # The raw value exists in this response and nowhere else, now or ever.
+    return ApiKeyCreated(key=raw, api_key=ApiKeyOut.model_validate(record))
+
+
+@router.delete("/api-keys/{key_id:int}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_my_api_key(
+    key_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> Response:
+    """Revoke one key immediately. Another user's id reads as 404."""
+    if not revoke_api_key(db, current_user, key_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="api key not found")
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="apikey.revoke",
+        target_type="api_key",
+        target_id=str(key_id),
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/security-activity", response_model=SecurityActivityOut)
 def security_activity(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_session_user),
 ) -> SecurityActivityOut:
     """Failed sign-in attempts on this account, so the owner can notice an attack.
 

@@ -139,6 +139,19 @@
   <button onclick="deleteWorkspace()" style="color:#c00;">حذف مساحة العمل نهائياً</button>
 </div>
 <p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
+<h3>مفاتيح API</h3>
+<p class="muted">
+  للاستخدام البرمجي بدل كوكي الجلسة: <code>Authorization: Bearer lipk_…</code>.
+  المفتاح <strong>يقرأ ويضيف الروابط فقط</strong> — لا يستطيع حذف مساحة العمل،
+  ولا تغيير كلمة المرور، ولا إنشاء مفتاح آخر.
+</p>
+<div class="row">
+  <input id="apiKeyName" placeholder="اسم يميّزه (مثلاً: سكربت المزامنة)" style="flex:1;" maxlength="100">
+  <button onclick="createApiKey()">إنشاء مفتاح</button>
+</div>
+<p id="apiKeyResult" class="muted"></p>
+<div id="apiKeys"></div>
+
 <h3>نشاط الأمان</h3>
 <p id="securityActivity" class="muted"></p>
 
@@ -790,6 +803,44 @@ async function loadChannels() {
   ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
 }
 
+async function loadApiKeys() {
+  const res = await api("/auth/api-keys");
+  if (!res.ok) return;
+  const keys = await res.json();
+  document.getElementById("apiKeys").innerHTML = keys.map(k =>
+    `<div class="row" style="justify-content:space-between;">
+       <span><code>${escapeText(k.prefix)}…</code> ${escapeText(k.name)}
+         <span class="muted">${k.use_count} استخدام${k.last_used_at ? " — آخره " + new Date(k.last_used_at).toLocaleString("ar") : " — لم يُستخدم بعد"}</span>
+       </span>
+       <button onclick="revokeApiKey(${k.id})">إبطال</button>
+     </div>`
+  ).join("") || "<p class='muted'>لا توجد مفاتيح</p>";
+}
+
+async function createApiKey() {
+  const nameField = document.getElementById("apiKeyName");
+  const name = nameField.value.trim();
+  const out = document.getElementById("apiKeyResult");
+  if (!name) { out.textContent = "اكتب اسماً للمفتاح أولاً"; return; }
+
+  const res = await api("/auth/api-keys", { method: "POST", body: JSON.stringify({ name }) });
+  if (!res.ok) { out.textContent = (await res.json()).detail || "تعذّر الإنشاء"; return; }
+
+  const data = await res.json();
+  nameField.value = "";
+  // Shown once and never again — the server keeps only a hash, so there
+  // is no later screen that could display it.
+  out.innerHTML = `<strong>انسخه الآن — لن يُعرض مرة أخرى:</strong> <code>${escapeText(data.key)}</code>`;
+  loadApiKeys();
+}
+
+async function revokeApiKey(id) {
+  if (!confirm("إبطال هذا المفتاح؟ أي سكربت يستخدمه سيتوقّف فوراً.")) return;
+  await api(`/auth/api-keys/${id}`, { method: "DELETE" });
+  document.getElementById("apiKeyResult").textContent = "";
+  loadApiKeys();
+}
+
 async function loadWorkspace() {
   // /auth/me/summary carries the workspace name plus the counts below, so
   // this panel costs one request instead of four.
@@ -1066,5 +1117,6 @@ loadAccounts().then(loadChannels);
 loadSessions();
 loadSecurityActivity();
 loadWorkspace();
+loadApiKeys();
 </script>
 {% endblock %}

@@ -16,6 +16,7 @@ def record(
     target_type: str | None = None,
     target_id: str | None = None,
     detail: str | None = None,
+    ip_address: str | None = None,
 ) -> None:
     db.add(
         AuditLog(
@@ -25,5 +26,6 @@ def record(
             target_type=target_type,
             target_id=target_id,
             detail=detail,
+            ip_address=ip_address,
         )
     )
