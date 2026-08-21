@@ -22,3 +22,9 @@ cryptography>=50.0,<51.0
 aiogram>=3.16,<4.0
 httpx>=0.27,<1.0
 alembic>=1.14,<2.0
+# Optional TOTP second factor (idea 79). Pure Python, 45KB, and no runtime
+# dependencies of its own — verified, because this ships to the 512MB web
+# service. No external service and no subscription: the codes are computed
+# locally from a shared secret, which is what keeps the second factor
+# inside the zero-cost constraint.
+pyotp>=2.9,<3.0

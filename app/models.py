@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -49,6 +50,23 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="member")  # owner | member
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # --- optional second factor (idea 79) --------------------------------
+    # Encrypted, not hashed: verifying a code needs the original secret
+    # back, exactly like a Telethon session string. A dump holding these in
+    # plaintext would be a second-factor bypass, not merely a data leak.
+    totp_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Separate from "a secret exists": setup writes the secret first and
+    # only flips this once a real code proves the authenticator works, so a
+    # mistyped setup cannot lock the account out.
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The last accepted time step. A TOTP code stays valid for its whole
+    # step, so without this an observed code can be replayed for the rest
+    # of that window.
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # SHA-256 of each unused recovery code, newline separated. Hashed
+    # because these never need reading back, only comparing — and they are
+    # single-use bearer credentials that bypass the second factor entirely.
+    totp_recovery_hashes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     workspace: Mapped[Workspace] = relationship(back_populates="users")
 

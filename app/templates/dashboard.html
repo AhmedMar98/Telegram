@@ -139,6 +139,34 @@
   <button onclick="deleteWorkspace()" style="color:#c00;">حذف مساحة العمل نهائياً</button>
 </div>
 <p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
+<h3>التحقّق بخطوتين</h3>
+<p id="totpStatus" class="muted"></p>
+<div id="totpControls" class="row"></div>
+<div id="totpSetup" hidden>
+  <p class="muted">امسح هذا في تطبيق مُصادِق (Google Authenticator، Aegis، 1Password…)، أو أدخل السرّ يدوياً:</p>
+  <p><code id="totpSecret"></code></p>
+  <p class="muted" id="totpUri" style="word-break:break-all;font-size:.85em;"></p>
+  <div class="row">
+    <input id="totpCode" placeholder="الرمز المكوّن من ٦ أرقام" inputmode="numeric" maxlength="10" style="flex:1;">
+    <button onclick="enableTotp()">تفعيل</button>
+  </div>
+</div>
+<div id="recoveryCodes" hidden>
+  <p><strong>احفظ رموز الاسترداد الآن — لن تُعرض مرّة أخرى.</strong>
+     كلٌّ منها يعمل مرّة واحدة، وهي طريقتك الوحيدة للدخول إن فقدت هاتفك.</p>
+  <pre id="recoveryList" style="white-space:pre-wrap;"></pre>
+</div>
+
+<h3>سجل الأمان</h3>
+<p class="muted">
+  ما حدث لحسابك وحده — جلسات ومحاولات دخول وتغييرات حسّاسة، <strong>بلا أي روابط
+  أو محتوى مجموع</strong>. أضيق من تصدير البيانات الكامل، فيمكن مشاركته مع من
+  يساعدك في التحقيق.
+</p>
+<div class="row">
+  <button onclick="downloadSecurityLog()">تنزيل سجل الأمان (JSON)</button>
+</div>
+
 <h3>مفاتيح API</h3>
 <p class="muted">
   للاستخدام البرمجي بدل كوكي الجلسة: <code>Authorization: Bearer lipk_…</code>.
@@ -803,6 +831,74 @@ async function loadChannels() {
   ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
 }
 
+async function loadTotp() {
+  const res = await api("/auth/totp");
+  if (!res.ok) return;
+  const s = await res.json();
+  const status = document.getElementById("totpStatus");
+  const controls = document.getElementById("totpControls");
+  if (s.enabled) {
+    const warn = s.recovery_codes_remaining === 0
+      ? " <strong>لم يتبقَّ أي رمز استرداد — ولّد رموزاً جديدة الآن.</strong>"
+      : "";
+    status.innerHTML = `مفعّل · ${s.recovery_codes_remaining} رمز استرداد متبقٍّ${warn}`;
+    controls.innerHTML =
+      `<button onclick="regenerateRecovery()">رموز استرداد جديدة</button>` +
+      `<button onclick="disableTotp()" style="color:#c00;">تعطيل</button>`;
+  } else {
+    status.textContent = "غير مفعّل — كلمة المرور وحدها تكفي للدخول.";
+    controls.innerHTML = `<button onclick="startTotp()">تفعيل التحقّق بخطوتين</button>`;
+  }
+}
+
+async function startTotp() {
+  const res = await api("/auth/totp/setup", { method: "POST" });
+  if (!res.ok) { document.getElementById("totpStatus").textContent = (await res.json()).detail; return; }
+  const data = await res.json();
+  document.getElementById("totpSecret").textContent = data.secret;
+  document.getElementById("totpUri").textContent = data.otpauth_uri;
+  document.getElementById("totpSetup").hidden = false;
+  document.getElementById("totpCode").focus();
+}
+
+async function enableTotp() {
+  const code = document.getElementById("totpCode").value.trim();
+  const res = await api("/auth/totp/enable", { method: "POST", body: JSON.stringify({ code }) });
+  if (!res.ok) { document.getElementById("totpStatus").textContent = (await res.json()).detail; return; }
+  const data = await res.json();
+  document.getElementById("totpSetup").hidden = true;
+  document.getElementById("totpCode").value = "";
+  showRecoveryCodes(data.recovery_codes);
+  loadTotp();
+}
+
+function showRecoveryCodes(codes) {
+  document.getElementById("recoveryList").textContent = codes.join("\n");
+  document.getElementById("recoveryCodes").hidden = false;
+}
+
+async function regenerateRecovery() {
+  if (!confirm("سيتوقّف العمل بكل رموز الاسترداد القديمة. متابعة؟")) return;
+  const res = await api("/auth/totp/recovery-codes", { method: "POST" });
+  if (!res.ok) return;
+  showRecoveryCodes((await res.json()).recovery_codes);
+  loadTotp();
+}
+
+async function disableTotp() {
+  const current_password = prompt("كلمة المرور الحالية لتأكيد التعطيل:");
+  if (!current_password) return;
+  const res = await api("/auth/totp/disable", { method: "POST", body: JSON.stringify({ current_password }) });
+  document.getElementById("totpStatus").textContent = res.ok ? "" : "كلمة المرور غير صحيحة";
+  if (res.ok) { document.getElementById("recoveryCodes").hidden = true; loadTotp(); }
+}
+
+function downloadSecurityLog() {
+  // A plain navigation, so the browser handles Content-Disposition itself
+  // rather than the page buffering the whole file into memory first.
+  window.location.href = "/auth/me/security-export";
+}
+
 async function loadApiKeys() {
   const res = await api("/auth/api-keys");
   if (!res.ok) return;
@@ -1118,5 +1214,6 @@ loadSessions();
 loadSecurityActivity();
 loadWorkspace();
 loadApiKeys();
+loadTotp();
 </script>
 {% endblock %}
