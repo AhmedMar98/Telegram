@@ -189,3 +189,70 @@ def test_every_endpoint_appears_in_the_curl_doc():
     ]
 
     assert not missing, f"no curl example for: {sorted(missing)}"
+
+
+# Arabic-Indic digits, so a phase number can be compared across documents.
+_AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+# The trailing marker is NOT optional here, and that is the whole point.
+# Written as `(...)?` the lazy `[^\n]*?` before it matches nothing and the
+# group comes back empty for every heading, so plan_status is empty, so the
+# comparison below compares nothing and passes always. That is exactly what
+# it did on its first run: deliberately breaking the roadmap did not fail
+# the test. A guard that silently checks nothing is the failure mode this
+# file exists to prevent, so the parse is asserted non-empty below too.
+_PLAN_HEADING = re.compile(r"^### ~*المرحلة ([٠-٩]+[أب]?)[^\n]*?(✅|◐|⛔)", re.MULTILINE)
+_ROADMAP_ROW = re.compile(r"^\| ([٠-٩]+[أب]?) — [^|]*\| (✅|◐|⛔)", re.MULTILINE)
+
+
+def _phase_key(raw: str) -> str:
+    return raw.translate(_AR_DIGITS)
+
+
+def test_the_roadmap_agrees_with_the_execution_plan():
+    """Two documents stating the same fact, forced to agree.
+
+    docs/27-roadmap.md is the reader-facing summary of
+    docs/06-execution-plan.md. Nothing links them, so the roadmap keeps
+    saying whatever it said when it was written — and it did: it still
+    called phase 12 "in progress" after phase 12 had finished, in the same
+    commit that finished it.
+
+    A roadmap that misstates status is worse than no roadmap, because it is
+    the document someone reads *instead of* the plan.
+    """
+    plan = (DOCS / "06-execution-plan.md").read_text(encoding="utf-8")
+    roadmap = (DOCS / "27-roadmap.md").read_text(encoding="utf-8")
+
+    plan_status = {_phase_key(num): mark for num, mark in _PLAN_HEADING.findall(plan) if mark}
+    roadmap_status = {_phase_key(num): mark for num, mark in _ROADMAP_ROW.findall(roadmap)}
+
+    # Guards the guard, in both directions: either parse coming back empty
+    # would make the comparison vacuous.
+    assert len(roadmap_status) >= 10, f"roadmap table shape changed — parsed {len(roadmap_status)} rows"
+    assert len(plan_status) >= 10, f"plan heading shape changed — parsed {len(plan_status)} phases"
+
+    disagreements = {
+        phase: (plan_status[phase], roadmap_status[phase])
+        for phase in roadmap_status
+        if phase in plan_status and plan_status[phase] != roadmap_status[phase]
+    }
+
+    assert not disagreements, f"plan vs roadmap (plan, roadmap): {disagreements}"
+
+
+def test_every_completed_phase_appears_in_the_roadmap():
+    """A phase that finished and never reached the reader-facing page is a
+    phase whose completion nobody outside the plan can see."""
+    plan = (DOCS / "06-execution-plan.md").read_text(encoding="utf-8")
+    roadmap = (DOCS / "27-roadmap.md").read_text(encoding="utf-8")
+
+    # 6b and 11 are deliberately outside the status table — each has its own
+    # section — so they are checked as *mentioned*, not as table rows.
+    listed = {_phase_key(num) for num, _ in _ROADMAP_ROW.findall(roadmap)}
+    mentioned = {_phase_key(num) for num in re.findall(r"([٠-٩]+[أب]?) —", roadmap)}
+
+    finished = {_phase_key(num) for num, mark in _PLAN_HEADING.findall(plan) if mark in ("✅", "◐")}
+
+    missing = sorted(finished - listed - mentioned)
+    assert not missing, f"phases absent from docs/27-roadmap.md entirely: {missing}"
