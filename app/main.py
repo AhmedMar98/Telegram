@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.classifier import CATEGORIES
+from app.classifier.llm import probe as groq_probe
 from app.config import get_settings
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
@@ -121,7 +122,7 @@ def healthz() -> dict:
 
 
 @app.get("/readyz")
-def readyz(db: Session = Depends(get_db)) -> dict:
+def readyz(diagnostics: bool = False, db: Session = Depends(get_db)) -> dict:
     """Readiness: can we actually serve traffic (database reachable)?
 
     Also reports the applied migration revision. That belongs here and not
@@ -135,6 +136,15 @@ def readyz(db: Session = Depends(get_db)) -> dict:
     the useful case is exactly the one where it changed under a running
     process. A read failure degrades to ``None`` — the service is ready if
     the database answers, whether or not this extra fact is available.
+
+    ``?diagnostics=true`` adds a check of the optional Groq tier (idea
+    118). It is opt-in, and deliberately so on both counts: the platform's
+    own probe calls this endpoint on a schedule and must stay cheap, and
+    the result must never change ``status`` or the HTTP code. Groq being
+    down is not this service being down — wiring it into readiness would
+    have Render restart a healthy process because a third party had an
+    outage. See ``app.classifier.llm.probe`` for the rate and timeout
+    limits that keep the unauthenticated path safe.
     """
     try:
         db.execute(text("SELECT 1"))
@@ -151,7 +161,12 @@ def readyz(db: Session = Depends(get_db)) -> dict:
         # such table. That is a normal test/dev shape, not an outage.
         revision = None
 
-    return {"status": "ready", "schema_version": revision}
+    body: dict = {"status": "ready", "schema_version": revision}
+    if diagnostics:
+        # Nested under "diagnostics" so it reads as what it is, and so a
+        # caller checking readiness never trips over it.
+        body["diagnostics"] = {"groq": groq_probe()}
+    return body
 
 
 @app.get("/", response_class=HTMLResponse)

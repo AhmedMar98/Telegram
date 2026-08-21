@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.account_data import delete_workspace, export_workspace
@@ -17,9 +18,11 @@ from app.audit import record as audit_record
 from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user
-from app.models import User, Workspace
+from app.errors import ErrorCode, rate_limited, unprocessable
+from app.models import Channel, TelegramAccount, User, Workspace
 from app.passwords import rejection_reason
 from app.schemas import (
+    AccountSummary,
     ChangePasswordRequest,
     DeleteAccountRequest,
     DeleteAccountResponse,
@@ -49,6 +52,7 @@ from app.security import (
     verify_password,
     waste_password_time,
 )
+from app.storage import link_count
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,7 +101,7 @@ def register(
 
     weak = rejection_reason(payload.password)
     if weak is not None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=weak)
+        raise unprocessable(ErrorCode.WEAK_PASSWORD, weak)
 
     workspace = Workspace(name=payload.workspace_name)
     db.add(workspace)
@@ -134,9 +138,12 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     ip, user_agent = _client_origin(request)
 
     if is_locked_out(db, email):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="too many failed attempts, try again later",
+        # The lockout window is a known constant, so "later" can be an
+        # actual number instead of leaving the client to guess.
+        raise rate_limited(
+            ErrorCode.LOGIN_THROTTLED,
+            "too many failed attempts, try again later",
+            retry_after_seconds=LOGIN_WINDOW_MINUTES * 60,
         )
 
     user = db.query(User).filter(User.email == email).first()
@@ -187,6 +194,47 @@ def me(db: Session = Depends(get_db), current_user: User = Depends(get_current_u
     }
 
 
+@router.get("/me/summary", response_model=AccountSummary)
+def me_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> AccountSummary:
+    """The account at a glance, without four round trips to assemble it.
+
+    Idea 115. Implemented as a thin aggregate over the functions that
+    already answer each question, so it cannot drift away from the pages
+    it summarises — see ``AccountSummary`` for why that mattered more than
+    the saving in round trips.
+
+    Scoped to the caller's own workspace throughout. There is no parameter
+    naming a workspace, so this adds no new way to read across the
+    isolation boundary.
+    """
+    workspace = db.get(Workspace, current_user.workspace_id)
+    ws_id = current_user.workspace_id
+
+    channels = (
+        db.execute(select(func.count()).select_from(Channel).where(Channel.workspace_id == ws_id)).scalar() or 0
+    )
+    accounts = db.execute(
+        select(TelegramAccount.is_active, func.count())
+        .where(TelegramAccount.workspace_id == ws_id)
+        .group_by(TelegramAccount.is_active)
+    ).all()
+    by_state = {bool(is_active): count for is_active, count in accounts}
+
+    return AccountSummary(
+        user_id=current_user.id,
+        email=current_user.email,
+        workspace_id=ws_id,
+        workspace_name=workspace.name if workspace else None,
+        member_since=current_user.created_at,
+        total_links=link_count(db, ws_id),
+        total_channels=channels,
+        active_accounts=by_state.get(True, 0),
+        disabled_accounts=by_state.get(False, 0),
+        active_sessions=len(list_active_sessions(db, current_user.id)),
+        failed_logins_recent=len(recent_failed_attempts(db, current_user.email)),
+    )
+
+
 @router.post("/change-password")
 def change_password(
     payload: ChangePasswordRequest,
@@ -208,7 +256,7 @@ def change_password(
 
     weak = rejection_reason(payload.new_password)
     if weak is not None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=weak)
+        raise unprocessable(ErrorCode.WEAK_PASSWORD, weak)
 
     current_user.password_hash = hash_password(payload.new_password)
     revoked = revoke_all_sessions(db, current_user.id, except_token=session)

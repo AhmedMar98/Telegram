@@ -50,7 +50,14 @@ def filtered_links(
         query = query.filter(Link.is_archived.is_(False))
 
     if category:
-        query = query.filter(Link.category == category)
+        # Comma-separated means "any of these". A single value still takes
+        # the equality path so the common case keeps the same query plan
+        # rather than becoming a one-element IN.
+        wanted = [part.strip() for part in category.split(",") if part.strip()]
+        if len(wanted) == 1:
+            query = query.filter(Link.category == wanted[0])
+        elif wanted:
+            query = query.filter(Link.category.in_(wanted))
 
     if favorite is not None:
         query = query.filter(Link.is_favorite == favorite)
