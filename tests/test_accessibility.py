@@ -40,12 +40,16 @@ def contrast(foreground: str, background: str) -> float:
 
 
 def _palette(theme: str) -> dict[str, str]:
-    """Read the live tokens out of base.html rather than duplicating them.
+    """Read the live tokens out of the stylesheet rather than duplicating them.
 
     A copy of the palette in the test would keep passing after someone
     changed the stylesheet, which is exactly the regression worth catching.
+
+    The stylesheet moved from a <style> block in base.html to
+    app/static/app.css when the CSP dropped 'unsafe-inline' from
+    style-src; the tokens and this test's purpose are unchanged.
     """
-    css = (__import__("pathlib").Path(__file__).resolve().parent.parent / "app/templates/base.html").read_text(
+    css = (__import__("pathlib").Path(__file__).resolve().parent.parent / "app/static/app.css").read_text(
         encoding="utf-8"
     )
 
@@ -99,10 +103,25 @@ def test_both_themes_define_every_token_the_tests_check():
 
 @pytest.fixture
 def dashboard(client: TestClient) -> str:
+    """The dashboard as a browser actually receives it: markup plus every
+    stylesheet and script it links.
+
+    The page used to carry its CSS and JS inline, so the HTML alone was
+    the whole story. Since the CSP forced both out into /static, asserting
+    on the markup by itself would quietly stop covering the styles and
+    behaviour these tests exist to check — so the fixture follows the
+    references the page declares.
+    """
     register_workspace(client, email="a11y@example.com", workspace_name="A11y")
     response = client.get("/dashboard")
     assert response.status_code == 200
-    return response.text
+
+    bundle = [response.text]
+    for path in sorted(set(re.findall(r'(?:href|src)="(/static/[^"]+)"', response.text))):
+        asset = client.get(path)
+        assert asset.status_code == 200, f"{path} is referenced but not served"
+        bundle.append(asset.text)
+    return "\n".join(bundle)
 
 
 def test_the_document_declares_language_and_direction(dashboard: str):

@@ -8,6 +8,8 @@ rather than a two-state one that can never return to following the OS.
 
 from __future__ import annotations
 
+import re
+
 from fastapi.testclient import TestClient
 
 from app.classifier import hash_url
@@ -150,26 +152,54 @@ def test_rename_requires_authentication(client: TestClient):
 # --- theme toggle ----------------------------------------------------------
 
 
+def _page_bundle(client: TestClient, path: str = "/login") -> str:
+    """The page plus the assets it links — what the browser actually gets.
+
+    The CSS and theme JS used to be inline, so the HTML was the whole
+    story. Since the CSP forced them into /static, asserting on the markup
+    alone would silently stop covering them.
+    """
+    body = client.get(path).text
+    parts = [body]
+    for asset in sorted(set(re.findall(r'(?:href|src)="(/static/[^"]+)"', body))):
+        parts.append(client.get(asset).text)
+    return "\n".join(parts)
+
+
 def test_page_ships_all_three_theme_states(client: TestClient):
     """Two states would strand anyone who once picked a theme: they could
     never hand control back to the operating system."""
-    body = client.get("/login").text
+    body = _page_bundle(client)
 
     assert '"system", "light", "dark"' in body
     assert 'localStorage.removeItem("theme")' in body  # how "system" is stored
 
 
 def test_theme_is_applied_before_the_body_renders(client: TestClient):
-    """Applying it later shows a flash of the wrong palette on every load."""
-    body = client.get("/login").text
-    head_script = body.split("<style>")[0]
+    """Applying it later shows a flash of the wrong palette on every load.
 
-    assert 'localStorage.getItem("theme")' in head_script
-    assert 'setAttribute("data-theme"' in head_script
+    Moving the theme code to /static/theme.js made this property *more*
+    fragile, not less: an external script preserves it only while it stays
+    in <head> and stays render-blocking. Adding defer or async would push
+    it past first paint and bring the flash straight back with nothing
+    else changing — so placement and blocking are asserted, not just that
+    the code exists somewhere."""
+    body = client.get("/login").text
+    head = body.split("</head>")[0]
+
+    assert '<script src="/static/theme.js"></script>' in head, "theme script is not in <head>"
+    assert head.index("/static/theme.js") < head.index("/static/app.css"), (
+        "the theme must be applied before the stylesheet paints"
+    )
+    assert "defer" not in head and "async" not in head
+
+    script = client.get("/static/theme.js").text
+    assert 'localStorage.getItem("theme")' in script
+    assert 'setAttribute("data-theme"' in script
 
 
 def test_dark_palette_is_defined_for_both_the_os_and_the_explicit_choice(client: TestClient):
-    body = client.get("/login").text
+    body = _page_bundle(client)
 
     assert "@media (prefers-color-scheme: dark)" in body
     assert ':root:not([data-theme="light"])' in body  # explicit light beats the OS
@@ -179,7 +209,7 @@ def test_dark_palette_is_defined_for_both_the_os_and_the_explicit_choice(client:
 def test_every_colour_token_has_a_light_definition(client: TestClient):
     """A token defined only inside a media query renders as nothing when
     the query does not match."""
-    body = client.get("/login").text
+    body = _page_bundle(client)
     base = body.split("@media")[0]
 
     for token in ("--bg", "--fg", "--muted", "--border", "--card-bg", "--tag-bg", "--accent", "--danger"):
