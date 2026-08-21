@@ -28,6 +28,8 @@ class ErrorCode:
     SAVED_SEARCH_LIMIT = "saved_search_limit"
     API_KEY_LIMIT = "api_key_limit"
     MALFORMED_BODY = "malformed_body"
+    TOTP_REQUIRED = "totp_required"
+    TOTP_INVALID = "totp_invalid"
     WEAK_PASSWORD = "weak_password"
     NOT_REDIRECTABLE = "not_redirectable"
     RATE_LIMITED = "rate_limited"

@@ -117,6 +117,10 @@
 | `role` | `VARCHAR(20)` | لا | — |
 | `is_active` | `BOOLEAN` | لا | — |
 | `created_at` | `DATETIME` | لا | — |
+| `totp_secret` | `TEXT` | نعم | — |
+| `totp_enabled` | `BOOLEAN` | لا | — |
+| `totp_last_step` | `BIGINT` | نعم | — |
+| `totp_recovery_hashes` | `TEXT` | نعم | — |
 
 **الفهارس:** `ix_users_email` (email)، `ix_users_workspace_id` (workspace_id)
 

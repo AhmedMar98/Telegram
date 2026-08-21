@@ -26,10 +26,23 @@ SESSION_ONLY = {
     ("POST", "/auth/logout-all"),
     ("POST", "/auth/change-password"),
     ("POST", "/auth/me/delete"),
+    # The security log is narrower than the data export but more sensitive
+    # per row: it is the account's own IP addresses, devices and sign-in
+    # history. No script needs it, and a leaked key must not be able to
+    # profile the owner's movements.
+    ("GET", "/auth/me/security-export"),
     ("GET", "/auth/sessions"),
     ("DELETE", "/auth/sessions/{session_id}"),
     ("GET", "/auth/security-activity"),
     ("GET", "/auth/api-keys"),
+    # The second factor is a credential too: an API key must not be able to
+    # attach one to an account (a way to lock the owner out), read whether
+    # one is set, or strip one off.
+    ("GET", "/auth/totp"),
+    ("POST", "/auth/totp/setup"),
+    ("POST", "/auth/totp/enable"),
+    ("POST", "/auth/totp/recovery-codes"),
+    ("POST", "/auth/totp/disable"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
 }

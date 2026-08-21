@@ -15,13 +15,15 @@ from sqlalchemy.orm import Session
 
 from app.account_data import delete_workspace, export_workspace
 from app.apikeys import MAX_KEYS_PER_USER, create_api_key, list_api_keys, revoke_api_key
+from app.audit import AUDITED_SECURITY_ACTIONS
 from app.audit import record as audit_record
 from app.clientinfo import client_ip, client_origin
 from app.config import get_settings
 from app.database import get_db
 from app.deps import COOKIE_NAME, get_current_user, get_session_user
 from app.errors import ErrorCode, rate_limited, unprocessable
-from app.models import Channel, TelegramAccount, User, Workspace
+from app.models import AuditLog, Channel, TelegramAccount, User, Workspace
+from app.notify import is_familiar_device, new_device_message, send_to_workspace
 from app.passwords import rejection_reason
 from app.schemas import (
     AccountSummary,
@@ -32,9 +34,14 @@ from app.schemas import (
     DeleteAccountRequest,
     DeleteAccountResponse,
     LoginRequest,
+    RecoveryCodesResponse,
     RegisterRequest,
     SecurityActivityOut,
     SessionOut,
+    TotpCodeRequest,
+    TotpDisableRequest,
+    TotpSetupResponse,
+    TotpStatus,
     WorkspaceOut,
     WorkspaceRenameRequest,
 )
@@ -58,6 +65,16 @@ from app.security import (
     waste_password_time,
 )
 from app.storage import link_count
+from app.twofactor import (
+    accept_second_factor,
+    begin_enrolment,
+    complete_enrolment,
+    regenerate_recovery_codes,
+    remaining_recovery_codes,
+)
+from app.twofactor import (
+    disable as disable_second_factor,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -123,7 +140,9 @@ def register(
 
 
 @router.post("/login")
-def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+async def login(
+    payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict:
     email = normalize_email(payload.email)
     ip, user_agent = client_origin(request)
 
@@ -148,12 +167,43 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         record_login_attempt(db, email, successful=False, ip_address=ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
+    # The second factor, only for accounts that turned it on. Checked
+    # *after* the password so the response never reveals whether an
+    # address has TOTP enabled to someone who does not already hold the
+    # password — at which point they know the account exists anyway.
+    if user.totp_enabled and not accept_second_factor(db, user, payload.totp_code):
+        # Counted as a failed attempt, so the existing throttle covers
+        # code guessing too. Six digits with no throttle is not a second
+        # factor.
+        record_login_attempt(db, email, successful=False, ip_address=ip)
+        db.commit()
+        raise unprocessable(
+            ErrorCode.TOTP_REQUIRED,
+            "this account requires a verification code from your authenticator app, or one of your recovery codes",
+        )
+
     clear_login_failures(db, email)
     audit_record(db, workspace_id=user.workspace_id, user_id=user.id, action="user.login")
     db.commit()
 
+    # Checked *before* the session is created, or the login being performed
+    # right now would itself be the matching prior session and every device
+    # would look familiar.
+    familiar = is_familiar_device(db, user.id, ip_address=ip, user_agent=user_agent)
+
     token = create_session(db, user, ip_address=ip, user_agent=user_agent)
     _set_session_cookie(response, token)
+
+    if not familiar:
+        # Best-effort and deliberately last: a notification failure is not
+        # an authentication failure, so nothing above this line depends on
+        # it, and send_to_workspace swallows its own errors.
+        await send_to_workspace(
+            db,
+            user.workspace_id,
+            new_device_message(ip_address=ip, user_agent=user_agent),
+        )
+
     return {"id": user.id, "email": user.email, "workspace_id": user.workspace_id}
 
 
@@ -492,6 +542,192 @@ def revoke_my_api_key(
         action="apikey.revoke",
         target_type="api_key",
         target_id=str(key_id),
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/me/security-export")
+def export_security_log(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> JSONResponse:
+    """The security record alone, separate from the general data export.
+
+    Idea 88. ``/auth/me/export`` answers "give me my collection"; this
+    answers "show me what happened to my account". They are different
+    questions asked at different moments — the second one is usually asked
+    while something looks wrong, and having to search a file full of links
+    for the three rows that matter is exactly the wrong experience then.
+
+    Contains **no links, no channels and no collected content**: sessions,
+    sign-in attempts, the second-factor state, and the security-relevant
+    audit actions. Narrower than the full export in every direction, so it
+    is safe to hand to someone helping you investigate — which the full
+    export is not.
+    """
+    rows = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.workspace_id == current_user.workspace_id,
+            AuditLog.action.in_(AUDITED_SECURITY_ACTIONS),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .all()
+    )
+    attempts = recent_failed_attempts(db, current_user.email)
+
+    payload = {
+        "account": {"email": current_user.email, "member_since": current_user.created_at.isoformat()},
+        "two_factor": {
+            "enabled": current_user.totp_enabled,
+            "recovery_codes_remaining": remaining_recovery_codes(current_user),
+        },
+        "active_sessions": [
+            {
+                "created_at": s.created_at.isoformat(),
+                "expires_at": s.expires_at.isoformat(),
+                "ip_address": s.ip_address,
+                "user_agent": s.user_agent,
+            }
+            for s in list_active_sessions(db, current_user.id)
+        ],
+        "recent_failed_sign_ins": [
+            {"created_at": a.created_at.isoformat(), "ip_address": a.ip_address} for a in attempts
+        ],
+        "security_events": [
+            {
+                "action": r.action,
+                "created_at": r.created_at.isoformat(),
+                "ip_address": r.ip_address,
+                "detail": r.detail,
+            }
+            for r in rows
+        ],
+    }
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="workspace.security_export",
+        ip_address=client_ip(request),
+    )
+    db.commit()
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": 'attachment; filename="security-log.json"'},
+    )
+
+
+@router.get("/totp", response_model=TotpStatus)
+def totp_status(current_user: User = Depends(get_session_user)) -> TotpStatus:
+    """Whether the second factor is on, and how much recovery is left."""
+    return TotpStatus(
+        enabled=current_user.totp_enabled,
+        recovery_codes_remaining=remaining_recovery_codes(current_user),
+    )
+
+
+@router.post("/totp/setup", response_model=TotpSetupResponse)
+def totp_setup(db: Session = Depends(get_db), current_user: User = Depends(get_session_user)) -> TotpSetupResponse:
+    """Start enrolment. Enables nothing until a code proves it works.
+
+    Session-only, like every credential endpoint: an API key must not be
+    able to attach a second factor to an account, which would be a way to
+    lock the owner out of their own workspace.
+    """
+    if current_user.totp_enabled:
+        raise unprocessable(
+            ErrorCode.TOTP_INVALID, "two-factor authentication is already enabled; disable it first"
+        )
+
+    secret, uri = begin_enrolment(db, current_user)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="totp.setup_started",
+    )
+    db.commit()
+    return TotpSetupResponse(secret=secret, otpauth_uri=uri)
+
+
+@router.post("/totp/enable", response_model=RecoveryCodesResponse)
+def totp_enable(
+    payload: TotpCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> RecoveryCodesResponse:
+    """Prove the authenticator works, then switch it on and issue recovery codes.
+
+    The codes come back here and nowhere else. Issuing them is part of
+    enabling rather than a later optional step, because this platform has
+    one user per workspace and no administrator — a second factor with no
+    recovery path is a way to lose the whole collection to a lost phone.
+    """
+    codes = complete_enrolment(db, current_user, payload.code)
+    if codes is None:
+        raise unprocessable(ErrorCode.TOTP_INVALID, "that code did not match; check the app and try again")
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="totp.enabled",
+        ip_address=client_ip(request),
+    )
+    db.commit()
+    return RecoveryCodesResponse(recovery_codes=codes)
+
+
+@router.post("/totp/recovery-codes", response_model=RecoveryCodesResponse)
+def totp_regenerate_recovery(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> RecoveryCodesResponse:
+    """Issue a fresh set, invalidating every previous code."""
+    if not current_user.totp_enabled:
+        raise unprocessable(ErrorCode.TOTP_INVALID, "two-factor authentication is not enabled")
+
+    codes = regenerate_recovery_codes(db, current_user)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="totp.recovery_regenerated",
+        ip_address=client_ip(request),
+    )
+    db.commit()
+    return RecoveryCodesResponse(recovery_codes=codes)
+
+
+@router.post("/totp/disable", status_code=status.HTTP_204_NO_CONTENT)
+def totp_disable(
+    payload: TotpDisableRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> Response:
+    """Turn it off. Password-gated, because it is a security downgrade.
+
+    A stolen session cookie is enough to browse; it must not also be
+    enough to quietly strip the second factor off the account.
+    """
+    if not verify_password(payload.current_password, current_user.password_hash):
+        waste_password_time()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="incorrect password")
+
+    disable_second_factor(db, current_user)
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="totp.disabled",
+        ip_address=client_ip(request),
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -137,8 +137,15 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    # Optional so that every existing client keeps working unchanged: an
+    # account without a second factor never needs it, and one with it is
+    # told so explicitly rather than by a bare 401.
+    totp_code: str | None = Field(default=None, max_length=32)
 
-    model_config = _config({"email": "sara@example.com", "password": "correct-horse-battery-staple"})
+    model_config = _config(
+        {"email": "sara@example.com", "password": "correct-horse-battery-staple"},
+        {"email": "sara@example.com", "password": "correct-horse-battery-staple", "totp_code": "123456"},
+    )
 
 
 class ChannelCreate(BaseModel):
@@ -604,6 +611,52 @@ class ApiKeyCreated(BaseModel):
             },
         }
     )
+
+
+class TotpStatus(BaseModel):
+    enabled: bool
+    # Zero remaining while enabled is the state worth warning about: the
+    # second factor still applies and there is no longer any way past a
+    # lost authenticator.
+    recovery_codes_remaining: int
+
+    model_config = _config({"enabled": True, "recovery_codes_remaining": 8})
+
+
+class TotpSetupResponse(BaseModel):
+    """Shown once during setup. Nothing here is retrievable afterwards."""
+
+    secret: str = Field(description="base32 secret — for manual entry if the URI cannot be scanned")
+    otpauth_uri: str = Field(description="paste or scan into an authenticator app")
+
+    model_config = _config(
+        {
+            "secret": "JBSWY3DPEHPK3PXP",
+            "otpauth_uri": "otpauth://totp/Link%20Intelligence:sara@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Link+Intelligence",
+        }
+    )
+
+
+class TotpCodeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+
+    model_config = _config({"code": "123456"})
+
+
+class TotpDisableRequest(BaseModel):
+    """Turning the second factor off is a downgrade, so it is password-gated."""
+
+    current_password: str
+
+    model_config = _config({"current_password": "correct-horse-battery-staple"})
+
+
+class RecoveryCodesResponse(BaseModel):
+    """The plaintext codes, returned once. Only hashes are stored."""
+
+    recovery_codes: list[str]
+
+    model_config = _config({"recovery_codes": ["a1b2c3d4-e5f6a7b8", "1122aabb-33cc44dd"]})
 
 
 class WorkspaceOut(BaseModel):
