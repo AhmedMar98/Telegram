@@ -3,7 +3,7 @@
 {% block content %}
 <h2>تسجيل الدخول</h2>
 <div class="card">
-  <form id="loginForm" class="row" style="flex-direction: column;">
+  <form id="loginForm" class="row stack">
     <input type="email" name="email" placeholder="البريد الإلكتروني" required>
     <input type="password" name="password" placeholder="كلمة المرور" required>
     <button type="submit">دخول</button>
@@ -11,17 +11,5 @@
   </form>
 </div>
 <p class="muted">لا تملك حساباً؟ <a href="/register">أنشئ مساحة عمل جديدة</a></p>
-<script>
-document.getElementById("loginForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const form = new FormData(e.target);
-  const res = await fetch("/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
-  });
-  if (res.ok) { window.location.href = "/dashboard"; }
-  else { const data = await res.json(); document.getElementById("err").textContent = data.detail || "فشل الدخول"; }
-});
-</script>
+<script src="/static/login.js"></script>
 {% endblock %}

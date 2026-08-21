@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -37,6 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -105,10 +107,69 @@ async def limit_request_body(request: Request, call_next):
     return await call_next(request)
 
 
+# Idea 85. Every directive is closed rather than merely present: the point
+# of this header is what it *refuses*, and a policy carrying
+# 'unsafe-inline' on script-src permits exactly what XSS does — a header
+# that reads as protection while providing none.
+#
+# Reaching a real policy took removing the inline code first: 49 on*=
+# attributes, five <script> blocks and 29 style attributes. Nonces would
+# not have helped, because a nonce cannot apply to an on*= attribute at
+# all. See app/static/app.js.
+#
+# 'unsafe-eval' is absent too, so a later dependency that needs eval fails
+# loudly here instead of quietly widening the policy.
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        # data: for the theme emoji and any inlined icon; no remote hosts.
+        "img-src 'self' data:",
+        "font-src 'self'",
+        # The dashboard only ever talks to its own origin.
+        "connect-src 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "object-src 'none'",
+    )
+)
+
+# Sent alongside it because a CSP does not cover either of these: MIME
+# sniffing can turn an uploaded text file into a script, and a referrer
+# leaks the page you came from to every site you click through to.
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Attach the security headers to every response.
+
+    Applied in middleware rather than per-route so a route added later
+    cannot be the one that forgets — the same reasoning as the auth
+    dependency split in ``app/deps.py``.
+    """
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(links.router)
 app.include_router(bot_router.router)
+
+
+# Serving the page scripts as files is what makes a real CSP possible: with
+# 'unsafe-inline' gone, a <script> block in a template would simply not run.
+# See app/static/app.js for how the inline on*= handlers were replaced.
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/healthz")

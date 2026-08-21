@@ -1,0 +1,17 @@
+document.getElementById("regForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const body = {
+    workspace_name: form.get("workspace_name"),
+    email: form.get("email"),
+    password: form.get("password"),
+  };
+  if (form.get("invite_code")) body.invite_code = form.get("invite_code");
+  const res = await fetch("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) { window.location.href = "/dashboard"; }
+  else { const data = await res.json(); document.getElementById("err").textContent = data.detail || "فشل التسجيل"; }
+});
