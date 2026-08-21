@@ -5,3 +5,9 @@ pytest-cov>=7.0,<8.0
 ruff>=0.7,<1.0
 mypy>=1.13,<2.0
 bandit>=1.7,<2.0
+# Dev-only, and never shipped to the 512MB web service: one test parses the
+# Markdown export's YAML front matter with a real YAML parser, because
+# "looks like YAML" is not the property idea 166 promises. PyYAML arrives
+# transitively via bandit today — declared here so the test does not break
+# mysteriously the day that stops being true.
+PyYAML>=6.0,<7.0
