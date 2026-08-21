@@ -56,16 +56,63 @@ function dispatchAction(el, event) {
   fn.apply(null, args);
 }
 
+// Controls whose action belongs to "change", not "click": a select must
+// not fire before a value is chosen, and a checkbox reports its new state
+// only once the change event has run.
+function isChangeDriven(el) {
+  return (
+    el.tagName === "SELECT" ||
+    (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "radio"))
+  );
+}
+
 document.addEventListener("click", function (event) {
   var el = event.target.closest("[data-action]");
-  // Ignore controls whose action fires on change instead, so a click on a
-  // <select> does not run its handler before a value has been chosen.
-  if (el && el.tagName !== "SELECT") dispatchAction(el, event);
+  // Checkboxes are excluded here for a reason that cost a shipped
+  // regression: this listener calls preventDefault(), and preventDefault()
+  // on a checkbox's *click* event reverts the tick. The filter checkboxes
+  // therefore stopped working the moment delegation replaced their inline
+  // handlers — one click left the box unchecked and the filter unapplied,
+  // with nothing in the console to say so.
+  if (el && !isChangeDriven(el)) dispatchAction(el, event);
 });
 
 document.addEventListener("change", function (event) {
   var el = event.target.closest("[data-action]");
-  if (el && (el.tagName === "SELECT" || el.type === "checkbox")) dispatchAction(el, event);
+  if (el && isChangeDriven(el)) dispatchAction(el, event);
 });
 
 applyTheme(storedTheme());
+
+
+// --- transient confirmation messages (idea 164) ---------------------------
+//
+// alert() blocks the whole page, has to be dismissed before anything else
+// can happen, and is the wrong weight for "your 42 links were deleted" —
+// a result you want to see, not something you must acknowledge.
+//
+// confirm() and prompt() are deliberately *not* replaced. They are used
+// here only before irreversible actions (deleting a workspace, revoking a
+// key), and their blocking, unmissable, unstyleable nature is the right
+// weight for exactly those — an in-page dialog that looks like the rest
+// of the interface is easier to click through by reflex.
+
+var TOAST_MS = 4000;
+
+function toast(message, kind) {
+  var host = document.getElementById("toasts");
+  if (!host) return;
+
+  var el = document.createElement("div");
+  el.className = "toast" + (kind === "error" ? " toast-error" : "");
+  el.textContent = message;
+  host.appendChild(el);
+
+  // The host is aria-live, so a screen reader announces this without the
+  // focus theft alert() caused. Errors are assertive; results are polite.
+  host.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
+
+  window.setTimeout(function () {
+    el.remove();
+  }, TOAST_MS);
+}

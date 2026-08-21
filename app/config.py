@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
 
+    # --- Storage headroom (idea 153) ---------------------------------------
+    # The size at which the storage alert fires, as a fraction of this
+    # limit. **The limit is a configured assumption, not a verified fact:**
+    # Render's site is unreachable from the development environment (see
+    # docs/02 §5, which records the same problem for the database's
+    # lifetime), so this default is a commonly cited figure rather than
+    # one this project measured. It is settable precisely because it is
+    # unverified — and the alert says so rather than presenting it as
+    # Render's number.
+    storage_limit_bytes: int = 1_073_741_824  # 1 GiB
+    storage_alert_fraction: float = 0.8
+
     # --- Field-level encryption -------------------------------------------
     # Encrypts secrets that (unlike passwords or session tokens) must be
     # recoverable in their original form — today, only a collected Telegram

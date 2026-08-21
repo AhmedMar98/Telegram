@@ -196,7 +196,7 @@ async function bulkDelete() {
   if (!confirm("حذف كل الروابط المطابقة للفلتر الحالي؟ لا يمكن التراجع.")) return;
   const res = await api("/links/bulk/delete", { method: "POST", body: JSON.stringify(filter) });
   const data = await res.json();
-  alert(`تم حذف ${data.affected} رابط.`);
+  toast(`تم حذف ${data.affected} رابط.`);
   search(false);
   loadStats();
 }
@@ -205,13 +205,13 @@ async function bulkRecategorize() {
   const filter = currentFilter();
   const new_category = prompt("التصنيف الجديد لكل النتائج المطابقة للفلتر الحالي:\n" + CATEGORIES.join(", "));
   if (!new_category) return;
-  if (!CATEGORIES.includes(new_category)) { alert("تصنيف غير معروف."); return; }
+  if (!CATEGORIES.includes(new_category)) { toast("تصنيف غير معروف.", "error"); return; }
   const res = await api("/links/bulk/recategorize", {
     method: "POST",
     body: JSON.stringify(Object.assign({}, filter, { new_category })),
   });
   const data = await res.json();
-  alert(`تم تحديث ${data.affected} رابط.`);
+  toast(`تم تحديث ${data.affected} رابط.`);
   search(false);
 }
 
@@ -480,7 +480,7 @@ async function copyPermalink() {
   const url = location.origin + location.pathname + "?" + currentParams().toString();
   try {
     await navigator.clipboard.writeText(url);
-    alert("نُسخ رابط الفلاتر.");
+    toast("نُسخ رابط الفلاتر.");
   } catch (e) {
     // Clipboard access is refused outside a secure context or without a
     // user gesture the browser accepts; showing the URL still gets the job
@@ -521,7 +521,7 @@ async function saveCurrentSearch() {
   const filters = Object.fromEntries(currentParams());
   delete filters.page;
   const res = await api("/links/saved", { method: "POST", body: JSON.stringify({ name, filters }) });
-  if (!res.ok) { alert((await res.json()).detail || "تعذّر الحفظ."); return; }
+  if (!res.ok) { toast((await res.json()).detail || "تعذّر الحفظ.", "error"); return; }
   loadSavedSearches();
 }
 
@@ -800,14 +800,14 @@ async function deleteWorkspace() {
   const current_password = prompt("أدخل كلمة المرور الحالية للتأكيد:");
   if (!current_password) return;
   const confirmText = prompt("اكتب DELETE بالأحرف الكبيرة لتأكيد الحذف النهائي:");
-  if (confirmText !== "DELETE") { alert("لم يتم التأكيد — أُلغيت العملية."); return; }
+  if (confirmText !== "DELETE") { toast("لم يتم التأكيد — أُلغيت العملية.", "error"); return; }
   const res = await api("/auth/me/delete", { method: "POST", body: JSON.stringify({ current_password, confirm: confirmText }) });
   if (!res.ok) {
     const err = await res.json();
-    alert(err.detail || "تعذّر الحذف.");
+    toast(err.detail || "تعذّر الحذف.", "error");
     return;
   }
-  alert("تم حذف مساحة العمل.");
+  toast("تم حذف مساحة العمل.");
   window.location.href = "/login";
 }
 
@@ -1041,3 +1041,94 @@ loadSecurityActivity();
 loadWorkspace();
 loadApiKeys();
 loadTotp();
+
+
+// --- notifications (ideas 156, 157, 161, 165) -----------------------------
+
+function toggleNotifications() {
+  const panel = document.getElementById("notificationCentre");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) { loadNotifications(); loadAlertPrefs(); }
+}
+
+async function loadRecentActivity() {
+  const res = await api("/notifications?limit=1");
+  if (!res.ok) return;
+  const data = await res.json();
+
+  const badge = document.getElementById("unreadBadge");
+  badge.hidden = data.unread === 0;
+  badge.textContent = data.unread;
+
+  // A glance, not a list: the strip shows only the most recent event, and
+  // the centre behind the button is where the history lives.
+  const latest = data.items[0];
+  document.getElementById("recentActivity").textContent = latest
+    ? `${latest.title} — ${new Date(latest.created_at).toLocaleString("ar")}`
+    : "لا تنبيهات";
+}
+
+async function loadNotifications() {
+  const res = await api("/notifications?limit=50");
+  if (!res.ok) return;
+  const data = await res.json();
+  document.getElementById("notificationList").innerHTML = data.items.map(n =>
+    `<div class="card compact${n.read_at ? "" : " unread"}">
+       <div class="row spread centred">
+         <strong>${escapeText(n.title)}</strong>
+         <span class="muted small">${new Date(n.created_at).toLocaleString("ar")}</span>
+       </div>
+       <div class="gap-top-s">${escapeText(n.body).replace(/\n/g, "<br>")}</div>
+       <div class="muted small gap-top-s">
+         ${n.delivered_count ? `وصل إلى ${n.delivered_count} محادثة` : "لم يُرسَل إلى أي محادثة (البوت غير مربوط)"}
+         ${n.read_at ? "" : ` · <button data-action="markRead" data-args='[${n.id}]'>تعليم كمقروء</button>`}
+       </div>
+     </div>`
+  ).join("") || "<p class='muted'>لا تنبيهات بعد</p>";
+}
+
+async function markRead(id) {
+  await api(`/notifications/${id}/read`, { method: "POST" });
+  loadNotifications();
+  loadRecentActivity();
+}
+
+async function markAllRead() {
+  await api("/notifications/read-all", { method: "POST" });
+  loadNotifications();
+  loadRecentActivity();
+}
+
+async function loadAlertPrefs() {
+  const res = await api("/notifications/preferences");
+  if (!res.ok) return;
+  const prefs = await res.json();
+  document.getElementById("alertPrefs").innerHTML = prefs.map(p =>
+    `<div class="row centred gap-top-s">
+       <input type="checkbox" id="pref-${escapeText(p.key)}" ${p.enabled ? "checked" : ""}
+              data-action="setAlertPref" data-args='["${escapeText(p.key)}"]'>
+       <label for="pref-${escapeText(p.key)}" class="grow">
+         ${escapeText(p.label)}
+         <span class="muted small">— ${escapeText(p.description)}</span>
+       </label>
+     </div>`
+  ).join("");
+}
+
+async function setAlertPref(key) {
+  const box = document.getElementById(`pref-${key}`);
+  const res = await api(`/notifications/preferences/${key}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: box.checked }),
+  });
+  if (!res.ok) {
+    // Put the box back: leaving it showing a state the server rejected
+    // would tell someone an alert is off when it is still on.
+    box.checked = !box.checked;
+    toast("تعذّر حفظ التفضيل.", "error");
+    return;
+  }
+  toast(box.checked ? "فُعِّل التنبيه." : "أُطفئ التنبيه.");
+}
+
+loadRecentActivity();

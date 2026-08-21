@@ -32,6 +32,8 @@ from app.models import (
     ClassificationFeedback,
     Link,
     LoginAttempt,
+    Notification,
+    NotificationPreference,
     SavedSearch,
     TelegramAccount,
     User,
@@ -45,6 +47,8 @@ from app.models import (
 # identifier).
 WORKSPACE_TABLES = (
     ApiKey,
+    Notification,
+    NotificationPreference,
     ClassificationFeedback,
     SavedSearch,
     Link,

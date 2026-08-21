@@ -27,7 +27,7 @@ from app.classifier.llm import probe as groq_probe
 from app.config import get_settings
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
-from app.routers import auth, bot_router, channels, links
+from app.routers import auth, bot_router, channels, links, notifications
 from app.security import resolve_session
 
 logging.basicConfig(
@@ -163,6 +163,7 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(links.router)
+app.include_router(notifications.router)
 app.include_router(bot_router.router)
 
 

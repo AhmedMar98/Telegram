@@ -165,3 +165,51 @@
    which the CSSOM allows and CSP does not govern — unlike a style
    attribute baked into an HTML string. */
 .bar { display: flex; height: .5rem; border-radius: .25rem; overflow: hidden; margin-bottom: .75rem; }
+
+/* --- transient messages (idea 164) ----------------------------------
+   Fixed to a corner rather than shifting the layout: a result message
+   that reflows the page moves the thing you were about to click. */
+.toast-host {
+  position: fixed;
+  inset-block-end: 1rem;
+  inset-inline-start: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  z-index: 50;
+  /* Never intercepts clicks: the messages are informational and sit over
+     the interface, so they must not block what is underneath. */
+  pointer-events: none;
+}
+.toast {
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-inline-start: .25rem solid var(--accent);
+  border-radius: .4rem;
+  padding: .6rem .9rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  max-width: min(90vw, 28rem);
+}
+.toast-error { border-inline-start-color: var(--danger); }
+
+/* Honour the same motion preference the rest of the page does. */
+@media (prefers-reduced-motion: no-preference) {
+  .toast { animation: toast-in .18s ease-out; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(.4rem); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+/* An unread notification is marked by weight rather than colour alone —
+   colour alone fails WCAG 1.4.1 for anyone who cannot distinguish it. */
+.card.unread { border-inline-start: .25rem solid var(--accent); font-weight: 600; }
+#unreadBadge {
+  background: var(--danger);
+  color: #fff;
+  border-radius: 1rem;
+  padding: 0 .45rem;
+  margin-inline-start: .35rem;
+  font-size: .8em;
+}

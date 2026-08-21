@@ -659,6 +659,84 @@ class RecoveryCodesResponse(BaseModel):
     model_config = _config({"recovery_codes": ["a1b2c3d4-e5f6a7b8", "1122aabb-33cc44dd"]})
 
 
+class AlertPreferenceOut(BaseModel):
+    """One alert type and whether it is on for this workspace."""
+
+    key: str
+    label: str
+    description: str
+    enabled: bool
+    # Whether this is the type's default or an explicit choice. Shown
+    # because "on because I chose it" and "on because it ships that way"
+    # are different, and only the second is worth revisiting.
+    is_default: bool
+
+    model_config = _config(
+        {
+            "key": "weekly_digest",
+            "label": "ملخّص أسبوعي",
+            "description": "روابط جديدة، روابط ماتت، وقنوات صامتة خلال الأسبوع",
+            "enabled": False,
+            "is_default": True,
+        }
+    )
+
+
+class AlertPreferenceUpdate(BaseModel):
+    enabled: bool
+
+    model_config = _config({"enabled": True})
+
+
+class NotificationOut(BaseModel):
+    id: int
+    alert_type: str
+    title: str
+    body: str
+    # Zero is normal (no bot linked) rather than an error — but it makes
+    # "raised but never delivered" visible, which is otherwise invisible.
+    delivered_count: int
+    read_at: datetime | None
+    created_at: datetime
+
+    model_config = _config(
+        {
+            "id": 12,
+            "alert_type": "collector_failed",
+            "title": "توقّف الجامع",
+            "body": "كل حسابات الجمع أخفقت في آخر تشغيلة رغم وجود ٦ قنوات نشطة.",
+            "delivered_count": 1,
+            "read_at": None,
+            "created_at": "2026-08-21T02:00:11",
+        },
+        from_attributes=True,
+    )
+
+
+class NotificationListResponse(BaseModel):
+    total: int
+    unread: int
+    items: list[NotificationOut]
+
+    model_config = _config(
+        {
+            "total": 34,
+            "unread": 2,
+            "items": [
+                {
+                    "id": 12,
+                    "alert_type": "collector_failed",
+                    "title": "توقّف الجامع",
+                    "body": "كل حسابات الجمع أخفقت في آخر تشغيلة رغم وجود ٦ قنوات نشطة.",
+                    "delivered_count": 1,
+                    "read_at": None,
+                    "created_at": "2026-08-21T02:00:11",
+                }
+            ],
+        }
+    )
+
+
 class WorkspaceOut(BaseModel):
     id: int
     name: str

@@ -25,7 +25,9 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import AuthSession, BotLink
+from app.alerts import default_for, is_known
+from app.models import AuthSession, BotLink, Notification, NotificationPreference
+from app.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,6 @@ def describe_device(*, ip_address: str | None, user_agent: str | None) -> str:
 
 def new_device_message(*, ip_address: str | None, user_agent: str | None) -> str:
     return (
-        "🔐 تسجيل دخول من جهاز جديد\n"
         f"{describe_device(ip_address=ip_address, user_agent=user_agent)}\n\n"
         "إن لم تكن أنت: غيّر كلمة المرور فوراً من لوحة التحكم، "
         "ثم «إنهاء كل الجلسات»."
@@ -107,3 +108,78 @@ async def send_to_workspace(db: Session, workspace_id: int, text: str) -> int:
         except Exception as exc:  # noqa: BLE001 - a chat that blocked the bot must not break the caller
             logger.info("could not notify chat %s: %s", chat_id, exc)
     return delivered
+
+
+# --- the one way an alert reaches anybody ---------------------------------
+
+
+def is_enabled(db: Session, workspace_id: int, alert_type: str) -> bool:
+    """Whether this workspace wants this alert.
+
+    A stored row wins; otherwise the type's default applies. Reading the
+    default at call time rather than materialising it means a default the
+    project later reconsiders takes effect for everyone who never
+    expressed a preference — which is the whole point of not backfilling.
+    """
+    row = (
+        db.query(NotificationPreference)
+        .filter(
+            NotificationPreference.workspace_id == workspace_id,
+            NotificationPreference.alert_type == alert_type,
+        )
+        .first()
+    )
+    if row is not None:
+        return row.enabled
+    return default_for(alert_type)
+
+
+async def raise_alert(
+    db: Session, workspace_id: int, alert_type: str, *, title: str, body: str
+) -> Notification | None:
+    """Record an alert and try to deliver it. Returns None if switched off.
+
+    **Every alert in the system goes through here.** A caller that talks
+    to the bot directly would bypass the preference check, and a single
+    such caller makes the phase's exit criterion false — so the delivery
+    helper below stays private to this module in spirit: nothing else
+    should be sending.
+
+    Recording happens whether or not delivery succeeds. "The platform
+    noticed" and "you were told" are different facts, and only storing
+    the second would make the first unrecoverable.
+    """
+    if not is_enabled(db, workspace_id, alert_type):
+        return None
+
+    notification = Notification(workspace_id=workspace_id, alert_type=alert_type, title=title, body=body)
+    db.add(notification)
+    db.commit()
+
+    delivered = await send_to_workspace(db, workspace_id, f"{title}\n\n{body}")
+    notification.delivered_count = delivered
+    db.commit()
+    return notification
+
+
+def set_preference(db: Session, workspace_id: int, alert_type: str, enabled: bool) -> bool:
+    """Store an explicit choice. False if the type is not one we send."""
+    if not is_known(alert_type):
+        return False
+
+    row = (
+        db.query(NotificationPreference)
+        .filter(
+            NotificationPreference.workspace_id == workspace_id,
+            NotificationPreference.alert_type == alert_type,
+        )
+        .first()
+    )
+    if row is None:
+        row = NotificationPreference(workspace_id=workspace_id, alert_type=alert_type, enabled=enabled)
+        db.add(row)
+    else:
+        row.enabled = enabled
+        row.updated_at = utcnow()
+    db.commit()
+    return True
