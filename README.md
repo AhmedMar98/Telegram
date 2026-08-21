@@ -29,6 +29,12 @@
 | كل متغيّرات البيئة | [`docs/29-env-vars.md`](docs/29-env-vars.md) |
 | ما رُفض ولماذا | [`docs/06-rejected.md`](docs/06-rejected.md) |
 | ماذا تفعل وقت العطل | [`docs/19-runbook.md`](docs/19-runbook.md) |
+| لمن هذا المنتج ولمن ليس | [`docs/31-product.md`](docs/31-product.md) |
+| مخاطر التبنّي وما لا يُبنى الآن | [`docs/32-risks.md`](docs/32-risks.md) |
+| الخصوصية والحوكمة | [`docs/33-governance.md`](docs/33-governance.md) |
+| كيف تصير الفكرة شيئاً مشحوناً | [`docs/34-process.md`](docs/34-process.md) |
+| كيف نعرف أنّها تنفع | [`docs/35-feedback.md`](docs/35-feedback.md) |
+| تسعير محتمل — وثيقة لا قرار | [`docs/36-pricing.md`](docs/36-pricing.md) |
 | المساهمة بكود | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | English | [`README.en.md`](README.en.md) |
 
