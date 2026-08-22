@@ -77,6 +77,72 @@ def check_database() -> bool:
     return True
 
 
+def check_row_level_security() -> None:
+    """Is tenant isolation actually being enforced by the database?
+
+    This cannot be answered by looking at the migration, and that is the
+    whole point of asking it here. Three separate conditions each reduce
+    row-level security to decoration while ``pg_class`` still says it is
+    enabled:
+
+    - the engine is SQLite, which has no row-level security at all;
+    - the connecting role is a **superuser**, which bypasses RLS
+      unconditionally — FORCE included;
+    - a table is ENABLEd but not FORCEd, so its owner bypasses it, and the
+      application's role *is* the owner.
+
+    A managed provider decides which role you get, so the superuser case
+    is a real deployment outcome and not a hypothetical. app/rls.py refuses
+    to claim a protection it has not confirmed; this is where a deployment
+    gets to confirm it without opening a Python prompt.
+    """
+    from app.database import SessionLocal
+    from app.rls import PROTECTED_TABLES, rls_effective
+
+    db = SessionLocal()
+    try:
+        status = rls_effective(db)
+    except SQLAlchemyError as exc:
+        report(WARN, "row-level security", f"could not be determined ({type(exc).__name__})")
+        return
+    finally:
+        db.close()
+
+    reason = status["reason"]
+    if not status["supported"]:
+        report(
+            WARN,
+            "row-level security",
+            "not available on this engine (SQLite) — isolation here rests on the application's "
+            "workspace_id filters alone, which is expected in development",
+        )
+    elif reason == "effective":
+        report(
+            OK, "row-level security", f"enforced on {len(PROTECTED_TABLES)} tables, connected as a non-superuser"
+        )
+    elif reason == "superuser_bypasses_rls":
+        report(
+            WARN,
+            "row-level security",
+            "the database user is a SUPERUSER, which bypasses row-level security entirely — the "
+            "policies exist and enforce nothing. Application-level filtering still applies; "
+            "database-level isolation does not",
+        )
+    elif reason == "tables_not_forced":
+        report(
+            FAIL,
+            "row-level security",
+            f"enabled but NOT forced on: {', '.join(status['unforced_tables'])} — the owning role "
+            "bypasses an unforced policy, so these tables are unprotected. Re-run `alembic upgrade head`",
+        )
+    else:
+        report(
+            FAIL,
+            "row-level security",
+            f"missing on: {', '.join(status['tables_without_rls'])} — run `alembic upgrade head`",
+        )
+
+
 def check_workspace_and_channels() -> bool:
     from app.database import SessionLocal
     from app.models import Channel, Link, User, Workspace
@@ -224,6 +290,7 @@ def main() -> int:
     if healthy:
         healthy = check_database()
         if healthy:
+            check_row_level_security()
             check_workspace_and_channels()
         healthy = check_telegram_credentials() and healthy
     check_optional_features()

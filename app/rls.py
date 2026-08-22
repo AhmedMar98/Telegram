@@ -52,6 +52,8 @@ paths get it from ``app/deps.py``; scripts call
 
 from __future__ import annotations
 
+from typing import Literal, TypedDict
+
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -125,6 +127,28 @@ BOOTSTRAP_TABLES: tuple[str, ...] = (
 POLICY_NAME = "tenant_isolation"
 
 
+class RlsStatus(TypedDict):
+    """What ``rls_effective`` found, typed so callers can act on it.
+
+    A ``dict[str, object]`` would have been shorter and was what this
+    returned first; it cost two mypy errors at the one call site that
+    tries to *use* the answer, which is the point of returning a
+    description instead of a bool.
+    """
+
+    supported: bool
+    reason: Literal[
+        "not_postgresql",
+        "superuser_bypasses_rls",
+        "tables_not_forced",
+        "tables_without_rls",
+        "effective",
+    ]
+    superuser: bool | None
+    unforced_tables: list[str]
+    tables_without_rls: list[str]
+
+
 def set_tenant(db: Session, workspace_id: int) -> None:
     """Scope this transaction to one workspace.
 
@@ -193,7 +217,7 @@ def current_tenant(db: Session) -> int | None:
     return int(raw) if raw else None
 
 
-def rls_effective(db: Session) -> dict[str, object]:
+def rls_effective(db: Session) -> RlsStatus:
     """Whether RLS is actually protecting anything on this connection.
 
     Written because three separate conditions each silently reduce RLS to
@@ -209,7 +233,13 @@ def rls_effective(db: Session) -> dict[str, object]:
     reports what it saw instead of a verdict.
     """
     if db.bind is None or db.bind.dialect.name != "postgresql":
-        return {"supported": False, "reason": "not_postgresql", "superuser": None, "unforced_tables": []}
+        return RlsStatus(
+            supported=False,
+            reason="not_postgresql",
+            superuser=None,
+            unforced_tables=[],
+            tables_without_rls=[],
+        )
 
     superuser = bool(db.execute(text("SELECT usesuper FROM pg_user WHERE usename = current_user")).scalar())
 
@@ -232,6 +262,7 @@ def rls_effective(db: Session) -> dict[str, object]:
         ).scalar()
     ]
 
+    reason: Literal["superuser_bypasses_rls", "tables_not_forced", "tables_without_rls", "effective"]
     if superuser:
         reason = "superuser_bypasses_rls"
     elif unforced:
@@ -241,13 +272,13 @@ def rls_effective(db: Session) -> dict[str, object]:
     else:
         reason = "effective"
 
-    return {
-        "supported": True,
-        "reason": reason,
-        "superuser": superuser,
-        "unforced_tables": sorted(unforced),
-        "tables_without_rls": sorted(missing),
-    }
+    return RlsStatus(
+        supported=True,
+        reason=reason,
+        superuser=superuser,
+        unforced_tables=sorted(unforced),
+        tables_without_rls=sorted(missing),
+    )
 
 
 def for_each_workspace(db: Session):
