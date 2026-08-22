@@ -51,6 +51,21 @@ services:
         generateValue: true
       - key: INVITE_CODE
         sync: false
+      # Not generateValue, and the difference matters. This key must be the
+      # SAME string here and in the GitHub Actions secrets: the collector
+      # encrypts Telegram session strings with it, and the web service
+      # decrypts TOTP secrets and outbound webhook URLs with it. A value
+      # Render generated for itself would be one this repository's own
+      # scripts could never reproduce, so rotation and any Actions job that
+      # touches an encrypted column would break.
+      #
+      # It is listed here, rather than left to the Environment tab, because
+      # app/config.py carries a working default that is PUBLISHED IN THIS
+      # REPOSITORY. Unset, nothing fails and nothing warns — the encryption
+      # simply protects nothing, which is the worst of the three outcomes.
+      # sync:false makes the blueprint ask for it at creation.
+      - key: FIELD_ENCRYPTION_KEY
+        sync: false
       - key: BOT_TOKEN
         sync: false
       - key: BOT_WEBHOOK_SECRET
