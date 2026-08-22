@@ -58,10 +58,25 @@ class Settings(BaseSettings):
     # long before the database does, which is why idea 280's answer is a
     # property of this file rather than of the hosting plan.
     #
-    # 15 is kept. The free web instance is a single uvicorn worker on a
-    # fraction of a CPU; letting it open fifty concurrent queries would not
-    # make it finish them faster, and every Postgres connection costs
-    # memory on a 1 GB database plan.
+    # 15 is kept, so ``db_pool_size`` and ``db_max_overflow`` restate
+    # SQLAlchemy's own defaults and change no behaviour. That is deliberate
+    # and worth saying plainly: writing the ceiling down where an operator
+    # will look for it *is* the deliverable, because the number decides
+    # what happens under load and nobody had chosen it. Only
+    # ``db_pool_timeout_seconds`` below actually changes anything.
+    #
+    # Why 15 rather than more: the free web instance is a single uvicorn
+    # worker on a fraction of a CPU; letting it open fifty concurrent
+    # queries would not make it finish them faster, and every Postgres
+    # connection costs memory on a 1 GB database plan.
+    #
+    # One interaction to know before turning ``db_pool_size`` down: it is
+    # no longer the *first* ceiling. FastAPI runs plain ``def`` endpoints
+    # in anyio's threadpool, which is capped at 40 threads, so at most 40
+    # requests can be queueing for these 15 connections. Measured at 40
+    # concurrent logins, zero requests hit the pool timeout (docs/39 §4),
+    # so the two are not currently in tension — but lowering one without
+    # the other is how that changes.
     #
     # ``pool_timeout`` is the one that changed, from **30 seconds to 5**.
     # Measured at 20 concurrent logins: the five requests past the ceiling
