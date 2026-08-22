@@ -168,3 +168,64 @@ def test_the_allow_list_describes_endpoints_that_exist(name: str) -> None:
         "no longer a route. Remove it, or the next endpoint given that name is "
         "exempted by accident."
     )
+
+
+# --- Webhook registration must never fail silently ------------------------
+#
+# Kept in this file because it is the same defect class the module already
+# guards: something the application silently does not do, which no other
+# assertion in the suite can see. A service with BOT_TOKEN set and
+# PUBLIC_BASE_URL blank starts healthy, serves the dashboard, hands out bot
+# link codes — and answers no Telegram message at all, with nothing in the
+# log to say why.
+
+
+def _lifespan_bot_log(caplog, monkeypatch, **env) -> list[str]:
+    """Run the app's lifespan with a given bot config, return its log lines."""
+    import logging
+
+    import anyio
+
+    from app.config import get_settings
+    from app.main import app, lifespan
+
+    for name in ("BOT_TOKEN", "BOT_WEBHOOK_SECRET", "PUBLIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+
+    with caplog.at_level(logging.INFO, logger="app.main"):
+
+        async def run() -> None:
+            async with lifespan(app):
+                pass
+
+        anyio.run(run)
+
+    get_settings.cache_clear()
+    return [r.getMessage() for r in caplog.records]
+
+
+def test_a_bot_token_without_a_public_url_says_so_loudly(caplog, monkeypatch) -> None:
+    """The exact configuration that cost a real deployment an evening."""
+    messages = _lifespan_bot_log(caplog, monkeypatch, BOT_TOKEN="123:fake", BOT_WEBHOOK_SECRET="s3cr3t")
+
+    warnings = [m for m in messages if "telegram bot NOT active" in m]
+    assert warnings, (
+        "BOT_TOKEN was set and PUBLIC_BASE_URL was not, so no webhook could be "
+        "registered and the bot will answer nothing. That must produce a log line: "
+        f"got {messages!r}"
+    )
+    assert "PUBLIC_BASE_URL" in warnings[0], (
+        f"the warning must name the missing variable, not just complain: {warnings[0]!r}"
+    )
+
+
+def test_no_bot_token_stays_quiet(caplog, monkeypatch) -> None:
+    """Running without a bot is a normal, chosen configuration, not a fault."""
+    messages = _lifespan_bot_log(caplog, monkeypatch)
+    assert not [m for m in messages if "telegram bot NOT active" in m], (
+        "an operator who set no BOT_TOKEN asked for no bot; warning at them trains "
+        "everyone to ignore the warning that matters"
+    )

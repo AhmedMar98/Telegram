@@ -60,14 +60,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         Base.metadata.create_all(bind=engine)
 
     settings = get_settings()
-    if settings.bot_token and settings.bot_webhook_secret and settings.public_base_url:
+    # Registering the webhook needs all three. Until this runs, Telegram has
+    # no address to deliver updates to, so the bot receives nothing and
+    # answers nothing — including a perfectly well-formed /start.
+    #
+    # That used to happen in total silence, which cost a real deployment an
+    # evening: the service booted healthy, the dashboard worked, the bot
+    # link code was generated, and eight correct messages to the bot got no
+    # reply and no log line. The condition below was simply False, because
+    # PUBLIC_BASE_URL cannot be known until Render has created the service
+    # and so is normally left blank on the first deploy.
+    #
+    # An operator who has set BOT_TOKEN has stated an intention. Falling
+    # short of it deserves a line in the log naming exactly what is missing.
+    token = settings.bot_token
+    secret = settings.bot_webhook_secret
+    base_url = settings.public_base_url
+    missing = [
+        name
+        for name, value in (
+            ("BOT_TOKEN", token),
+            ("BOT_WEBHOOK_SECRET", secret),
+            ("PUBLIC_BASE_URL", base_url),
+        )
+        if not value
+    ]
+    if token and missing:
+        logger.warning(
+            "telegram bot NOT active: BOT_TOKEN is set but %s missing — no webhook was "
+            "registered, so the bot will not answer any message. Set the missing "
+            "variable(s) and redeploy; the webhook is registered at startup only.",
+            " and ".join(missing),
+        )
+    elif base_url and secret:
         from app.bot.telegram_bot import get_bot
 
         bot = get_bot()
         if bot is not None:
-            webhook_url = f"{settings.public_base_url.rstrip('/')}/telegram/webhook/{settings.bot_webhook_secret}"
+            root = base_url.rstrip("/")
+            webhook_url = f"{root}/telegram/webhook/{secret}"
             try:
                 await bot.set_webhook(webhook_url)
+                # The secret is the webhook's only authentication, so it is
+                # masked here — a log line is not a place for it.
+                logger.info("telegram webhook registered at %s/telegram/webhook/***", root)
             except Exception:  # noqa: BLE001 - never let a Telegram outage block startup
                 logger.exception("failed to set telegram webhook")
             finally:
