@@ -36,6 +36,10 @@ class ErrorCode:
     RATE_LIMITED = "rate_limited"
     LOGIN_THROTTLED = "login_throttled"
     WEBHOOK_REFUSED = "webhook_refused"
+    # Not a client mistake and not a defect: every database connection was
+    # in use and this request's wait ran out. Carried on a 503 so a client
+    # can tell "retry this" apart from "this will never work".
+    SERVER_BUSY = "server_busy"
 
 
 def unprocessable(code: str, message: str) -> HTTPException:

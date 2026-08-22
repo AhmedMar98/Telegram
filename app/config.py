@@ -45,6 +45,36 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./local.db"
     secret_key: str = "dev-secret-key-change-me"
 
+    # --- Connection pool --------------------------------------------------
+    #
+    # These were SQLAlchemy's defaults until a load measurement made them
+    # visible (docs/39). They are written out here because the numbers they
+    # replace were never chosen by anyone, and one of them was actively
+    # harmful.
+    #
+    # ``pool_size`` + ``max_overflow`` is the real ceiling on concurrent
+    # requests that touch the database — **15**, not the 100 that Postgres
+    # itself allows (docs/07 §5). The application runs out of connections
+    # long before the database does, which is why idea 280's answer is a
+    # property of this file rather than of the hosting plan.
+    #
+    # 15 is kept. The free web instance is a single uvicorn worker on a
+    # fraction of a CPU; letting it open fifty concurrent queries would not
+    # make it finish them faster, and every Postgres connection costs
+    # memory on a 1 GB database plan.
+    #
+    # ``pool_timeout`` is the one that changed, from **30 seconds to 5**.
+    # Measured at 20 concurrent logins: the five requests past the ceiling
+    # each waited the full thirty seconds and then failed with a 500. A
+    # request held for thirty seconds is worse than a request refused in
+    # five — it occupies a worker, it outlives the caller's patience, and
+    # on this deployment it outlives the platform's health check, which is
+    # how a capacity problem turns into a restart. Five seconds is long
+    # enough to ride out a brief burst and short enough to stay a burst.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout_seconds: int = 5
+
     # --- Auth -------------------------------------------------------------
     # An invite code is required to self-register because the deployed
     # instance is reachable on a public Render URL even though the product

@@ -69,13 +69,24 @@ def list_accounts(
 
     # One grouped query rather than one per account: the panel is small
     # today, but a per-row count is the shape that quietly becomes N+1.
-    counts: dict[int | None, int] = dict(
-        db.execute(
+    #
+    # Built by indexing each Row rather than handing the whole sequence to
+    # ``dict()``. That shorter form needs a ``type: ignore[arg-type]``,
+    # because a ``Row`` only *behaves* like a 2-tuple — and the ignore is
+    # not portable: SQLAlchemy's stubs describe this well enough in newer
+    # releases that mypy then flags the suppression itself as unused. With
+    # the version range this project pins (``sqlalchemy>=2.0,<3.0``), CI
+    # and a fresh developer install can land on either side, so *both* the
+    # ignore and its absence break somebody. Indexing needs no suppression
+    # under either.
+    counts: dict[int | None, int] = {
+        row[0]: row[1]
+        for row in db.execute(
             select(Channel.account_id, func.count())
             .where(Channel.workspace_id == current_user.workspace_id)
             .group_by(Channel.account_id)
-        ).all()  # type: ignore[arg-type]  # Row[(int|None, int)] is a 2-tuple at runtime
-    )
+        ).all()
+    }
 
     # Channels with no account named fall to the default (lowest-id)
     # account at collection time, so the panel attributes them the same
