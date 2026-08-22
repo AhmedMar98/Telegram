@@ -76,6 +76,35 @@ def _apply_tenant_scope(session: Session, transaction, connection) -> None:
     )
 
 
+@event.listens_for(Session, "after_commit")
+def _drop_stale_stats(session: Session) -> None:
+    """Invalidate the cached statistics for whichever workspace just wrote.
+
+    Hooked here rather than called from each endpoint, and that is the
+    whole point: eleven endpoints in app/routers/links.py commit, and a
+    cache invalidated by hand at eleven call sites is a cache that will
+    eventually be invalidated at ten. Invalidating on *any* commit in a
+    workspace-scoped session cannot drift, because there is nowhere to
+    forget it.
+
+    It over-invalidates — creating a saved search does not change a single
+    number on the stats page, yet drops the entry. That asymmetry is
+    deliberate: an unnecessary invalidation costs one recomputation, while
+    a missed one shows somebody a figure they can see is wrong.
+
+    Sessions with no workspace in ``info`` are skipped. Login, API-key
+    resolution and the collector's own session never set one, and the
+    collector could not invalidate an in-process cache from its own
+    process anyway (see app/statscache.py).
+    """
+    workspace_id = session.info.get("workspace_id")
+    if workspace_id is None:
+        return
+    from app import statscache
+
+    statscache.invalidate(int(workspace_id))
+
+
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:

@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import statscache
 from app.audit import record as audit_record
 from app.classifier import CATEGORIES
 from app.clientinfo import client_ip
@@ -143,6 +144,21 @@ def search_links(
     )
 
 
+def _stats_etag(payload: StatsResponse) -> str:
+    """The weak validator for a stats body.
+
+    Weak (``W/``) because the body is semantically, not byte-for-byte,
+    guaranteed — JSON key order is stable here but nothing in HTTP
+    requires us to promise that.
+
+    Pulled out of the endpoint when the cache arrived, so the cached path
+    and the computed path cannot drift into producing different tags for
+    the same payload — which would turn every cache hit into a spurious
+    200 and quietly undo the ETag.
+    """
+    return 'W/"' + hashlib.sha256(payload.model_dump_json().encode("utf-8")).hexdigest()[:32] + '"'
+
+
 @router.get("/stats", response_model=StatsResponse)
 def stats(
     response: Response,
@@ -164,6 +180,23 @@ def stats(
     not database work, and that is stated rather than implied.
     """
     ws_id = current_user.workspace_id
+
+    # Measured at the free tier's storage ceiling (1.2M links, 1.00 GiB),
+    # everything below this line costs 972 ms — twelve aggregates, each
+    # sweeping the whole table. The ETag underneath saves the bandwidth of
+    # re-sending an unchanged body; it never saved that database work, and
+    # its own docstring says so. This is what saves it.
+    # See app/statscache.py for the per-query breakdown and the three
+    # limits of an in-process cache.
+    cached = statscache.get(ws_id)
+    if cached is not None:
+        payload = cached
+        etag = _stats_etag(payload)
+        if if_none_match == etag:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+        response.headers["ETag"] = etag
+        return payload
+
     total_links = db.query(Link).filter(Link.workspace_id == ws_id).count()
     total_channels = db.query(Channel).filter(Channel.workspace_id == ws_id).count()
 
@@ -262,10 +295,9 @@ def stats(
         ),
     )
 
-    # Weak validator (W/): the body is semantically, not byte-for-byte,
-    # guaranteed — JSON key order is stable here but nothing in HTTP
-    # requires us to promise that.
-    etag = 'W/"' + hashlib.sha256(payload.model_dump_json().encode("utf-8")).hexdigest()[:32] + '"'
+    statscache.put(ws_id, payload)
+
+    etag = _stats_etag(payload)
     if if_none_match == etag:
         return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
 

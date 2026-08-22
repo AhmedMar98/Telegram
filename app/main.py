@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.middleware.gzip import GZipMiddleware
 
 from app import metrics
 from app.classifier import CATEGORIES
@@ -81,6 +82,29 @@ app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
 # character) plus JSON overhead, while still refusing a body that could
 # only be an attempt to exhaust the 512 MB free tier's memory.
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
+
+# Idea 273, and the only phase-11 item the payload measurement supported.
+#
+# Measured at the free tier's storage ceiling (1.2M links, exactly 1.00
+# GiB): one page of search results is **17,841 bytes uncompressed and
+# 2,155 gzipped — 87.9% smaller**. Nothing else in this project buys that
+# much for three lines.
+#
+# It matters more here than on a paid host. The free web service sleeps
+# after 15 minutes and the first request back pays a cold start already;
+# adding 16 KB per page over a phone connection to that is the difference
+# between slow and abandoned.
+#
+# minimum_size exists because compressing a 200-byte response costs CPU to
+# make it *larger* after gzip framing. 500 bytes is comfortably above the
+# break-even and below every list payload this app produces.
+#
+# What this deliberately does NOT do: idea 272 (truncating raw_text in
+# list responses). Measured on the same fixture, truncation saved nothing
+# once gzip was applied — repeated text is exactly what a compressor
+# removes for free. See docs/37-phase11-measurements.md §3.
+GZIP_MINIMUM_BYTES = 500
+app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_BYTES)
 
 
 @app.middleware("http")
