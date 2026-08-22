@@ -192,7 +192,18 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     application never had the problem.
 
     The one thing that genuinely needs the loop, the new-device alert, is
-    handed back to it explicitly at the end.
+    handed back to it explicitly at the end — and that hop has a cost this
+    docstring should not pretend away. ``raise_alert`` is a coroutine, but
+    most of what it does is synchronous database work (a preference read, a
+    notification row, a chat-id lookup), so running it through
+    ``from_thread.run`` puts *that* work back on the event loop: the very
+    thing the paragraphs above are about. It is tolerated on three narrow
+    grounds — it runs only when the device is unfamiliar, it is a handful
+    of indexed reads rather than 269ms of bcrypt, and the path is already
+    best-effort. It is a smaller version of the same shape, not its
+    absence. Moving it off the response path entirely is the real fix and
+    is a behaviour change, so it is recorded in docs/39 §9 rather than
+    smuggled into a cleanup.
     """
     email = normalize_email(payload.email)
     ip, user_agent = client_origin(request)

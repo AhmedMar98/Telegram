@@ -29,20 +29,20 @@ services:
         value: 3.11.9
       - key: ENVIRONMENT
         value: production
-      # Idea 187: the running code identifies itself. Render populates
-      # these on every build, so nothing has to be bumped by hand at
-      # release time — a version string somebody must remember to update
-      # is a version string that is eventually wrong.
-      - key: RENDER_GIT_COMMIT
-        fromService:
-          type: web
-          name: link-intel-web
-          envVarKey: RENDER_GIT_COMMIT
-      - key: RENDER_SERVICE_NAME
-        fromService:
-          type: web
-          name: link-intel-web
-          envVarKey: RENDER_SERVICE_NAME
+      # Idea 187 (the running code identifies itself) needs NOTHING here.
+      #
+      # RENDER_GIT_COMMIT and RENDER_SERVICE_NAME are reserved variables
+      # Render injects into every service by itself, and app/config.py
+      # reads them straight from the environment with a None fallback.
+      # This block used to declare them with `fromService` pointing at
+      # this very service, which Render rejects outright:
+      #
+      #   services[0].envVars[2] cannot refer to reference env vars
+      #   RENDER_GIT_COMMIT for service (web link-intel-web)
+      #
+      # and the whole blueprint sync fails with it — so the cost was not a
+      # missing version string, it was no deploy at all. Declaring a
+      # platform-provided variable is not redundancy; it is an error.
       - key: DATABASE_URL
         fromDatabase:
           name: link-intel-db
@@ -50,6 +50,21 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: INVITE_CODE
+        sync: false
+      # Not generateValue, and the difference matters. This key must be the
+      # SAME string here and in the GitHub Actions secrets: the collector
+      # encrypts Telegram session strings with it, and the web service
+      # decrypts TOTP secrets and outbound webhook URLs with it. A value
+      # Render generated for itself would be one this repository's own
+      # scripts could never reproduce, so rotation and any Actions job that
+      # touches an encrypted column would break.
+      #
+      # It is listed here, rather than left to the Environment tab, because
+      # app/config.py carries a working default that is PUBLISHED IN THIS
+      # REPOSITORY. Unset, nothing fails and nothing warns — the encryption
+      # simply protects nothing, which is the worst of the three outcomes.
+      # sync:false makes the blueprint ask for it at creation.
+      - key: FIELD_ENCRYPTION_KEY
         sync: false
       - key: BOT_TOKEN
         sync: false

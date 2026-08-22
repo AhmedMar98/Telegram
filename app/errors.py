@@ -51,6 +51,20 @@ def unprocessable(code: str, message: str) -> HTTPException:
     )
 
 
+def coded_headers(code: str, *, retry_after_seconds: int | None = None) -> dict[str, str]:
+    """The header pair every coded error carries, built in one place.
+
+    Small enough to inline, which is exactly why it drifts: the 503 pool
+    handler in ``app/main.py`` assembled this dict by hand and became the
+    only construction of ``ERROR_CODE_HEADER`` outside this module. A
+    convention with two implementations is a convention with two futures.
+    """
+    headers = {ERROR_CODE_HEADER: code}
+    if retry_after_seconds is not None:
+        headers["Retry-After"] = str(retry_after_seconds)
+    return headers
+
+
 def rate_limited(code: str, message: str, *, retry_after_seconds: int) -> HTTPException:
     """429 that tells the client *when* to come back.
 
@@ -62,5 +76,5 @@ def rate_limited(code: str, message: str, *, retry_after_seconds: int) -> HTTPEx
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=message,
-        headers={"Retry-After": str(retry_after_seconds), ERROR_CODE_HEADER: code},
+        headers=coded_headers(code, retry_after_seconds=retry_after_seconds),
     )

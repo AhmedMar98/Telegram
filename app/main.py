@@ -31,7 +31,7 @@ from app.classifier.llm import probe as groq_probe
 from app.config import get_settings
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
-from app.errors import ERROR_CODE_HEADER, ErrorCode
+from app.errors import ErrorCode, coded_headers
 from app.routers import auth, bot_router, channels, links, notifications
 from app.routers import status as status_router
 from app.security import resolve_session
@@ -137,10 +137,7 @@ async def _pool_exhausted(request: Request, exc: PoolTimeoutError) -> JSONRespon
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "server is busy, please retry shortly"},
-        headers={
-            "Retry-After": "2",
-            ERROR_CODE_HEADER: ErrorCode.SERVER_BUSY,
-        },
+        headers=coded_headers(ErrorCode.SERVER_BUSY, retry_after_seconds=2),
     )
 
 

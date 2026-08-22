@@ -4,21 +4,15 @@ A blocking call inside an ``async def`` endpoint does not slow that
 endpoint. It stops the whole process, because the event loop is a single
 thread and it is also the only thread that can send a response.
 
-``POST /auth/login`` was that endpoint, and the damage was measured rather
-than argued (docs/39-concurrency-measurements.md):
+``POST /auth/login`` was that endpoint. The measurements, the failed first
+fix, and the ``py-spy`` capture of the loop blocked on login's own first
+line are written up once, next to the code they govern:
+``app.routers.auth.login`` and ``docs/39-concurrency-measurements.md``.
+They are deliberately not restated here.
 
-  - 20 concurrent logins took 5,687ms — twenty times 285ms, in single
-    file, with no two overlapping.
-  - ``GET /healthz``, which touches nothing, went from 7ms to 5,653ms.
-    ``render.yaml`` names that path as ``healthCheckPath``.
-  - Under connection-pool pressure ``py-spy`` caught the event loop
-    blocked on login's *first* line, ``is_locked_out``, waiting inside
-    SQLAlchemy's pool while all fourteen worker threads sat idle.
-
-Nothing about that is visible in a normal test run: every assertion in
-this suite passes with the defect in place, because a single request is
-never slow enough to notice. These two tests exist so the property is
-checked rather than remembered.
+What matters for this file: none of it is visible in a normal test run.
+Every other assertion in this suite passed with the defect in place,
+because a single request is never slow enough to notice.
 """
 
 from __future__ import annotations
@@ -27,57 +21,60 @@ import inspect
 import threading
 
 import pytest
-from fastapi.routing import APIRoute
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.database import get_db
 from app.main import app
 from tests.conftest import register_workspace
 
-# Endpoints allowed to be coroutines, each because it genuinely awaits I/O
-# that has no synchronous form. Anything else added here needs the same
-# justification in writing — that is the point of the list.
+# Endpoints allowed to be coroutines, keyed by module-qualified name so a
+# future endpoint that happens to reuse one of these function names is not
+# exempted by accident. Each value is the reason, and the reason is
+# surfaced in the failure messages below — a justification nothing ever
+# reads is a comment, not a rule.
 #
-# Every one of these still runs its *database* work on the event loop, and
-# that is a known, accepted limitation rather than an oversight: all four
-# require an authenticated caller, none runs bcrypt, and each awaits real
-# network I/O that a worker thread could not perform. login was different
-# on all three counts, which is why it is not here.
+# Every one of these still runs its *database* work on the event loop.
+# That is a known limitation, and the honest statement of why it is
+# tolerated is narrower than it first appears:
+#
+#   - None of them runs bcrypt. That is the load-bearing half. login's
+#     269ms of key stretching is what turned a latency problem into a
+#     health-check failure, and nothing here is remotely that expensive.
+#   - Four of the five require an authenticated caller. The fifth,
+#     telegram_webhook, does not — it is gated by a shared secret in the
+#     path, not by a session — so "authenticated" is not a property of
+#     this list and must not be cited as one.
+#
+# What is *not* a valid reason, though it was originally written here as
+# one: "awaits network I/O a worker thread could not perform". A worker
+# thread reaches the loop through anyio.from_thread.run, which is exactly
+# what login does for its new-device alert. Two entries below
+# (recategorize_link, report_workflow_run) are coroutines only to await an
+# alert, and could take login's route. They were left alone because
+# converting them is a behaviour change outside the measurement that
+# justified this file — not because they cannot be converted.
 ASYNC_BY_DESIGN = {
-    "telegram_webhook": "aiogram's Dispatcher.feed_update is a coroutine",
-    "test_webhook": "delivers an HTTP request to the user's webhook",
-    "add_links": "awaits request.body() for the size-limited raw read",
-    "recategorize_link": "awaits the domain-instability alert",
-    "report_workflow_run": "awaits the workflow-failure alert",
+    "app.routers.bot_router.telegram_webhook": "aiogram's Dispatcher.feed_update is a coroutine",
+    "app.routers.notifications.test_webhook": "delivers an HTTP request to the user's webhook",
+    "app.routers.links.add_links": "awaits request.body() for the size-limited raw read",
+    "app.routers.links.recategorize_link": "awaits the domain-instability alert",
+    "app.routers.status.report_workflow_run": "awaits the workflow-failure alert",
 }
 
 
 def _route_handlers() -> list[tuple[str, object]]:
-    """Every endpoint function in the app, including the ones behind routers.
+    """Every endpoint function in the app, keyed by module-qualified name.
 
-    Walked recursively rather than read off ``app.routes``, because that
-    list is not flat: FastAPI wraps ``include_router`` results in an
-    internal holder object whose sub-routes live on ``original_router``.
-    Reading only the top level finds the six endpoints defined in
-    ``app/main.py`` and silently misses every router — which is to say it
-    would miss ``login``, the endpoint this whole module exists for.
+    The recursive walk over ``original_router`` — FastAPI hides an
+    ``include_router``'s sub-routes there, so reading ``app.routes`` alone
+    finds only the handlers defined in ``app/main.py`` — lives in
+    ``scripts/api_examples.py`` and is imported rather than copied. It was
+    already duplicated once; a third copy would put the one piece of
+    FastAPI-internals knowledge that breaks on upgrade in three places.
     """
-    found: list[tuple[str, object]] = []
-    seen: set[int] = set()
+    from scripts.api_examples import _routes
 
-    def walk(routes) -> None:
-        for route in routes:
-            if id(route) in seen:
-                continue
-            seen.add(id(route))
-            if isinstance(route, APIRoute):
-                found.append((route.name, route.endpoint))
-            inner = getattr(route, "original_router", None)
-            if inner is not None:
-                walk(inner.routes)
-
-    walk(app.routes)
-    return found
+    return [(f"{route.endpoint.__module__}.{route.name}", route.endpoint) for route in _routes()]
 
 
 def test_no_endpoint_becomes_a_coroutine_without_saying_why() -> None:
@@ -99,11 +96,12 @@ def test_no_endpoint_becomes_a_coroutine_without_saying_why() -> None:
     assert unexplained == [], (
         f"these endpoints are 'async def' but not listed in ASYNC_BY_DESIGN: {unexplained}. "
         "Either make them plain 'def' so FastAPI runs them off the event loop, "
-        "or add them to the list with the reason they must await."
+        "or add them to the list with the reason they must await. Reasons already "
+        f"accepted, for comparison: {ASYNC_BY_DESIGN}"
     )
 
 
-def test_login_runs_off_the_event_loop(client) -> None:
+def test_login_runs_off_the_event_loop(client, monkeypatch) -> None:
     """The password check must happen in a worker thread, not on the loop.
 
     Asserted through the thread the check actually runs on rather than
@@ -114,23 +112,20 @@ def test_login_runs_off_the_event_loop(client) -> None:
     """
     register_workspace(client, email="loop@example.com", workspace_name="Loop")
 
-    seen: list[str] = []
     import app.routers.auth as auth_module
 
+    seen: list[str] = []
     real_verify = auth_module.verify_password
 
     def recording_verify(raw: str, hashed: str) -> bool:
         seen.append(threading.current_thread().name)
         return real_verify(raw, hashed)
 
-    auth_module.verify_password = recording_verify  # type: ignore[assignment]
-    try:
-        response = client.post(
-            "/auth/login",
-            json={"email": "loop@example.com", "password": "j8Kd0-slwQ2x"},
-        )
-    finally:
-        auth_module.verify_password = real_verify  # type: ignore[assignment]
+    monkeypatch.setattr(auth_module, "verify_password", recording_verify)
+    response = client.post(
+        "/auth/login",
+        json={"email": "loop@example.com", "password": "j8Kd0-slwQ2x"},
+    )
 
     assert response.status_code == 200
     assert seen, "verify_password was never reached — the test no longer exercises login"
@@ -169,6 +164,7 @@ def test_an_exhausted_connection_pool_answers_503_not_500(client) -> None:
 def test_the_allow_list_describes_endpoints_that_exist(name: str) -> None:
     """A stale allow-list entry silently re-permits a name it no longer covers."""
     assert name in {n for n, _ in _route_handlers()}, (
-        f"ASYNC_BY_DESIGN lists {name!r}, which is no longer a route. "
-        "Remove it, or the next endpoint given that name is exempted by accident."
+        f"ASYNC_BY_DESIGN lists {name!r} (reason: {ASYNC_BY_DESIGN[name]!r}), which is "
+        "no longer a route. Remove it, or the next endpoint given that name is "
+        "exempted by accident."
     )
