@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.apikeys import resolve_api_key
 from app.database import get_db
 from app.models import User
+from app.rls import scope_session_to_workspace
 from app.security import resolve_session
 
 COOKIE_NAME = "session"
@@ -42,6 +43,23 @@ def _bearer(authorization: str | None) -> str | None:
     return value.strip() if scheme.lower() == "bearer" and value.strip() else None
 
 
+def _scope_to_tenant(db: Session, user: User) -> User:
+    """Tell the database which workspace this request belongs to.
+
+    Row-level security reads the tenant from a transaction-local Postgres
+    setting; ``app/database.py`` re-issues it on every transaction the
+    session opens, taking it from ``session.info``. Recording it here — at
+    the single point where a request's identity becomes known — means no
+    handler has to remember, and a handler that forgets cannot silently
+    read across tenants: it gets nothing back at all.
+
+    Returns the user so this can wrap a return expression without adding
+    a statement to every call site.
+    """
+    scope_session_to_workspace(db, user.workspace_id)
+    return user
+
+
 def get_current_user(
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     authorization: str | None = Header(default=None),
@@ -55,7 +73,7 @@ def get_current_user(
     user = resolve_session(db, session) or resolve_api_key(db, _bearer(authorization))
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_NOT_AUTHENTICATED)
-    return user
+    return _scope_to_tenant(db, user)
 
 
 def get_session_user(
@@ -72,7 +90,7 @@ def get_session_user(
     """
     user = resolve_session(db, session)
     if user is not None:
-        return user
+        return _scope_to_tenant(db, user)
 
     if resolve_api_key(db, _bearer(authorization)) is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SESSION_REQUIRED)
@@ -84,4 +102,5 @@ def get_optional_user(
     session: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: Session = Depends(get_db),
 ) -> User | None:
-    return resolve_session(db, session)
+    user = resolve_session(db, session)
+    return _scope_to_tenant(db, user) if user is not None else None

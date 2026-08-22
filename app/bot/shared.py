@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.classifier import CATEGORIES
 from app.linkquery import filtered_links
 from app.models import BotLink, Link
+from app.rls import scope_session_to_workspace
 
 PAGE_SIZE = 5
 
@@ -43,8 +44,25 @@ COMMANDS: tuple[tuple[str, str], ...] = (
 
 
 def resolve_workspace(db: Session, chat_id: str) -> int | None:
+    """Which workspace this chat is linked to, and bind the session to it.
+
+    ``bot_links`` is deliberately outside row-level security — it is read
+    to *establish* the tenant, so a policy on it would mean the bot could
+    never answer anybody (see app/rls.py). Everything the handlers touch
+    afterwards is inside it, though: ``/channels``, ``/stats`` and
+    ``/vitality`` all read ``channels``.
+
+    So this is the bot's equivalent of ``app/deps.py``'s scoping step, and
+    it belongs here rather than in each handler for the same reason: it is
+    the one point where the chat's identity becomes known, and a handler
+    that forgot would read zero channels and answer "you have none" to a
+    workspace that has twenty.
+    """
     link = db.get(BotLink, str(chat_id))
-    return link.workspace_id if link else None
+    if link is None:
+        return None
+    scope_session_to_workspace(db, link.workspace_id)
+    return link.workspace_id
 
 
 def format_link(link: Link, index: int) -> str:

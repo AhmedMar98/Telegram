@@ -55,6 +55,7 @@ from app.database import SessionLocal  # noqa: E402
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 from app.notify import raise_alert, report_adult_links  # noqa: E402
+from app.rls import scope_session_to_workspace  # noqa: E402
 
 logger = logging.getLogger("collector")
 
@@ -362,6 +363,11 @@ async def collect() -> None:
 
     db = SessionLocal()
     try:
+        # Every query below hits tables under row-level security. Without
+        # this the collector would find zero channels and report a quiet,
+        # successful run that collected nothing (see app/rls.py).
+        scope_session_to_workspace(db, workspace_id)
+
         _ensure_primary_account(db, workspace_id, session_string)
 
         accounts = (

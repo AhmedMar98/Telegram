@@ -44,6 +44,7 @@ from app.models import (  # noqa: E402
     Notification,
     Workspace,
 )
+from app.rls import scope_session_to_workspace  # noqa: E402
 from app.timeutil import utcnow  # noqa: E402
 
 logger = logging.getLogger("kpi")
@@ -176,6 +177,10 @@ def main() -> int:
     try:
         if db.get(Workspace, args.workspace) is None:
             sys.exit(f"error: no workspace with id {args.workspace}")
+
+        # notifications and classification_feedback are both under RLS;
+        # unscoped, every count below would read a truthful-looking zero.
+        scope_session_to_workspace(db, args.workspace)
         logger.info("%s", render(collect(db, args.workspace)))
     finally:
         db.close()

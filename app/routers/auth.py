@@ -26,6 +26,7 @@ from app.errors import ErrorCode, rate_limited, unprocessable
 from app.models import AuditLog, Channel, TelegramAccount, User, Workspace
 from app.notify import is_familiar_device, new_device_message, raise_alert
 from app.passwords import rejection_reason
+from app.rls import scope_session_to_workspace
 from app.schemas import (
     AccountSummary,
     ApiKeyCreate,
@@ -124,6 +125,14 @@ def register(
     db.add(user)
     db.flush()
 
+    # Registration is a bootstrap path: it *creates* the identity that
+    # everything else authenticates against, so no tenant is set when it
+    # starts. The audit row below is the first write to a table under
+    # row-level security, and without this it is refused outright —
+    # measured, as "new row violates row-level security policy for table
+    # audit_log", which turned signup into an HTTP 500.
+    scope_session_to_workspace(db, workspace.id)
+
     audit_record(
         db,
         workspace_id=workspace.id,
@@ -184,6 +193,10 @@ async def login(
         )
 
     clear_login_failures(db, email)
+    # Same reason as registration: the password has been accepted, so the
+    # workspace is now known, but nothing has told the database yet — and
+    # the audit row is a write to a protected table.
+    scope_session_to_workspace(db, user.workspace_id)
     audit_record(db, workspace_id=user.workspace_id, user_id=user.id, action="user.login")
     db.commit()
 

@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
+from app.rls import scope_session_to_workspace  # noqa: E402
 
 logger = logging.getLogger("remove_account")
 
@@ -49,6 +50,11 @@ class RemovalRefused(Exception):
 
 def remove_account(db: Session, *, workspace_id: int, label: str, dry_run: bool = False) -> dict[str, int]:
     """Detach the account's channels, then delete it. Returns what changed."""
+    # Scoped here rather than in main() because this function is the unit
+    # under test: a caller that reached it another way still gets the
+    # tenant set, and the channel reassignment below runs under RLS.
+    scope_session_to_workspace(db, workspace_id)
+
     account = (
         db.query(TelegramAccount)
         .filter(TelegramAccount.workspace_id == workspace_id, TelegramAccount.label == label)

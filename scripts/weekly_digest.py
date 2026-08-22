@@ -36,6 +36,7 @@ from app.alerts import WEEKLY_DIGEST  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Channel, Link, Workspace  # noqa: E402
 from app.notify import raise_alert  # noqa: E402
+from app.rls import scope_session_to_workspace  # noqa: E402
 from app.timeutil import utcnow  # noqa: E402
 
 logger = logging.getLogger("digest")
@@ -162,6 +163,9 @@ async def run(workspace_id: int) -> Digest:
     try:
         if db.get(Workspace, workspace_id) is None:
             sys.exit(f"error: no workspace with id {workspace_id}")
+
+        # Reads channels and writes a notification, both under RLS.
+        scope_session_to_workspace(db, workspace_id)
 
         digest = build(db, workspace_id)
         body = render(digest)

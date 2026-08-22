@@ -107,3 +107,43 @@ jobs:
           DATABASE_URL: "sqlite:///:memory:"
           SECRET_KEY: "ci-secret"
         run: pytest tests/test_postgres_search.py -q
+
+      # Row-level security has to be tested as an UNPRIVILEGED role, and
+      # that is not a detail. A superuser bypasses RLS entirely — FORCE and
+      # all — so running these tests as `postgres`, the way the step above
+      # does, would pass every assertion while the policies did nothing.
+      # Hence a separate database owned by a role created here.
+      - name: Create an unprivileged role and a database it owns
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d linktest -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE app_role LOGIN PASSWORD 'app_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          psql -h localhost -U postgres -d linktest -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE rlstest OWNER app_role;"
+
+      - name: Migrations apply as the unprivileged owner
+        env:
+          DATABASE_URL: "postgresql://app_role:app_pw@localhost:5432/rlstest"
+          SECRET_KEY: "ci-secret"
+        run: alembic upgrade head
+
+      # tests/test_rls.py skips itself when RLS_TEST_DSN is unset. That is
+      # correct locally and wrong here: a typo in the DSN would leave this
+      # job green having asserted nothing, which is the exact failure this
+      # whole feature is about. pytest exits 0 on a fully skipped file, so
+      # the skip has to be caught by reading the summary.
+      - name: Row-level security tests
+        shell: bash
+        env:
+          RLS_TEST_DSN: "postgresql://app_role:app_pw@localhost:5432/rlstest"
+          DATABASE_URL: "sqlite:///:memory:"
+          SECRET_KEY: "ci-secret"
+        run: |
+          set -euo pipefail
+          pytest tests/test_rls.py -q | tee rls.out
+          if grep -qi "skipped" rls.out; then
+            echo "::error::RLS tests skipped — RLS_TEST_DSN never reached pytest, so nothing was verified"
+            exit 1
+          fi
+          grep -qE "[0-9]+ passed" rls.out

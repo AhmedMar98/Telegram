@@ -80,6 +80,7 @@ def check_database() -> bool:
 def check_workspace_and_channels() -> bool:
     from app.database import SessionLocal
     from app.models import Channel, Link, User, Workspace
+    from app.rls import scope_session_to_workspace
 
     raw_id = os.environ.get("COLLECTOR_WORKSPACE_ID")
     db = SessionLocal()
@@ -102,6 +103,12 @@ def check_workspace_and_channels() -> bool:
         if workspace is None:
             report(FAIL, "COLLECTOR_WORKSPACE_ID", f"no workspace with id {workspace_id}")
             return False
+
+        # The channel count below reads a table under row-level security.
+        # Unscoped it would report "no active channels" on a perfectly
+        # healthy deployment — a diagnostic that lies is worse than none.
+        scope_session_to_workspace(db, workspace_id)
+
         users = db.query(User).filter(User.workspace_id == workspace_id).count()
         report(OK, "workspace", f"id {workspace_id} ({workspace.name!r}), {users} user(s)")
 
