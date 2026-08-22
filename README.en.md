@@ -99,6 +99,19 @@ Stated here rather than discovered later:
   recorded and deliberately not fixed. See
   [`docs/37-phase11-measurements.md`](docs/37-phase11-measurements.md),
   including a section on what those numbers cannot tell you.
+- **Concurrent database work is capped at 15 requests** — `pool_size +
+  max_overflow` in `app/config.py`, not Postgres's own limit of 100.
+  Past it a request gets **503 with `Retry-After`** after five seconds
+  rather than a long hang and a 500. The capacity is a written choice and
+  the failure is explicit.
+- **Five endpoints still do database work on the event loop.** Each is
+  authenticated, none runs bcrypt, and each awaits real network I/O — the
+  reasons they were left alone. They are named in `ASYNC_BY_DESIGN` in
+  `tests/test_event_loop_discipline.py`, so a new one has to justify
+  itself. `POST /auth/login` used to be among them, and the cost was
+  measured: it serialised every login and froze `/healthz` — the path
+  `render.yaml` uses as its health check — for 5.7 seconds. See
+  [`docs/39-concurrency-measurements.md`](docs/39-concurrency-measurements.md).
 - **None of this has run in production yet.** Everything above was
   verified locally against real PostgreSQL. Cold starts, the storage cap,
   GitHub Actions scheduling and a collector account talking to real

@@ -74,7 +74,14 @@ def list_accounts(
             select(Channel.account_id, func.count())
             .where(Channel.workspace_id == current_user.workspace_id)
             .group_by(Channel.account_id)
-        ).all()  # type: ignore[arg-type]  # Row[(int|None, int)] is a 2-tuple at runtime
+            # ``.all()`` returns ``Sequence[Row[...]]``, and a Row *is* a
+            # 2-tuple at runtime, so dict() accepts it. This carried a
+            # ``type: ignore[arg-type]`` until SQLAlchemy's own stubs learned
+            # to describe it, at which point the suppression itself became the
+            # error (mypy's --warn-unused-ignores). Removed rather than
+            # widened: an ignore that is no longer true is a comment that
+            # lies.
+        ).all()
     )
 
     # Channels with no account named fall to the default (lowest-id)

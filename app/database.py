@@ -31,6 +31,21 @@ def _make_engine(url: str):
             from sqlalchemy.pool import StaticPool
 
             engine_kwargs["poolclass"] = StaticPool
+    else:
+        # Stated rather than inherited. The pool's size is the application's
+        # real limit on concurrent database work, and its timeout decides
+        # what a request past that limit *experiences* — a number worth
+        # choosing on purpose. See app/config.py for why each value is what
+        # it is, and docs/39 for the measurement that made them visible.
+        #
+        # SQLite is excluded because neither setting applies to it: the
+        # test suite's in-memory database uses StaticPool (one connection by
+        # design), and a file-backed development database has no pool worth
+        # tuning.
+        settings = get_settings()
+        engine_kwargs["pool_size"] = settings.db_pool_size
+        engine_kwargs["max_overflow"] = settings.db_max_overflow
+        engine_kwargs["pool_timeout"] = settings.db_pool_timeout_seconds
 
     return create_engine(url, connect_args=connect_args, **engine_kwargs)
 

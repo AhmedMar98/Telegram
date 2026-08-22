@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -30,6 +31,7 @@ from app.classifier.llm import probe as groq_probe
 from app.config import get_settings
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
+from app.errors import ERROR_CODE_HEADER, ErrorCode
 from app.routers import auth, bot_router, channels, links, notifications
 from app.routers import status as status_router
 from app.security import resolve_session
@@ -105,6 +107,41 @@ MAX_REQUEST_BODY_BYTES = 1024 * 1024
 # removes for free. See docs/37-phase11-measurements.md §3.
 GZIP_MINIMUM_BYTES = 500
 app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_BYTES)
+
+
+@app.exception_handler(PoolTimeoutError)
+async def _pool_exhausted(request: Request, exc: PoolTimeoutError) -> JSONResponse:
+    """Answer "come back shortly", not "something is broken".
+
+    SQLAlchemy raises this when every connection in the pool is checked
+    out and the wait ran past ``pool_timeout``. Nothing has failed: the
+    application is simply serving more concurrent database work than it
+    has connections for, and this request lost the race.
+
+    Left unhandled it surfaces as a **500**, which is a lie with
+    consequences. A 500 tells a client the request will never work and
+    should not be retried; a monitor tells an operator to go looking for a
+    defect. The truth is the opposite on both counts — the same request a
+    second later usually succeeds.
+
+    So: 503, and a ``Retry-After`` for the same reason the login throttle
+    carries one — a client told to back off with no interval attached
+    generally retries immediately, which is precisely the load that caused
+    this.
+
+    Measured before this existed (docs/39): at 20 concurrent logins
+    against a 15-connection pool, the five losing requests each hung for
+    the full 30-second default and *then* returned 500.
+    """
+    logger.warning("connection pool exhausted serving %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "server is busy, please retry shortly"},
+        headers={
+            "Retry-After": "2",
+            ERROR_CODE_HEADER: ErrorCode.SERVER_BUSY,
+        },
+    )
 
 
 @app.middleware("http")

@@ -34,6 +34,9 @@
 | `COLLECTOR_MESSAGE_LIMIT` | — | — | — | ✅ |  |
 | `COLLECTOR_WORKSPACE_ID` | — | — | `collector.yml`، `monthly-report.yml`، `verify-setup.yml`، `weekly-digest.yml` | ✅ |  |
 | `DATABASE_URL` | ✅ | `sqlite:///./local.db` | `backup.yml`، `collector.yml`، `monthly-report.yml`، `prune.yml`، `verify-setup.yml`، `vitality.yml`، `weekly-digest.yml` | ✅ | 🔑 |
+| `DB_MAX_OVERFLOW` | ✅ | `10` | — | ❌ |  |
+| `DB_POOL_SIZE` | ✅ | `5` | — | ❌ |  |
+| `DB_POOL_TIMEOUT_SECONDS` | ✅ | `5` | — | ❌ |  |
 | `ENVIRONMENT` | ✅ | `development` | — | ✅ |  |
 | `FIELD_ENCRYPTION_KEY` | ✅ | `S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA=` | `collector.yml`، `monthly-report.yml`، `weekly-digest.yml` | ✅ | 🔑 |
 | `FIELD_ENCRYPTION_KEY_OLD` | — | — | — | ✅ |  |
@@ -66,6 +69,9 @@
 
 - `APP_NAME`
 - `BCRYPT_ROUNDS`
+- `DB_MAX_OVERFLOW`
+- `DB_POOL_SIZE`
+- `DB_POOL_TIMEOUT_SECONDS`
 - `GROQ_MODEL`
 - `GROQ_QUOTA_ALERT_FRACTION`
 - `MAX_ACCOUNTS_PER_WORKSPACE`

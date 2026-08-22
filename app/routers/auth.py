@@ -8,6 +8,9 @@ isolated from every other from the very first row it ever writes.
 
 from __future__ import annotations
 
+from functools import partial
+
+import anyio.from_thread
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -150,9 +153,47 @@ def register(
 
 
 @router.post("/login")
-async def login(
-    payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)
-) -> dict:
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    """Authenticate, and deliberately **not** as a coroutine.
+
+    This handler was ``async def`` — the only one in the application that
+    ran bcrypt — and that single keyword was a defect with two distinct
+    costs, both measured rather than reasoned about (docs/39):
+
+    1. **Everything serialised.** An ``async def`` body runs on the event
+       loop, and the loop is one thread. bcrypt at work factor 12 costs
+       269ms of pure CPU on the development machine. Twenty concurrent
+       logins took 5,687ms — twenty times 285ms, in single file, with no
+       two overlapping.
+
+    2. **Unrelated requests stopped.** The loop is also the only thread
+       that can send a response, so a blocking call there freezes requests
+       that are already finished. ``GET /healthz`` — no database, no work
+       — went from 7ms to **5,653ms**. ``render.yaml`` names ``/healthz``
+       as ``healthCheckPath``, so that is not a latency complaint: a
+       platform that cannot get a health check answered restarts the
+       instance. Reaching it needs no account, and the per-address
+       throttle below does not apply, because each request can carry a
+       different address.
+
+    Moving only bcrypt to a worker thread fixed the arithmetic and left
+    the worse half in place, which is the part worth remembering. Under
+    connection-pool pressure ``py-spy`` caught the event loop blocked
+    *here*, on line one: ``is_locked_out`` waiting inside SQLAlchemy's
+    pool while all fourteen worker threads sat idle. A blocking database
+    call on the loop is harmless right up until the pool is empty, and
+    then it stops the whole process for the full ``pool_timeout`` —
+    stacking, per queued request, to a measured 26 seconds.
+
+    So the fix is not to make the slow parts awaitable. It is to stop
+    running any of this on the loop. FastAPI executes a plain ``def``
+    endpoint in a worker thread, where blocking is exactly what threads
+    are for — which is why the other sixty-four endpoints in this
+    application never had the problem.
+
+    The one thing that genuinely needs the loop, the new-device alert, is
+    handed back to it explicitly at the end.
+    """
     email = normalize_email(payload.email)
     ip, user_agent = client_origin(request)
 
@@ -218,12 +259,23 @@ async def login(
         # Best-effort and deliberately last: a notification failure is not
         # an authentication failure, so nothing above this line depends on
         # it, and raise_alert swallows its own delivery errors.
-        await raise_alert(
-            db,
-            user.workspace_id,
-            NEW_DEVICE.key,
-            title="🔐 تسجيل دخول من جهاز جديد",
-            body=new_device_message(ip_address=ip, user_agent=user_agent),
+        # ``raise_alert`` is a coroutine (it talks to the bot over HTTP), and
+        # this handler is deliberately not one. ``from_thread.run`` submits
+        # it to the event loop this thread was spawned from and waits for
+        # the result — the inverse of ``to_thread.run_sync``, and valid
+        # precisely because FastAPI ran this endpoint via anyio's threadpool.
+        #
+        # ``partial`` because ``from_thread.run`` forwards positional
+        # arguments only.
+        anyio.from_thread.run(
+            partial(
+                raise_alert,
+                db,
+                user.workspace_id,
+                NEW_DEVICE.key,
+                title="🔐 تسجيل دخول من جهاز جديد",
+                body=new_device_message(ip_address=ip, user_agent=user_agent),
+            )
         )
 
     return {"id": user.id, "email": user.email, "workspace_id": user.workspace_id}
