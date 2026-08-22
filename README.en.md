@@ -54,6 +54,15 @@ each choice cost, is in [`docs/24-decisions.md`](docs/24-decisions.md).
 - Multi-tenant isolation on every row and every query, verified by a sweep
   over **every** endpoint that takes a resource id. A foreign id returns
   **404, never 403** — a 403 would confirm the id exists.
+- **A second isolation layer inside PostgreSQL**: seven tables carry a
+  row-level-security policy with `ENABLE` **and** `FORCE`, because
+  measurement showed `ENABLE` alone lets the owning role — which is the
+  application — see every row. It guards what filtering cannot: a
+  cross-tenant *write*. It fails closed, and `scripts/check_setup.py`
+  reports whether it is actually in force, since a superuser database
+  user bypasses it entirely and silently. Two tables are excluded by
+  design and four cannot be protected at all; `app/rls.py` names each and
+  says why.
 - Two authentication dependencies, not one: endpoints that manage
   credentials or destroy data accept a session cookie only, so a leaked
   API key cannot reach them. This is pinned as a list, so a new endpoint
@@ -79,6 +88,21 @@ Stated here rather than discovered later:
   documented as one in [`docs/19-runbook.md`](docs/19-runbook.md) §5.
 - **Losing `FIELD_ENCRYPTION_KEY` is unrecoverable** for the fields it
   protects.
+- **Row-level security may be enforcing nothing**, silently, if the managed
+  provider hands you a superuser database role. The provider decides that,
+  not this repository. Run `scripts/check_setup.py` rather than assuming;
+  application-level filtering is unaffected either way.
+- **Performance was measured at the free tier's ceiling** — 1,200,000
+  links, exactly 1.00 GiB — not extrapolated. Realistic searches answer in
+  38–202 ms and the dashboard's statistics endpoint in 7.9 ms cached.
+  Deep offset pagination degrades to 1.2 s at page 10,000, which is
+  recorded and deliberately not fixed. See
+  [`docs/37-phase11-measurements.md`](docs/37-phase11-measurements.md),
+  including a section on what those numbers cannot tell you.
+- **None of this has run in production yet.** Everything above was
+  verified locally against real PostgreSQL. Cold starts, the storage cap,
+  GitHub Actions scheduling and a collector account talking to real
+  Telegram have not met reality.
 - **Commercial readiness is 2/10**, by the project's own assessment. This
   is a working internal tool, not a product.
 
