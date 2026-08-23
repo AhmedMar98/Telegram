@@ -886,6 +886,31 @@ async function linkBot() {
   out.textContent = data.instructions;
 }
 
+async function botDiag() {
+  const out = document.getElementById("botDiagOut");
+  out.textContent = "أسأل تيليجرام…";
+  const res = await api("/bot/diagnostics");
+  const d = await res.json();
+
+  // The verdict is the one field worth branching on; the rest is evidence.
+  const say = {
+    no_token: "BOT_TOKEN غير مضبوط — لا يوجد بوت أصلاً.",
+    token_rejected: "تيليجرام رفض الرمز. مُبطَل أو خاطئ — احصل على غيره من BotFather.",
+    api_error: "تعذّر سؤال تيليجرام.",
+    no_webhook: "لا ويبهوك مسجَّل. تيليجرام لا يعرف عنواناً يسلّم إليه، فالبوت لا يستقبل شيئاً — مهما كانت رسالتك صحيحة. اضبط PUBLIC_BASE_URL وأعد النشر.",
+    wrong_url: "الويبهوك مسجَّل على عنوان لا يطابق هذا النشر — غالباً من نشر أقدم. أعد النشر.",
+    delivery_failing: "الويبهوك مسجَّل، لكنّ تيليجرام فشل في آخر تسليم.",
+    healthy: "الويبهوك مسجَّل وسليم، ولا خطأ تسليم مسجَّل.",
+  }[d.verdict] || d.verdict;
+
+  const lines = [say];
+  if (d.bot_username) lines.push("البوت: @" + d.bot_username);
+  if (d.pending_update_count) lines.push("رسائل عالقة في طابور تيليجرام: " + d.pending_update_count);
+  if (d.last_error_message) lines.push("آخر خطأ تسليم: " + d.last_error_message);
+  if (d.detail) lines.push(d.detail);
+  out.textContent = lines.join(" — ");
+}
+
 async function changePassword() {
   const current_password = document.getElementById("curPass").value;
   const new_password = document.getElementById("newPass").value;

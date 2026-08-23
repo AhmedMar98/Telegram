@@ -302,6 +302,17 @@ curl -sS -X PATCH \
 
 ## bot
 
+### `GET /bot/diagnostics`
+
+Bot Diagnostics  
+**المصادقة:** 🔑 مفتاح أو جلسة
+
+```bash
+curl -sS -X GET \
+  "$BASE/bot/diagnostics" \
+  -H "Authorization: Bearer $LIP_API_KEY"
+```
+
 ### `POST /bot/link-code`
 
 Create Link Code  
