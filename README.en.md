@@ -79,10 +79,14 @@ Stated here rather than discovered later:
 
 - **The service sleeps** after ~15 minutes idle on the free plan; the next
   request takes about a minute.
-- **The free Postgres plan is time-limited.** The exact duration is *not
-  verified in this repository* — published sources disagree and Render's
-  site is unreachable from the development environment. Check your Render
-  dashboard. A weekly `pg_dump` to a GitHub Actions artifact is the
+- **The free Postgres plan deletes the database after 30 days**, and this
+  is the project's most serious constraint. Confirmed from a real
+  deployment's dashboard rather than a published source: a database
+  created 23 August 2026 carries "Your database will expire on September
+  22, 2026. The database will be deleted unless you upgrade to a paid
+  instance type." An archive meant to accumulate over months cannot live
+  on that plan alone — it needs a paid upgrade, a different provider whose
+  free tier does not expire, or a manual restore every month. A weekly `pg_dump` to a GitHub Actions artifact is the
   mitigation, and restoring is a manual `pg_restore`.
 - **All scheduling depends on GitHub Actions.** A single point of failure,
   documented as one in [`docs/19-runbook.md`](docs/19-runbook.md) §5.
