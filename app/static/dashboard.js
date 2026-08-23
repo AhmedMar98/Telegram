@@ -858,7 +858,32 @@ async function addLinks() {
 async function linkBot() {
   const res = await api("/bot/link-code", { method: "POST" });
   const data = await res.json();
-  document.getElementById("botCode").textContent = data.instructions;
+  const out = document.getElementById("botCode");
+  out.textContent = "";
+
+  // A tappable link when the server knows the bot's @username, because the
+  // typed form is genuinely hard to get right: the command needs a space
+  // before a hex code, and this panel renders right-to-left, so
+  // "/start c1d555fe" displays with the slash on the far side and reads as
+  // though it belonged at the end.
+  if (data.deep_link) {
+    const a = document.createElement("a");
+    a.href = data.deep_link;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "افتح المحادثة واربط بنقرة واحدة";
+    out.appendChild(a);
+
+    // The code stays visible: linking from a different device than the one
+    // showing the dashboard is normal, and there the link cannot be tapped.
+    const fallback = document.createElement("div");
+    fallback.className = "muted";
+    fallback.textContent = "أو من جهاز آخر — " + data.instructions;
+    out.appendChild(fallback);
+    return;
+  }
+
+  out.textContent = data.instructions;
 }
 
 async function changePassword() {

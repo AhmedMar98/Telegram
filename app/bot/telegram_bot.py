@@ -91,6 +91,45 @@ def get_bot() -> Bot | None:
     return Bot(token=settings.bot_token)
 
 
+# The bot's @username, learned once at startup from getMe.
+#
+# It exists so the dashboard can offer a deep link (t.me/<name>?start=<code>)
+# instead of an instruction to type. That distinction is not cosmetic: the
+# code is a hex string, the command needs a space before it, and the
+# dashboard renders right-to-left, so "/start c1d555fe" displays with the
+# slash on the far side and reads as if it belonged at the end. A real
+# deployment sent eight variations of that line — including the correct one
+# — and got nothing back. A link cannot be mistyped.
+#
+# Cached rather than fetched per request: the username changes only when
+# the operator renames the bot in BotFather, which already requires a
+# redeploy to matter, and a Telegram round trip has no place in rendering
+# a page.
+_bot_username: str | None = None
+
+
+def set_bot_username(username: str | None) -> None:
+    """Record the username getMe returned. Called once, from the lifespan."""
+    global _bot_username
+    _bot_username = username
+
+
+def bot_username() -> str | None:
+    """The @username, or None if startup never reached Telegram."""
+    return _bot_username
+
+
+def deep_link(code: str) -> str | None:
+    """A one-tap link that opens the chat with the code already applied.
+
+    None when the username is unknown — the caller keeps the typed
+    instruction as a fallback rather than rendering a broken link.
+    """
+    if not _bot_username:
+        return None
+    return f"https://t.me/{_bot_username}?start={code}"
+
+
 def generate_link_code(db: Session, workspace_id: int) -> str:
     code = secrets.token_hex(4)
     db.add(BotLinkCode(workspace_id=workspace_id, code=code))

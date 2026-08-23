@@ -104,6 +104,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 # The secret is the webhook's only authentication, so it is
                 # masked here — a log line is not a place for it.
                 logger.info("telegram webhook registered at %s/telegram/webhook/***", root)
+                # Same round trip, so the dashboard can hand out a deep link
+                # instead of an instruction to type. Failing to learn it is
+                # not a startup failure: the dashboard falls back to the
+                # typed form, which is what it showed before this existed.
+                try:
+                    from app.bot.telegram_bot import set_bot_username
+
+                    set_bot_username((await bot.get_me()).username)
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not read the bot username; link will be typed, not tapped")
             except Exception:  # noqa: BLE001 - never let a Telegram outage block startup
                 logger.exception("failed to set telegram webhook")
             finally:

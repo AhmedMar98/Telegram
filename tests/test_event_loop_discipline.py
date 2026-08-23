@@ -229,3 +229,42 @@ def test_no_bot_token_stays_quiet(caplog, monkeypatch) -> None:
         "an operator who set no BOT_TOKEN asked for no bot; warning at them trains "
         "everyone to ignore the warning that matters"
     )
+
+
+# --- The link code must be spendable without typing it --------------------
+
+
+def test_the_link_code_response_carries_a_deep_link_when_the_username_is_known(client, monkeypatch) -> None:
+    """One tap beats a hand-typed command, and this is why.
+
+    The typed form is "/start <8 hex chars>". It needs the space, it needs
+    the leading slash, and the panel that shows it renders right-to-left,
+    so the slash appears on the far side and reads as a trailing
+    character. A real deployment sent eight variants of that line — the
+    first of them correct — and linked nothing.
+    """
+    import app.bot.telegram_bot as bot_module
+
+    register_workspace(client, email="deeplink@example.com", workspace_name="Deep")
+    monkeypatch.setattr(bot_module, "_bot_username", "my_test_bot")
+
+    payload = client.post("/bot/link-code").json()
+
+    assert payload["deep_link"] == f"https://t.me/my_test_bot?start={payload['code']}"
+    assert payload["code"] in payload["instructions"], (
+        "the typed instruction must describe the same code as the link — two codes "
+        "would mean the fallback spends a different one"
+    )
+
+
+def test_an_unknown_username_falls_back_instead_of_emitting_a_broken_link(client, monkeypatch) -> None:
+    """Startup may never reach Telegram; the panel must still be usable."""
+    import app.bot.telegram_bot as bot_module
+
+    register_workspace(client, email="nolink@example.com", workspace_name="NoLink")
+    monkeypatch.setattr(bot_module, "_bot_username", None)
+
+    payload = client.post("/bot/link-code").json()
+
+    assert payload["deep_link"] is None, "a link built without a username would point at https://t.me/None"
+    assert payload["code"] in payload["instructions"]
