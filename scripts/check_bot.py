@@ -29,42 +29,24 @@ secret is masked in output: it is that endpoint's only authentication.
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import pathlib
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import UTC, datetime
 
+# The dashboard endpoint (app/routers/bot_router.py) answers the same
+# question through app.botdiag. Sharing the caller is what keeps the two
+# from disagreeing on the day one of them is the only one available —
+# Render's free plan has no Shell, so on that deploy this script cannot
+# run at all and the endpoint is the only route to this answer.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from app.botdiag import call as _call  # noqa: E402
+
 OK, WARN, FAIL = "[OK]", "[WARN]", "[FAIL]"
-API = "https://api.telegram.org"
 
 
 def report(status: str, name: str, detail: str) -> None:
     print(f"{status:7} {name:24} {detail}")
-
-
-def _call(token: str, method: str, params: dict[str, str] | None = None) -> dict:
-    """One Bot API call. Returns the parsed body even on an HTTP error.
-
-    Telegram answers 4xx with a JSON body carrying `description`, which is
-    the useful part — raising on status would throw the explanation away.
-    """
-    url = f"{API}/bot{token}/{method}"
-    data = None
-    if params:
-        data = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items()).encode()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=30) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        try:
-            return json.loads(exc.read())
-        except Exception:
-            return {"ok": False, "description": f"HTTP {exc.code}"}
-    except Exception as exc:  # noqa: BLE001 - a network failure is a result, not a crash
-        return {"ok": False, "description": f"{type(exc).__name__}: {exc}"}
 
 
 def _mask_secret(url: str, secret: str | None) -> str:
