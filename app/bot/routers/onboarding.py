@@ -12,7 +12,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.orm import Session
 
-from app.bot.shared import help_text, resolve_workspace
+from app.bot.shared import help_text, main_menu, resolve_workspace
 from app.models import BotLink, BotLinkCode
 from app.timeutil import utcnow
 
@@ -23,7 +23,12 @@ router = Router(name="onboarding")
 async def handle_start(message: Message, command: CommandObject, db: Session) -> None:
     code = (command.args or "").strip()
     if not code:
-        await message.answer("أهلاً! أرسل: /link CODE — احصل على الرمز من صفحة الإعدادات في الموقع.")
+        # A bare /start from an already-linked chat is someone opening the
+        # bot, not someone failing to paste a code. Give them the menu.
+        if resolve_workspace(db, str(message.chat.id)) is not None:
+            await message.answer("أهلاً 👋 اختر ما تريد:", reply_markup=main_menu())
+        else:
+            await message.answer(help_text(False))
         return
 
     record = db.query(BotLinkCode).filter(BotLinkCode.code == code, BotLinkCode.used_at.is_(None)).first()
@@ -34,7 +39,10 @@ async def handle_start(message: Message, command: CommandObject, db: Session) ->
     record.used_at = utcnow()
     db.merge(BotLink(chat_id=str(message.chat.id), workspace_id=record.workspace_id))
     db.commit()
-    await message.answer("تم الربط بنجاح ✅ يمكنك الآن استخدام /search و /stats.")
+    await message.answer(
+        "تم الربط بنجاح ✅\nاختر ما تريد، أو أرسل أي كلمة للبحث بها:",
+        reply_markup=main_menu(),
+    )
 
 
 @router.message(Command("unlink"))
