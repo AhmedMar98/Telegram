@@ -28,7 +28,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from app import metrics
 from app.classifier import CATEGORIES
 from app.classifier.llm import probe as groq_probe
-from app.config import get_settings
+from app.config import get_settings, production_secrets_check
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
 from app.errors import ErrorCode, coded_headers
@@ -60,6 +60,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         Base.metadata.create_all(bind=engine)
 
     settings = get_settings()
+
+    # Checked before anything else touches the database or Telegram: a
+    # service that boots "healthy" while signing sessions with a key
+    # published in this repository, or storing collected Telegram session
+    # strings behind encryption anyone can reverse with the same public
+    # key, is worse than a service that fails to boot. The failure mode of
+    # refusing to start is loud (a deploy log, a restart loop) and gets
+    # fixed the same day; the failure mode of starting anyway is silent
+    # and gets fixed only after something is stolen.
+    weak_secrets = production_secrets_check(settings)
+    if weak_secrets:
+        raise RuntimeError(
+            f"refusing to start in production with published default(s): {', '.join(weak_secrets)}. "
+            "Override via environment variable(s) before redeploying. Generate a fresh SECRET_KEY "
+            'with: python -c "import secrets; print(secrets.token_urlsafe(48))". Generate a fresh '
+            'FIELD_ENCRYPTION_KEY with: python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())".'
+        )
+
     # Registering the webhook needs all three. Until this runs, Telegram has
     # no address to deliver updates to, so the bot receives nothing and
     # answers nothing — including a perfectly well-formed /start.

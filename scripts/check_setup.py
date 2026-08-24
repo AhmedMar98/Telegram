@@ -10,6 +10,14 @@ Every check reports OK / WARN / FAIL independently, so one missing secret
 does not hide the state of everything else. Exit code is non-zero only if
 something is genuinely broken; optional-but-absent features are warnings.
 Secrets are never printed — only whether they are present and usable.
+
+A handful of checks below escalate from WARN to FAIL specifically when
+``ENVIRONMENT=production``: a published default that is merely a bad idea
+in development (which runs on it by design) is a real vulnerability once
+it is what a public deployment actually signs cookies or encrypts secrets
+with. ``check_production_secrets`` in particular exists to answer one
+question before a deploy does: will app/main.py's lifespan actually start
+with what is set right now?
 """
 
 from __future__ import annotations
@@ -24,10 +32,22 @@ from sqlalchemy import inspect, text  # noqa: E402
 from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 
 from app.classifier.llm import probe as groq_probe  # noqa: E402
+from app.config import _PUBLISHED_DEFAULTS, Settings, production_secrets_check  # noqa: E402
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 _SYMBOL = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]"}
-_DEFAULT_FIELD_ENCRYPTION_KEY = "S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA="
+# Kept as a module-level name (rather than inlined at each call site)
+# because tests/test_check_setup.py references it directly, and because
+# app.config._PUBLISHED_DEFAULTS is the single source of truth this name
+# now points at — the two cannot drift apart.
+_DEFAULT_FIELD_ENCRYPTION_KEY = _PUBLISHED_DEFAULTS["FIELD_ENCRYPTION_KEY"]
+
+# A bearer credential below this many characters is treated as weak. This
+# is a length floor, not a real entropy estimate — a single string has no
+# entropy to measure, that needs a distribution to sample from. 32 chars
+# of the token_urlsafe alphabet is roughly 192 bits; this floor exists to
+# catch "short", not to certify "strong".
+_WEAK_SECRET_LENGTH = 32
 
 results: list[tuple[str, str, str]] = []
 
@@ -35,6 +55,10 @@ results: list[tuple[str, str, str]] = []
 def report(status: str, check: str, detail: str) -> None:
     results.append((status, check, detail))
     print(f"{_SYMBOL[status]} {check}: {detail}")
+
+
+def _is_production() -> bool:
+    return os.environ.get("ENVIRONMENT", "development") == "production"
 
 
 def check_core_env() -> bool:
@@ -49,11 +73,53 @@ def check_core_env() -> bool:
     if not secret:
         report(FAIL, "SECRET_KEY", "missing")
         ok = False
-    elif secret in {"dev-secret-key-change-me", "dev-secret", "changeme"} or len(secret) < 16:
-        report(WARN, "SECRET_KEY", "set but looks like a default/short value — use a long random string")
+    elif secret == _PUBLISHED_DEFAULTS["SECRET_KEY"]:
+        # The exact value app/main.py's lifespan also checks. FAIL here in
+        # production means the deployment would not have booted; WARN in
+        # development is correct, since development runs on this value by
+        # design and the test suite depends on that.
+        if _is_production():
+            report(FAIL, "SECRET_KEY", "the published default — lifespan will refuse to start in production")
+            ok = False
+        else:
+            report(WARN, "SECRET_KEY", "the published dev default — override before deploying")
+    elif len(secret) < 16:
+        report(WARN, "SECRET_KEY", "set but shorter than 16 chars — use a long random string")
     else:
         report(OK, "SECRET_KEY", "set")
     return ok
+
+
+def check_database_url_scheme() -> None:
+    """A sqlite:// URL in production is a defect, not a deployment choice.
+
+    The file lives on Render's ephemeral filesystem — every redeploy
+    recreates the container from the image, and whatever was in the file
+    is gone. A development database on SQLite is normal; a production one
+    is data loss waiting for the next push to main.
+
+    Runs regardless of whether DATABASE_URL is reachable (check_database
+    below returns False and short-circuits the rest of the chain on a
+    connection failure), so a misconfigured scheme is reported even when
+    the database it points at cannot be reached at all.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return  # already reported by check_core_env
+
+    is_sqlite = url.startswith("sqlite")
+    if is_sqlite and _is_production():
+        report(
+            FAIL,
+            "DATABASE_URL scheme",
+            "sqlite:// in production — the file is lost on every redeploy. Use a managed Postgres URL",
+        )
+    elif is_sqlite:
+        report(
+            WARN, "DATABASE_URL scheme", "sqlite:// — fine for local development, lost on redeploy in production"
+        )
+    else:
+        report(OK, "DATABASE_URL scheme", "postgres (durable across redeploys)")
 
 
 def check_database() -> bool:
@@ -228,6 +294,28 @@ def check_optional_features() -> None:
     else:
         if not base_url.startswith("https://"):
             report(FAIL, "bot", "PUBLIC_BASE_URL must be https — Telegram refuses plain http webhooks")
+        elif len(webhook_secret) < _WEAK_SECRET_LENGTH:
+            # Telegram accepts 1-256 chars in secret_token; the value is
+            # hashed to sha256 hex before being sent (app/bot/telegram_bot.py
+            # webhook_token()), but hashing does not add entropy the
+            # operator did not choose. A short secret is a bearer
+            # credential anyone who can guess it can use to post fake
+            # updates to the webhook route.
+            if _is_production():
+                report(
+                    FAIL,
+                    "webhook secret",
+                    f"BOT_WEBHOOK_SECRET is {len(webhook_secret)} chars — below the {_WEAK_SECRET_LENGTH}-char "
+                    'floor for a production bearer credential. Regenerate with: python -c "import secrets; '
+                    'print(secrets.token_urlsafe(48))"',
+                )
+            else:
+                report(
+                    WARN,
+                    "webhook secret",
+                    f"BOT_WEBHOOK_SECRET is {len(webhook_secret)} chars — short. Acceptable for "
+                    "development, regenerate before production",
+                )
         else:
             report(OK, "bot", "token, public URL and webhook secret all set")
 
@@ -267,14 +355,39 @@ def check_optional_features() -> None:
     else:
         report(WARN, "session cookie", f"ENVIRONMENT={environment!r} — Secure flag off (correct for local http)")
 
-    if os.environ.get("INVITE_CODE"):
-        report(OK, "registration", "gated by INVITE_CODE")
-    else:
+    invite = os.environ.get("INVITE_CODE")
+    # Common guessable words are the same as no gate at all — checked
+    # first, and separately from the length check, so the message names
+    # the actual reason rather than lumping "invite" in with a random
+    # 6-char string that merely happens to be short.
+    _GUESSABLE_INVITE_CODES = {"invite", "invite-only", "secret", "password", "1234", "123456", "code"}
+    if not invite:
         report(WARN, "registration", "INVITE_CODE not set — anyone reaching the URL can create an account")
+    elif invite.lower() in _GUESSABLE_INVITE_CODES:
+        report(
+            WARN, "registration", f"INVITE_CODE is a common guessable value ({invite!r}) — nominally gated only"
+        )
+    elif len(invite) < 8:
+        report(WARN, "registration", f"INVITE_CODE is {len(invite)} chars — short for a gating credential")
+    else:
+        report(OK, "registration", "gated by INVITE_CODE")
 
+    # WARN in development (decorative encryption is still a working
+    # default there); FAIL in production, where app/main.py's lifespan
+    # will refuse to start on the same value — this diagnostic must not
+    # pass what the runtime rejects.
     field_key = os.environ.get("FIELD_ENCRYPTION_KEY")
-    if field_key and field_key != _DEFAULT_FIELD_ENCRYPTION_KEY:
+    is_default = (not field_key) or field_key == _DEFAULT_FIELD_ENCRYPTION_KEY
+    if not is_default:
         report(OK, "field encryption", "FIELD_ENCRYPTION_KEY set to a non-default value")
+    elif _is_production():
+        report(
+            FAIL,
+            "field encryption",
+            "FIELD_ENCRYPTION_KEY unset or using the published dev default in production — lifespan will "
+            'refuse to start. Generate with: python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())"',
+        )
     else:
         report(
             WARN,
@@ -284,9 +397,43 @@ def check_optional_features() -> None:
         )
 
 
+def check_production_secrets() -> None:
+    """The check that closes the loop with app/main.py's lifespan.
+
+    lifespan calls production_secrets_check() and raises if any secret is
+    still the published default in ENVIRONMENT=production. This runs the
+    identical check ahead of a deploy, so the defect shows up here — or in
+    CI — rather than in a restart-looping deploy log.
+
+    Kept separate from check_core_env rather than folded into it: that one
+    asks "is each secret present and reasonable on its own?"; this one
+    asks "would the app actually boot with what is set right now?". The
+    two can disagree — a SECRET_KEY that merely resembles the published
+    default (short, guessable) still passes this check, because only an
+    exact match is what lifespan itself tests for.
+    """
+    settings = Settings()
+    problems = production_secrets_check(settings)
+    if not problems:
+        if _is_production():
+            report(OK, "production secrets", "lifespan will start — no published defaults in production")
+        # In development this is a no-op by design: production_secrets_check
+        # returns [] unconditionally there. Reporting OK for a check that
+        # did not actually run would be its own small lie.
+        return
+
+    report(
+        FAIL,
+        "production secrets",
+        f"lifespan will refuse to start: {', '.join(problems)} still at the published default. "
+        "Override via environment variable(s) before redeploying",
+    )
+
+
 def main() -> int:
     print("Setup check\n" + "=" * 72)
     healthy = check_core_env()
+    check_database_url_scheme()
     if healthy:
         healthy = check_database()
         if healthy:
@@ -294,6 +441,7 @@ def main() -> int:
             check_workspace_and_channels()
         healthy = check_telegram_credentials() and healthy
     check_optional_features()
+    check_production_secrets()
 
     failures = [c for status, c, _ in results if status == FAIL]
     warnings = [c for status, c, _ in results if status == WARN]

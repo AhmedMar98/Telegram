@@ -187,3 +187,47 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# The two secrets in this file that ship with a real, working default value
+# rather than an empty one — because SECRET_KEY signs every session cookie
+# and FIELD_ENCRYPTION_KEY must decrypt what earlier writes encrypted with
+# it, neither can crash on missing input the way an optional integration
+# key does. Kept as a single dict (not read back out of the two field
+# defaults above) so this file has exactly one place that says what "still
+# the default" means; a default-value change above without a matching
+# change here would silently stop being caught, so keep them in sync.
+_PUBLISHED_DEFAULTS: dict[str, str] = {
+    "SECRET_KEY": "dev-secret-key-change-me",
+    "FIELD_ENCRYPTION_KEY": "S7uvgQ59s2Xo-V2u3yZdnqZLxhnienyS6rirAOJ_pnA=",
+}
+
+
+def production_secrets_check(settings: Settings) -> list[str]:
+    """Names of secrets still at their published default, in production.
+
+    Both defaults above are committed to this public repository, so using
+    either of them in production is not weak security, it is *no* security:
+    a signed session cookie anyone can forge, and field encryption anyone
+    can reverse. That was previously only a comment ("MUST be overridden")
+    next to the field definition, which nothing enforced.
+
+    Returns a list, not a bool, because "SECRET_KEY and FIELD_ENCRYPTION_KEY
+    are both still the published default" is an actionable message and
+    "some secrets are weak" is not; the caller (lifespan, and the setup
+    diagnostic) prints exactly what to fix.
+
+    Development is always given a clean pass: the published defaults are
+    what makes ``uvicorn app.main:app`` work with no .env file on a fresh
+    checkout, and the test suite depends on that. Only ``environment ==
+    "production"`` turns this from documentation into an enforced contract.
+    """
+    if settings.environment != "production":
+        return []
+
+    problems: list[str] = []
+    if settings.secret_key == _PUBLISHED_DEFAULTS["SECRET_KEY"]:
+        problems.append("SECRET_KEY")
+    if settings.field_encryption_key == _PUBLISHED_DEFAULTS["FIELD_ENCRYPTION_KEY"]:
+        problems.append("FIELD_ENCRYPTION_KEY")
+    return problems
