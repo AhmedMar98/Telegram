@@ -324,14 +324,14 @@ curl -sS -X POST \
   -H "Authorization: Bearer $LIP_API_KEY"
 ```
 
-### `POST /telegram/webhook/{secret}`
+### `POST /telegram/webhook`
 
 Telegram Webhook  
-**المصادقة:** 🤖 السرّ في المسار نفسه، لا ترويسة
+**المصادقة:** — بلا مصادقة
 
 ```bash
 curl -sS -X POST \
-  "$BASE/telegram/webhook/$BOT_WEBHOOK_SECRET"
+  "$BASE/telegram/webhook"
 ```
 
 ## channels

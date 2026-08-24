@@ -77,7 +77,7 @@ def diagnose(token: str | None, base_url: str | None, secret: str | None) -> dic
 
     hook = info.get("result", {})
     registered = hook.get("url") or ""
-    expected = f"{base_url.rstrip('/')}/telegram/webhook/{secret}" if (base_url and secret) else ""
+    expected = f"{base_url.rstrip('/')}/telegram/webhook" if base_url else ""
 
     # The secret is this endpoint's only authentication; it must not travel
     # in a diagnostic payload, and a URL is not useful to a reader anyway

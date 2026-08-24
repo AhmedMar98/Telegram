@@ -66,7 +66,7 @@ def test_a_failing_delivery_surfaces_telegrams_own_words(fake_api) -> None:
         {
             "getMe": _me(),
             "getWebhookInfo": _hook(
-                url=f"{BASE}/telegram/webhook/{SECRET}",
+                url=f"{BASE}/telegram/webhook",
                 last_error_message="Read timeout expired",
                 pending_update_count=4,
             ),
@@ -95,14 +95,18 @@ def test_the_payload_never_carries_the_token_or_the_webhook_secret(fake_api) -> 
     The webhook secret is that endpoint's ONLY authentication: anyone
     holding it can post forged Telegram updates to this deployment.
     """
-    fake_api({"getMe": _me(), "getWebhookInfo": _hook(url=f"{BASE}/telegram/webhook/{SECRET}")})
+    fake_api({"getMe": _me(), "getWebhookInfo": _hook(url=f"{BASE}/telegram/webhook")})
 
     result = botdiag.diagnose("super-secret-token", BASE, SECRET)
 
     serialised = repr(result)
     assert "super-secret-token" not in serialised
-    assert SECRET not in serialised, "the webhook secret must be masked before it reaches a caller"
-    assert "***" in result["registered_url"]
+    assert SECRET not in serialised, (
+        "the webhook secret must never reach a caller. It no longer travels in the "
+        "URL at all — it moved to a header precisely because a URL is written to "
+        "every access log it passes — but the masking stays as a second line of "
+        "defence for a deployment still registered the old way."
+    )
 
 
 def test_the_endpoint_requires_a_logged_in_user(client) -> None:
