@@ -15,12 +15,27 @@ comment.
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 from sqlalchemy.orm import Session
 
-from app.bot.shared import NOT_LINKED, answer_results, decode_filter, help_text, resolve_workspace
+from app.bot.routers.status import stats_text
+from app.bot.shared import (
+    CB_DETAILS,
+    CB_FAVOURITE,
+    CB_MENU,
+    NOT_LINKED,
+    TOO_OLD,
+    answer_results,
+    decode_filter,
+    help_text,
+    resolve_workspace,
+    result_actions,
+)
 from app.classifier import extract_urls
 from app.ingest import ingest_text, manual_channel
 from app.linkquery import filtered_links
@@ -86,8 +101,13 @@ async def handle_details(message: Message, command: CommandObject, db: Session) 
         await message.answer("لا يوجد رابط بهذا الرقم.")
         return
 
+    await message.answer(_details_text(link), disable_web_page_preview=True)
+
+
+def _details_text(link: Link) -> str:
+    """One rendering, shared by the /details command and the button."""
     context = (link.raw_text or "").strip().replace("\n", " ")[:200]
-    await message.answer(
+    return (
         f"{link.url}\n"
         f"التصنيف: {link.category} ({link.classified_by}, {link.confidence * 100:.0f}%)\n"
         f"القاعدة: {link.matched_rule or 'غير مسجّلة'}\n"
@@ -109,7 +129,7 @@ async def handle_page(callback: CallbackQuery, db: Session) -> None:
     # that merely behaves like a Message.
     origin = callback.message
     if callback.data is None or origin is None or isinstance(origin, InaccessibleMessage):
-        await callback.answer("هذه الرسالة أقدم من أن يصل إليها البوت. أعد البحث من جديد.", show_alert=True)
+        await callback.answer(TOO_OLD, show_alert=True)
         return
 
     workspace_id = resolve_workspace(db, str(origin.chat.id))
@@ -121,6 +141,109 @@ async def handle_page(callback: CallbackQuery, db: Session) -> None:
     q, favorite, category = decode_filter(token)
     await answer_results(origin, db, workspace_id, q=q, page=int(page_text), favorite=favorite, category=category)
     # Telegram shows a loading spinner on the button until this is called.
+    await callback.answer()
+
+
+def _origin(callback: CallbackQuery):
+    """The message a callback came from, or None if it is out of reach.
+
+    Telegram sends InaccessibleMessage when the original is too old for the
+    bot to read back. It is not a Message subclass, so answering through it
+    means an API call about a message the bot cannot access — the user gets
+    an explanation instead of a button that spins and then fails.
+
+    Factored out when the second and third callback handlers needed the
+    same seven lines. Written as an InaccessibleMessage rejection rather
+    than a Message acceptance, so the narrowing does not also reject
+    anything that merely behaves like a Message.
+    """
+    origin = callback.message
+    if origin is None or isinstance(origin, InaccessibleMessage):
+        return None
+    return origin
+
+
+@router.callback_query(F.data.startswith(f"{CB_DETAILS}:"))
+async def handle_details_button(callback: CallbackQuery, db: Session) -> None:
+    """The "تفاصيل" button under a result — so no id is ever retyped."""
+    origin = _origin(callback)
+    if callback.data is None or origin is None:
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+
+    workspace_id = resolve_workspace(db, str(origin.chat.id))
+    if workspace_id is None:
+        await callback.answer(NOT_LINKED, show_alert=True)
+        return
+
+    link_id = int(callback.data.split(":", 1)[1])
+    # Scoped to the workspace, not just fetched by id: a callback payload is
+    # client-supplied, and a link id from one workspace must not resolve in
+    # another just because someone edited a button's data.
+    link = db.query(Link).filter(Link.id == link_id, Link.workspace_id == workspace_id).first()
+    if link is None:
+        await callback.answer("لم يعد هذا الرابط موجوداً.", show_alert=True)
+        return
+
+    await origin.answer(_details_text(link), disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{CB_FAVOURITE}:"))
+async def handle_favourite_button(callback: CallbackQuery, db: Session) -> None:
+    """Star or unstar from the result itself.
+
+    The payload carries the WANTED state, not "toggle": two chats acting on
+    the same link would otherwise each send a toggle and cancel each other.
+    """
+    origin = _origin(callback)
+    if callback.data is None or origin is None:
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+
+    workspace_id = resolve_workspace(db, str(origin.chat.id))
+    if workspace_id is None:
+        await callback.answer(NOT_LINKED, show_alert=True)
+        return
+
+    _, id_text, want = callback.data.split(":", 2)
+    link = db.query(Link).filter(Link.id == int(id_text), Link.workspace_id == workspace_id).first()
+    if link is None:
+        await callback.answer("لم يعد هذا الرابط موجوداً.", show_alert=True)
+        return
+
+    link.is_favorite = want == "1"
+    db.commit()
+
+    # Repaint the button in place, so its label matches what just happened
+    # rather than describing the state it was in before the tap.
+    with suppress(TelegramBadRequest):
+        await origin.edit_reply_markup(reply_markup=result_actions(link.id, bool(link.is_favorite)))
+    await callback.answer("أُضيف للمفضّلة ⭐" if link.is_favorite else "أُزيل من المفضّلة")
+
+
+@router.callback_query(F.data.startswith(f"{CB_MENU}:"))
+async def handle_menu_button(callback: CallbackQuery, db: Session) -> None:
+    """The /start menu: latest, favourites, stats, help."""
+    origin = _origin(callback)
+    if callback.data is None or origin is None:
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+
+    workspace_id = resolve_workspace(db, str(origin.chat.id))
+    if workspace_id is None:
+        await callback.answer(NOT_LINKED, show_alert=True)
+        return
+
+    choice = callback.data.split(":", 1)[1]
+    if choice == "latest":
+        await answer_results(origin, db, workspace_id, q=None, page=0)
+    elif choice == "favorite":
+        await answer_results(origin, db, workspace_id, q=None, page=0, favorite=True)
+    elif choice == "stats":
+        await origin.answer(stats_text(db, workspace_id))
+    else:
+        await origin.answer(help_text(True))
     await callback.answer()
 
 

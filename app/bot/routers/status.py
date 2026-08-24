@@ -25,9 +25,18 @@ async def handle_stats(message: Message, db: Session) -> None:
         await message.answer(NOT_LINKED)
         return
 
+    await message.answer(stats_text(db, workspace_id))
+
+
+def stats_text(db: Session, workspace_id: int) -> str:
+    """Shared by /stats and the menu's stats button.
+
+    A second copy for the button is how the two would eventually report
+    different numbers for the same workspace.
+    """
     total_links = db.query(Link).filter(Link.workspace_id == workspace_id).count()
     total_channels = db.query(Channel).filter(Channel.workspace_id == workspace_id).count()
-    await message.answer(f"عدد الروابط: {total_links}\nعدد القنوات: {total_channels}")
+    return f"عدد الروابط: {total_links}\nعدد القنوات: {total_channels}"
 
 
 @router.message(Command("channels"))

@@ -213,3 +213,25 @@
   margin-inline-start: .35rem;
   font-size: .8em;
 }
+
+  /* Dashboard tabs. The page carried fourteen headings in one scroll
+     before this — "ربط البوت" sat between collection settings and account
+     settings, which is where a real user went looking and missed it. */
+  .tabs {
+    display: flex; gap: .35rem; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem; padding-bottom: 0;
+  }
+  .tabs .tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    border-radius: .4rem .4rem 0 0; padding: .55rem .9rem;
+    color: var(--muted); font-size: 1rem; font-weight: 500;
+    min-height: 2.75rem; /* 2.5.8: a comfortable target on a phone */
+    margin-bottom: -1px; cursor: pointer;
+  }
+  .tabs .tab:hover { color: var(--fg); background: var(--tag-bg); }
+  .tabs .tab[aria-selected="true"] {
+    color: var(--accent); border-bottom-color: var(--accent); font-weight: 600;
+  }
+  /* The panel is the page now, so its first heading needs no top gap. */
+  .panel > h2:first-child, .panel > h3:first-child { margin-top: 0; }

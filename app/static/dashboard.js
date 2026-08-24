@@ -1080,6 +1080,10 @@ function restoreRememberedFilters() {
   }
 }
 
+// Before anything paints: a viewer who left on the Security tab should
+// not watch Links flash past on every reload.
+restoreTab();
+
 if (!applyPermalink()) restoreRememberedFilters();
 refreshViewButton();
 loadStats();
@@ -1274,4 +1278,74 @@ async function loadSystemStatus() {
     `${s.requests_since_start} طلباً · ${s.server_errors_since_start} خطأ خادم · ` +
     `وسيط ${s.median_response_ms}ms · p95 ${s.p95_response_ms}ms` +
     `</div><div class="gap-top-s">${runs}</div>`;
+}
+
+// --- Tabs ------------------------------------------------------------
+//
+// The dashboard grew one section per shipped phase, each appended to the
+// end of the template, and nobody looked at the page as a whole
+// afterwards. The result was fourteen headings in one scroll with "ربط
+// البوت" sitting between collection settings and account settings — which
+// is where a real user went looking for it and did not find it.
+//
+// Grouped into five, with Links open by default because search and manual
+// add are the daily use and everything else is occasional.
+
+var TAB_KEYS = ["links", "collect", "bot", "security", "account"];
+var TAB_STORAGE_KEY = "dashboard-tab";
+
+function selectTab(key, opts) {
+  if (TAB_KEYS.indexOf(key) === -1) key = TAB_KEYS[0];
+  TAB_KEYS.forEach(function (k) {
+    var tab = document.getElementById("tab-" + k);
+    var panel = document.getElementById("panel-" + k);
+    if (!tab || !panel) return;
+    var on = k === key;
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+    // Roving tabindex: the tablist is ONE tab stop, and the arrow keys move
+    // within it. Leaving every tab focusable would make a keyboard user
+    // press Tab five times to reach the panel.
+    tab.tabIndex = on ? 0 : -1;
+    panel.hidden = !on;
+  });
+  if (!opts || opts.focus !== false) {
+    var active = document.getElementById("tab-" + key);
+    if (active && opts && opts.focus) active.focus();
+  }
+  // A per-viewer convenience, never anything the app depends on: private
+  // windows and blocked site data both throw here.
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, key);
+  } catch (e) {
+    /* the tab still switched; only the memory of it is lost */
+  }
+}
+
+// Arrow keys move between tabs, Home/End jump to the ends — the behaviour
+// the ARIA tabs pattern specifies, and what a screen-reader user expects
+// the moment they hear "tab list".
+document.addEventListener("keydown", function (event) {
+  var tab = event.target.closest && event.target.closest('[role="tab"]');
+  if (!tab) return;
+  var i = TAB_KEYS.indexOf(tab.getAttribute("data-tab"));
+  if (i === -1) return;
+  var next = null;
+  // Right-to-left: ArrowLeft advances, because "forward" follows the text.
+  if (event.key === "ArrowLeft") next = (i + 1) % TAB_KEYS.length;
+  else if (event.key === "ArrowRight") next = (i - 1 + TAB_KEYS.length) % TAB_KEYS.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = TAB_KEYS.length - 1;
+  if (next === null) return;
+  event.preventDefault();
+  selectTab(TAB_KEYS[next], { focus: true });
+});
+
+function restoreTab() {
+  var saved = null;
+  try {
+    saved = localStorage.getItem(TAB_STORAGE_KEY);
+  } catch (e) {
+    /* no stored preference is a normal state, not an error */
+  }
+  if (saved) selectTab(saved, { focus: false });
 }

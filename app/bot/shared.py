@@ -88,6 +88,68 @@ def decode_filter(token: str) -> tuple[str | None, bool | None, str | None]:
     return (parts[0] or None), (True if parts[1] == "1" else None), (parts[2] or None)
 
 
+# Every callback payload this bot sends. Telegram caps callback_data at 64
+# BYTES, and Arabic is 2 bytes per character in UTF-8, so the prefixes are
+# terse on purpose — a truncated payload is a button that silently does
+# nothing.
+CB_PAGE = "pg"
+CB_DETAILS = "d"
+CB_FAVOURITE = "f"
+CB_MENU = "m"
+
+# Telegram stops letting a bot read back a message once it is old enough,
+# and every callback handler has to say so. One string, so three buttons
+# cannot drift into three different explanations of the same thing.
+TOO_OLD = "هذه الرسالة أقدم من أن يصل إليها البوت. أعد البحث من جديد."
+
+
+def main_menu() -> InlineKeyboardMarkup:
+    """The four things people actually do, as buttons.
+
+    The bot has ten commands and, before this, two buttons in the entire
+    system — previous and next. Everything else had to be typed from
+    memory, including `/details 42`, where the 42 is only visible if you
+    still have the search results on screen.
+
+    That is not a hypothetical complaint about ergonomics. The linking
+    flow asked for `/start <code>`: a slash, a space, and eight hex
+    characters, rendered right-to-left so the slash appears on the far
+    side. A real user sent eight variants of that line and linked nothing.
+    Typing is the failure mode; buttons are the fix.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🆕 الأحدث", callback_data=f"{CB_MENU}:latest"),
+                InlineKeyboardButton(text="⭐ المفضّلة", callback_data=f"{CB_MENU}:favorite"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 إحصاءات", callback_data=f"{CB_MENU}:stats"),
+                InlineKeyboardButton(text="❓ مساعدة", callback_data=f"{CB_MENU}:help"),
+            ],
+        ]
+    )
+
+
+def result_actions(link_id: int, is_favorite: bool) -> InlineKeyboardMarkup:
+    """Per-result buttons, so no id is ever read off a screen and retyped.
+
+    The star's label reflects the CURRENT state and the callback carries
+    the INTENT, not a toggle: two people acting on the same link from two
+    chats would both send "toggle" and cancel each other out.
+    """
+    star = "☆ إزالة من المفضّلة" if is_favorite else "⭐ إضافة للمفضّلة"
+    want = "0" if is_favorite else "1"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔍 تفاصيل", callback_data=f"{CB_DETAILS}:{link_id}"),
+                InlineKeyboardButton(text=star, callback_data=f"{CB_FAVOURITE}:{link_id}:{want}"),
+            ]
+        ]
+    )
+
+
 def pager(q: str | None, page: int, total: int, favorite: bool | None, category: str | None):
     """Previous/next buttons, omitted entirely when there is one page.
 
@@ -99,9 +161,9 @@ def pager(q: str | None, page: int, total: int, favorite: bool | None, category:
     buttons = []
     token = encode_filter(q, favorite, category)
     if page > 0:
-        buttons.append(InlineKeyboardButton(text="« السابق", callback_data=f"pg:{page - 1}:{token}"))
+        buttons.append(InlineKeyboardButton(text="« السابق", callback_data=f"{CB_PAGE}:{page - 1}:{token}"))
     if (page + 1) * PAGE_SIZE < total:
-        buttons.append(InlineKeyboardButton(text="التالي »", callback_data=f"pg:{page + 1}:{token}"))
+        buttons.append(InlineKeyboardButton(text="التالي »", callback_data=f"{CB_PAGE}:{page + 1}:{token}"))
     if not buttons:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
@@ -131,11 +193,25 @@ async def answer_results(
 
     rows = query.order_by(Link.created_at.desc()).offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
     start = page * PAGE_SIZE
-    lines = [format_link(link, start + i + 1) for i, link in enumerate(rows)]
-    header = f"النتائج {start + 1}–{start + len(rows)} من {total}"
-    body = header + "\n" + "\n".join(lines)
 
-    await message.answer(body, reply_markup=pager(q, page, total, favorite, category))
+    # One message per result rather than one block of numbered lines.
+    # Telegram attaches a keyboard to a MESSAGE, not to a line inside one,
+    # so a single block can only ever carry page controls — which is why
+    # acting on a result meant reading its number off the screen and
+    # typing "/details 42" by hand.
+    await message.answer(f"النتائج {start + 1}–{start + len(rows)} من {total}")
+    for i, link in enumerate(rows):
+        await message.answer(
+            format_link(link, start + i + 1),
+            reply_markup=result_actions(link.id, bool(link.is_favorite)),
+            disable_web_page_preview=True,
+        )
+
+    # The pager rides the last message, so "next" is where the eye already
+    # is after reading the page.
+    controls = pager(q, page, total, favorite, category)
+    if controls is not None:
+        await message.answer(f"صفحة {page + 1} من {(total + PAGE_SIZE - 1) // PAGE_SIZE}", reply_markup=controls)
 
 
 def help_text(linked: bool) -> str:

@@ -36,9 +36,31 @@ class FakeMessage:
         # otherwise pass every assertion about the text.
         self.markups: list[object] = []
 
-    async def answer(self, text: str, reply_markup: object = None) -> None:
+    async def answer(self, text: str, reply_markup: object = None, **kwargs: object) -> None:
+        # **kwargs so the double keeps accepting what the real Message
+        # accepts. It used to take exactly two arguments, and adding
+        # disable_web_page_preview to a call site broke eight tests that
+        # have nothing to do with previews — a double narrower than the
+        # thing it stands in for fails on changes it should not notice.
         self.sent.append(text)
         self.markups.append(reply_markup)
+
+    @property
+    def all_text(self) -> str:
+        """Everything the bot said, joined.
+
+        Results used to arrive as one numbered block, so asserting on
+        ``sent[0]`` worked by accident. Each result is now its own message
+        because Telegram attaches a keyboard to a message and not to a
+        line inside one — so "did the bot mention this link" is a question
+        about the whole reply, not about its first line.
+        """
+        return "\n".join(self.sent)
+
+    @property
+    def keyboards(self) -> list[object]:
+        """Only the messages that actually carried buttons."""
+        return [m for m in self.markups if m is not None]
 
 
 class FakeCommand:
@@ -57,14 +79,43 @@ def _workspace() -> int:
         db.close()
 
 
-def test_start_without_code_shows_instructions():
+def test_start_without_code_tells_an_unlinked_chat_where_to_get_one():
+    """It must name where the code comes from, not just refuse.
+
+    The old reply pointed at "صفحة الإعدادات" — a page by that name does
+    not exist. The dashboard's section is «البوت», and a real user spent an
+    evening not finding it.
+    """
     db = SessionLocal()
     try:
         message = FakeMessage(chat_id=111)
         asyncio.run(bot.handle_start(message, FakeCommand(args=None), db))
     finally:
         db.close()
-    assert "رمز الربط" in message.sent[0] or "/link" in message.sent[0] or "CODE" in message.sent[0]
+
+    reply = message.all_text
+    assert "البوت" in reply, f"the reply must name the dashboard section: {reply!r}"
+    assert "/start" in reply, "it must show the command shape, since a code has to follow it"
+    assert message.keyboards == [], "an unlinked chat has nothing to offer buttons for"
+
+
+def test_start_without_code_gives_a_linked_chat_the_menu():
+    """A bare /start from a linked chat is someone opening the bot.
+
+    Before this it got the same "send me a code" text as a stranger, which
+    is both wrong and the reason ten commands had to be memorised: there
+    was no surface that listed what the bot could do.
+    """
+    workspace_id = _linked(2101)
+    assert workspace_id
+
+    message = FakeMessage(chat_id=2101)
+    _run(bot.handle_start, message, FakeCommand(args=None))
+
+    assert message.keyboards, "a linked chat must be offered the menu"
+    labels = [b.text for m in message.keyboards for row in m.inline_keyboard for b in row]
+    assert any("الأحدث" in t for t in labels), f"menu is missing its actions: {labels}"
+    assert any("المفضّلة" in t for t in labels), f"menu is missing its actions: {labels}"
 
 
 def test_start_with_valid_code_links_the_chat():
@@ -77,7 +128,7 @@ def test_start_with_valid_code_links_the_chat():
     finally:
         db.close()
 
-    assert "نجاح" in message.sent[0] or "✅" in message.sent[0]
+    assert "نجاح" in message.all_text or "✅" in message.all_text
     db = SessionLocal()
     try:
         link = db.get(BotLink, "222")
@@ -97,7 +148,7 @@ def test_start_with_invalid_code_is_rejected():
         asyncio.run(bot.handle_start(message, FakeCommand(args="not-a-real-code"), db))
     finally:
         db.close()
-    assert "غير صالح" in message.sent[0]
+    assert "غير صالح" in message.all_text
 
 
 def test_start_with_already_used_code_is_rejected():
@@ -111,7 +162,7 @@ def test_start_with_already_used_code_is_rejected():
         asyncio.run(bot.handle_start(second, FakeCommand(args=code), db))
     finally:
         db.close()
-    assert "غير صالح" in second.sent[0]
+    assert "غير صالح" in second.all_text
 
 
 def test_search_without_linked_chat_prompts_to_link():
@@ -121,7 +172,7 @@ def test_search_without_linked_chat_prompts_to_link():
         asyncio.run(bot.handle_search(message, FakeCommand(args="anything"), db))
     finally:
         db.close()
-    assert "غير مرتبطة" in message.sent[0]
+    assert "غير مرتبطة" in message.all_text
 
 
 def test_search_without_query_shows_usage():
@@ -134,7 +185,7 @@ def test_search_without_query_shows_usage():
         asyncio.run(bot.handle_search(message, FakeCommand(args=""), db))
     finally:
         db.close()
-    assert "الاستخدام" in message.sent[0]
+    assert "الاستخدام" in message.all_text
 
 
 def test_search_finds_matching_links():
@@ -151,7 +202,7 @@ def test_search_finds_matching_links():
         asyncio.run(bot.handle_search(message, FakeCommand(args="python"), db))
     finally:
         db.close()
-    assert "python-guide" in message.sent[0]
+    assert "python-guide" in message.all_text
 
 
 def test_search_reports_no_results():
@@ -164,7 +215,7 @@ def test_search_reports_no_results():
         asyncio.run(bot.handle_search(message, FakeCommand(args="nothing-will-match-this"), db))
     finally:
         db.close()
-    assert "لا نتائج" in message.sent[0]
+    assert "لا نتائج" in message.all_text
 
 
 def test_search_is_scoped_to_the_linked_workspace():
@@ -181,7 +232,7 @@ def test_search_is_scoped_to_the_linked_workspace():
         asyncio.run(bot.handle_search(message, FakeCommand(args="secret"), db))
     finally:
         db.close()
-    assert "لا نتائج" in message.sent[0]
+    assert "لا نتائج" in message.all_text
 
 
 def test_stats_without_linked_chat_prompts_to_link():
@@ -191,7 +242,7 @@ def test_stats_without_linked_chat_prompts_to_link():
         asyncio.run(bot.handle_stats(message, db))
     finally:
         db.close()
-    assert "غير مرتبطة" in message.sent[0]
+    assert "غير مرتبطة" in message.all_text
 
 
 def test_stats_reports_counts():
@@ -206,7 +257,7 @@ def test_stats_reports_counts():
         asyncio.run(bot.handle_stats(message, db))
     finally:
         db.close()
-    assert "1" in message.sent[0]
+    assert "1" in message.all_text
 
 
 def test_unlinked_chat_gets_linking_instructions_not_a_command_list():
@@ -218,8 +269,8 @@ def test_unlinked_chat_gets_linking_instructions_not_a_command_list():
         asyncio.run(bot.handle_other(message, db))
     finally:
         db.close()
-    assert "رمز" in message.sent[0]
-    assert "/start" in message.sent[0]
+    assert "رمز" in message.all_text
+    assert "/start" in message.all_text
 
 
 def test_a_linked_chat_gets_the_command_list():
@@ -232,8 +283,8 @@ def test_a_linked_chat_gets_the_command_list():
         asyncio.run(bot.handle_other(message, db))
     finally:
         db.close()
-    assert "/search" in message.sent[0]
-    assert "/stats" in message.sent[0]
+    assert "/search" in message.all_text
+    assert "/stats" in message.all_text
 
 
 def test_get_bot_returns_none_without_token(monkeypatch):
@@ -319,8 +370,8 @@ def test_the_bot_and_the_web_agree_on_what_a_search_returns():
         db.close()
 
     assert expected == {"https://a.example/free.pdf"}
-    assert "free.pdf" in message.sent[0]
-    assert "paid.pdf" not in message.sent[0]
+    assert "free.pdf" in message.all_text
+    assert "paid.pdf" not in message.all_text
 
 
 def test_latest_lists_newest_first():
@@ -330,7 +381,7 @@ def test_latest_lists_newest_first():
     message = FakeMessage(chat_id=2002)
     _run(bot.handle_latest, message)
 
-    body = message.sent[0]
+    body = message.all_text
     assert body.index("new.pdf") < body.index("old.pdf")
 
 
@@ -349,8 +400,8 @@ def test_favorite_only_returns_starred_links():
     message = FakeMessage(chat_id=2003)
     _run(bot.handle_favorite, message, FakeCommand(args=""))
 
-    assert "starred.pdf" in message.sent[0]
-    assert "plain.pdf" not in message.sent[0]
+    assert "starred.pdf" in message.all_text
+    assert "plain.pdf" not in message.all_text
 
 
 def test_vitality_reports_all_three_states():
@@ -369,9 +420,9 @@ def test_vitality_reports_all_three_states():
     message = FakeMessage(chat_id=2004)
     _run(bot.handle_vitality, message)
 
-    assert "🟢 حيّة: 1" in message.sent[0]
-    assert "🔴 ميتة: 1" in message.sent[0]
-    assert "⚪ لم تُفحص: 1" in message.sent[0]
+    assert "🟢 حيّة: 1" in message.all_text
+    assert "🔴 ميتة: 1" in message.all_text
+    assert "⚪ لم تُفحص: 1" in message.all_text
 
 
 def test_channels_lists_the_workspace_channels():
@@ -381,7 +432,7 @@ def test_channels_lists_the_workspace_channels():
     message = FakeMessage(chat_id=2005)
     _run(bot.handle_channels, message)
 
-    assert f"seed-{workspace_id}" in message.sent[0]
+    assert f"seed-{workspace_id}" in message.all_text
 
 
 def test_details_addresses_a_link_by_its_position():
@@ -392,9 +443,9 @@ def test_details_addresses_a_link_by_its_position():
     _run(bot.handle_details, message, FakeCommand(args="1"))
 
     # Newest first, so position 1 is the last one ingested.
-    assert "second.pdf" in message.sent[0]
-    assert "التصنيف:" in message.sent[0]
-    assert "القاعدة:" in message.sent[0]
+    assert "second.pdf" in message.all_text
+    assert "التصنيف:" in message.all_text
+    assert "القاعدة:" in message.all_text
 
 
 def test_details_rejects_a_non_number():
@@ -404,7 +455,7 @@ def test_details_rejects_a_non_number():
     message = FakeMessage(chat_id=2007)
     _run(bot.handle_details, message, FakeCommand(args="drop table"))
 
-    assert "الاستخدام" in message.sent[0]
+    assert "الاستخدام" in message.all_text
 
 
 def test_details_out_of_range_is_a_plain_miss():
@@ -415,7 +466,7 @@ def test_details_out_of_range_is_a_plain_miss():
     message = FakeMessage(chat_id=2008)
     _run(bot.handle_details, message, FakeCommand(args="99"))
 
-    assert "لا يوجد رابط بهذا الرقم" in message.sent[0]
+    assert "لا يوجد رابط بهذا الرقم" in message.all_text
 
 
 def test_unlink_detaches_the_chat_without_deleting_data():
@@ -438,7 +489,7 @@ def test_unlink_detaches_the_chat_without_deleting_data():
 def test_unlinking_an_unlinked_chat_is_not_an_error():
     message = FakeMessage(chat_id=2010)
     _run(bot.handle_unlink, message)
-    assert "غير مرتبطة" in message.sent[0]
+    assert "غير مرتبطة" in message.all_text
 
 
 def test_a_pasted_link_is_saved_without_a_command():
@@ -455,7 +506,7 @@ def test_a_pasted_link_is_saved_without_a_command():
     finally:
         db.close()
     assert urls == ["https://example.com/pasted.pdf"]
-    assert "أُضيف 1" in message.sent[0]
+    assert "أُضيف 1" in message.all_text
 
 
 def test_a_bare_phrase_is_treated_as_a_search():
@@ -465,7 +516,7 @@ def test_a_bare_phrase_is_treated_as_a_search():
     message = FakeMessage(chat_id=2012, text="الشبكات")
     _run(bot.handle_other, message)
 
-    assert "networks.pdf" in message.sent[0]
+    assert "networks.pdf" in message.all_text
 
 
 def test_help_lists_every_registered_command():
@@ -478,7 +529,7 @@ def test_help_lists_every_registered_command():
     _run(bot.handle_help, message)
 
     for name, _ in bot.COMMANDS:
-        assert name in message.sent[0], f"{name} missing from /help"
+        assert name in message.all_text, f"{name} missing from /help"
 
 
 def test_every_documented_command_has_a_handler():
@@ -505,7 +556,14 @@ def test_a_single_page_of_results_carries_no_pager():
     message = FakeMessage(chat_id=2014)
     _run(bot.handle_latest, message)
 
-    assert message.markups[0] is None
+    # Results now carry their own details/favourite buttons, so "no pager"
+    # can no longer mean "no keyboard anywhere". The pager is the keyboard
+    # holding a next/previous label; asserting on a positional index would
+    # pass for the wrong reason the moment the message order changes.
+    labels = [b.text for m in message.keyboards for row in m.inline_keyboard for b in row]
+    assert not any("التالي" in t or "السابق" in t for t in labels), (
+        f"one page of results must offer no paging controls: {labels}"
+    )
 
 
 def test_more_than_one_page_carries_a_next_button():
@@ -515,11 +573,9 @@ def test_more_than_one_page_carries_a_next_button():
     message = FakeMessage(chat_id=2015)
     _run(bot.handle_latest, message)
 
-    markup = message.markups[0]
-    assert markup is not None
-    texts = [button.text for row in markup.inline_keyboard for button in row]
-    assert any("التالي" in t for t in texts)
-    assert not any("السابق" in t for t in texts), "page 0 must not offer a previous page"
+    labels = [b.text for m in message.keyboards for row in m.inline_keyboard for b in row]
+    assert any("التالي" in t for t in labels), f"a second page exists, so a next control must be offered: {labels}"
+    assert not any("السابق" in t for t in labels), "page 0 must not offer a previous page"
 
 
 def test_the_pager_payload_round_trips():
@@ -548,7 +604,7 @@ def test_every_command_refuses_an_unlinked_chat():
     ):
         message = FakeMessage(chat_id=9999)
         _run(handler, message, *args)
-        assert "غير مرتبطة" in message.sent[0], f"{handler.__name__} answered an unlinked chat"
+        assert "غير مرتبطة" in message.all_text, f"{handler.__name__} answered an unlinked chat"
 
 
 class FakeCallback:
@@ -585,7 +641,7 @@ def test_paging_returns_the_next_page():
     finally:
         db.close()
 
-    assert "النتائج 6" in message.sent[0]
+    assert "النتائج 6" in message.all_text
     # The spinner on the button only stops once the callback is answered.
     assert callback.answers
 

@@ -14,6 +14,15 @@
   <button data-action="dismissQuickStart">فهمت، أخفِ هذا</button>
 </div>
 
+<div class="tabs" role="tablist" aria-label="أقسام لوحة التحكم">
+  <button role="tab" id="tab-links" class="tab" data-tab="links" data-action="selectTab" data-args='["links"]' aria-selected="true" aria-controls="panel-links" tabindex="0">الروابط</button>
+  <button role="tab" id="tab-collect" class="tab" data-tab="collect" data-action="selectTab" data-args='["collect"]' aria-selected="false" aria-controls="panel-collect" tabindex="-1">الجمع</button>
+  <button role="tab" id="tab-bot" class="tab" data-tab="bot" data-action="selectTab" data-args='["bot"]' aria-selected="false" aria-controls="panel-bot" tabindex="-1">البوت</button>
+  <button role="tab" id="tab-security" class="tab" data-tab="security" data-action="selectTab" data-args='["security"]' aria-selected="false" aria-controls="panel-security" tabindex="-1">الأمان</button>
+  <button role="tab" id="tab-account" class="tab" data-tab="account" data-action="selectTab" data-args='["account"]' aria-selected="false" aria-controls="panel-account" tabindex="-1">الحساب</button>
+</div>
+
+<section role="tabpanel" id="panel-links" class="panel" aria-labelledby="tab-links">
 <h2>البحث في الروابط</h2>
 <!-- role=alert, not aria-live=polite: an undo offer expires in five
      seconds, so waiting for a pause would make it useless. -->
@@ -135,7 +144,9 @@
   <span id="pasteCount" class="muted"></span>
   <p id="addResult" class="muted"></p>
 </div>
+</section>
 
+<section role="tabpanel" id="panel-collect" class="panel" aria-labelledby="tab-collect" hidden>
 <h2>حسابات الجمع</h2>
 <p class="muted">حساب الجمع ليس البوت: هو حساب تيليجرام عادي يقرأ القنوات. البوت واحد فقط وللبحث.</p>
 <div id="accountHealth"></div>
@@ -147,35 +158,17 @@
   <button data-action="addChannel">إضافة قناة</button>
 </div>
 <div id="channels"></div>
+</section>
 
+<section role="tabpanel" id="panel-bot" class="panel" aria-labelledby="tab-bot" hidden>
 <h2>ربط البوت</h2>
 <button data-action="linkBot">توليد رمز ربط للبوت</button>
 <button data-action="botDiag">لماذا لا يردّ البوت؟</button>
 <div id="botDiagOut" class="muted"></div>
 <p id="botCode" class="muted"></p>
+</section>
 
-<h2>الحساب</h2>
-<div class="row stack">
-  <input id="curPass" type="password" placeholder="كلمة المرور الحالية">
-  <input id="newPass" type="password" placeholder="كلمة المرور الجديدة (٨ أحرف على الأقل)">
-  <button data-action="changePassword">تغيير كلمة المرور</button>
-  <p id="passResult" class="muted"></p>
-  <button data-action="logoutAll">تسجيل الخروج من كل الأجهزة</button>
-</div>
-<h3>مساحة العمل</h3>
-<div class="row">
-  <input id="wsName" placeholder="اسم مساحة العمل" class="grow">
-  <button data-action="renameWorkspace">إعادة التسمية</button>
-</div>
-<p id="wsResult" class="muted"></p>
-<p id="accountSummary" class="muted"></p>
-
-<h3>بياناتي</h3>
-<div class="row">
-  <button data-action="exportWorkspace">تنزيل كل بيانات مساحة العمل (JSON)</button>
-  <button data-action="deleteWorkspace" class="danger">حذف مساحة العمل نهائياً</button>
-</div>
-<p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
+<section role="tabpanel" id="panel-security" class="panel" aria-labelledby="tab-security" hidden>
 <h3>التحقّق بخطوتين</h3>
 <p id="totpStatus" class="muted"></p>
 <div id="totpControls" class="row"></div>
@@ -193,14 +186,6 @@
      كلٌّ منها يعمل مرّة واحدة، وهي طريقتك الوحيدة للدخول إن فقدت هاتفك.</p>
   <pre id="recoveryList" class="prewrap"></pre>
 </div>
-
-<h3>حالة النظام</h3>
-<p class="muted small">
-  عدّادات هذه العملية منذ إقلاعها — الخطة المجانية تنام، فالأرقام تبدأ من جديد
-  مع كل استيقاظ. وتقارير التشغيل تصلها من GitHub Actions نفسها، لا العكس:
-  قراءة واجهة GitHub كانت ستتطلّب تخزين رمز وصول للمستودع هنا.
-</p>
-<div id="systemStatus"></div>
 
 <h3>سجل الأمان</h3>
 <p class="muted">
@@ -230,6 +215,39 @@
 
 <h3>الجلسات النشطة</h3>
 <div id="sessions"></div>
+</section>
+
+<section role="tabpanel" id="panel-account" class="panel" aria-labelledby="tab-account" hidden>
+<h2>الحساب</h2>
+<div class="row stack">
+  <input id="curPass" type="password" placeholder="كلمة المرور الحالية">
+  <input id="newPass" type="password" placeholder="كلمة المرور الجديدة (٨ أحرف على الأقل)">
+  <button data-action="changePassword">تغيير كلمة المرور</button>
+  <p id="passResult" class="muted"></p>
+  <button data-action="logoutAll">تسجيل الخروج من كل الأجهزة</button>
+</div>
+<h3>مساحة العمل</h3>
+<div class="row">
+  <input id="wsName" placeholder="اسم مساحة العمل" class="grow">
+  <button data-action="renameWorkspace">إعادة التسمية</button>
+</div>
+<p id="wsResult" class="muted"></p>
+<p id="accountSummary" class="muted"></p>
+
+<h3>بياناتي</h3>
+<div class="row">
+  <button data-action="exportWorkspace">تنزيل كل بيانات مساحة العمل (JSON)</button>
+  <button data-action="deleteWorkspace" class="danger">حذف مساحة العمل نهائياً</button>
+</div>
+<p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
+<h3>حالة النظام</h3>
+<p class="muted small">
+  عدّادات هذه العملية منذ إقلاعها — الخطة المجانية تنام، فالأرقام تبدأ من جديد
+  مع كل استيقاظ. وتقارير التشغيل تصلها من GitHub Actions نفسها، لا العكس:
+  قراءة واجهة GitHub كانت ستتطلّب تخزين رمز وصول للمستودع هنا.
+</p>
+<div id="systemStatus"></div>
+</section>
 
 <script src="/static/dashboard.js"></script>
 {% endblock %}
