@@ -120,10 +120,34 @@ def test_bot_token_without_public_url_warns(monkeypatch):
 def test_fully_configured_bot_passes(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:ABC")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.onrender.com")
-    monkeypatch.setenv("BOT_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("BOT_WEBHOOK_SECRET", "a-webhook-secret-well-past-the-weak-length-floor")
 
     check_setup.check_optional_features()
     assert _statuses()["bot"] == check_setup.OK
+
+
+def test_short_webhook_secret_is_warned_about_in_development(monkeypatch):
+    """A short BOT_WEBHOOK_SECRET is a guessable bearer credential — this
+    used to pass silently as "bot": OK regardless of length."""
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.onrender.com")
+    monkeypatch.setenv("BOT_WEBHOOK_SECRET", "secret")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["webhook secret"] == check_setup.WARN
+    assert "bot" not in _statuses()
+
+
+def test_short_webhook_secret_fails_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.onrender.com")
+    monkeypatch.setenv("BOT_WEBHOOK_SECRET", "secret")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["webhook secret"] == check_setup.FAIL
 
 
 def test_ungated_registration_is_warned_about(monkeypatch):
@@ -133,11 +157,51 @@ def test_ungated_registration_is_warned_about(monkeypatch):
     assert _statuses()["registration"] == check_setup.WARN
 
 
+def test_guessable_invite_code_is_warned_about(monkeypatch):
+    """INVITE_CODE="invite" gates nothing — anyone who tries the obvious
+    value gets in, same as no code at all."""
+    monkeypatch.setenv("INVITE_CODE", "invite")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["registration"] == check_setup.WARN
+    assert "guessable" in _details()["registration"]
+
+
+def test_short_invite_code_is_warned_about(monkeypatch):
+    monkeypatch.setenv("INVITE_CODE", "abc123")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["registration"] == check_setup.WARN
+
+
+def test_strong_invite_code_passes(monkeypatch):
+    monkeypatch.setenv("INVITE_CODE", "a-long-random-invite-string-2026")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["registration"] == check_setup.OK
+
+
 def test_missing_field_encryption_key_is_warned_about(monkeypatch):
     monkeypatch.delenv("FIELD_ENCRYPTION_KEY", raising=False)
 
     check_setup.check_optional_features()
     assert _statuses()["field encryption"] == check_setup.WARN
+
+
+def test_default_field_encryption_key_fails_in_production(monkeypatch):
+    """Upgraded from WARN to FAIL in production: app/main.py's lifespan
+    will refuse to start on this value, so this diagnostic must not pass
+    what the runtime rejects."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", check_setup._DEFAULT_FIELD_ENCRYPTION_KEY)
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["field encryption"] == check_setup.FAIL
+    assert "lifespan will refuse to start" in _details()["field encryption"]
 
 
 def test_default_field_encryption_key_is_warned_about(monkeypatch):
@@ -218,3 +282,80 @@ def test_local_http_development_is_only_a_warning(monkeypatch):
     check_setup.check_optional_features()
 
     assert _statuses()["session cookie"] == check_setup.WARN
+
+
+# === DATABASE_URL scheme ====================================================
+
+
+def test_sqlite_database_url_fails_in_production(monkeypatch):
+    """The file lives on Render's ephemeral filesystem — a redeploy loses
+    it entirely. In production that is data loss, not a deployment."""
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./local.db")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    check_setup.check_database_url_scheme()
+
+    assert _statuses()["DATABASE_URL scheme"] == check_setup.FAIL
+
+
+def test_sqlite_database_url_is_only_a_warning_in_development(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./local.db")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    check_setup.check_database_url_scheme()
+
+    assert _statuses()["DATABASE_URL scheme"] == check_setup.WARN
+
+
+def test_postgres_database_url_passes_in_production(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@host/db")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    check_setup.check_database_url_scheme()
+
+    assert _statuses()["DATABASE_URL scheme"] == check_setup.OK
+
+
+def test_missing_database_url_reports_nothing_here(monkeypatch):
+    """Already reported by check_core_env — this check must not duplicate
+    the finding under a different name."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    check_setup.check_database_url_scheme()
+
+    assert "DATABASE_URL scheme" not in _statuses()
+
+
+# === production_secrets_check integration ===================================
+
+
+def test_production_secrets_check_passes_when_both_overridden(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "a-real-long-random-secret-key-not-the-default")
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", "a-real-fernet-key-not-the-default=")
+
+    check_setup.check_production_secrets()
+
+    assert _statuses()["production secrets"] == check_setup.OK
+
+
+def test_production_secrets_check_fails_with_default_secret_key(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "dev-secret-key-change-me")
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", "a-real-fernet-key-not-the-default=")
+
+    check_setup.check_production_secrets()
+
+    assert _statuses()["production secrets"] == check_setup.FAIL
+    assert "SECRET_KEY" in _details()["production secrets"]
+
+
+def test_production_secrets_check_is_silent_in_development(monkeypatch):
+    """Development legitimately runs on the published defaults; reporting
+    OK for a check that is a no-op there would itself be a small lie."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("SECRET_KEY", "dev-secret-key-change-me")
+
+    check_setup.check_production_secrets()
+
+    assert "production secrets" not in _statuses()
