@@ -98,12 +98,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bot = get_bot()
         if bot is not None:
             root = base_url.rstrip("/")
-            webhook_url = f"{root}/telegram/webhook/{secret}"
+            webhook_url = f"{root}/telegram/webhook"
             try:
-                await bot.set_webhook(webhook_url)
-                # The secret is the webhook's only authentication, so it is
-                # masked here — a log line is not a place for it.
-                logger.info("telegram webhook registered at %s/telegram/webhook/***", root)
+                # secret_token, not a path segment. The secret then arrives
+                # in a header, so it never reaches an access log — and a
+                # base64 secret containing "/" stops breaking the route.
+                from app.bot.telegram_bot import webhook_token
+
+                await bot.set_webhook(webhook_url, secret_token=webhook_token(secret))
+                logger.info("telegram webhook registered at %s", webhook_url)
                 # Same round trip, so the dashboard can hand out a deep link
                 # instead of an instruction to type. Failing to learn it is
                 # not a startup failure: the dashboard falls back to the

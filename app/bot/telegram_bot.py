@@ -91,6 +91,42 @@ def get_bot() -> Bot | None:
     return Bot(token=settings.bot_token)
 
 
+# Telegram's own header name for the webhook secret. Its value is a
+# bearer credential for /telegram/webhook: anything holding it can post
+# forged updates into this deployment.
+WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+
+
+def webhook_token(secret: str) -> str:
+    """A Telegram-legal token derived from whatever BOT_WEBHOOK_SECRET is.
+
+    Two independent reasons this cannot be the raw secret:
+
+    1. **Telegram rejects most of it.** ``secret_token`` accepts only
+       ``A-Z a-z 0-9 _ -``. Render's ``generateValue: true`` produces
+       base64, which routinely contains ``/`` and ``=``.
+
+    2. **The raw secret used to sit in the URL, and a URL is not a
+       secret.** The route was ``/telegram/webhook/{secret}``, so every
+       delivery wrote the credential into the access log in clear text —
+       observed on a real deployment:
+
+           POST /telegram/webhook/bLRINbE/hEYeSol/YElT…%3D 404 Not Found
+
+       That line is also the bug this function fixes: ``{secret}`` matches
+       ONE path segment, a base64 secret containing ``/`` spans three, no
+       route matched, and Telegram's deliveries 404'd. From the outside it
+       looked exactly like a bot that ignored valid messages.
+
+    SHA-256 hex is always 64 characters from ``[0-9a-f]`` — inside
+    Telegram's alphabet by construction, whatever the operator or the
+    platform supplies, and no shorter than the entropy behind it.
+    """
+    import hashlib
+
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
 # The bot's @username, learned once at startup from getMe.
 #
 # It exists so the dashboard can offer a deep link (t.me/<name>?start=<code>)

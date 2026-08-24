@@ -6,20 +6,46 @@ from aiogram.types import Update
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.bot.telegram_bot import deep_link, dispatcher, generate_link_code, get_bot
+from app.bot.telegram_bot import (
+    WEBHOOK_SECRET_HEADER,
+    deep_link,
+    dispatcher,
+    generate_link_code,
+    get_bot,
+    webhook_token,
+)
 from app.botdiag import diagnose
 from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import User
+from app.security import constant_time_equals
 
 router = APIRouter(tags=["bot"])
 
 
-@router.post("/telegram/webhook/{secret}")
-async def telegram_webhook(secret: str, request: Request) -> dict:
+@router.post("/telegram/webhook")
+async def telegram_webhook(request: Request) -> dict:
+    """Receive one update. The secret travels in a header, not the path.
+
+    It used to be a path segment — ``/telegram/webhook/{secret}`` — and
+    that was wrong twice over. A base64 secret contains ``/``, which
+    ``{secret}`` cannot match because a path parameter stops at a
+    separator, so real deliveries from Telegram returned 404 while the
+    bot looked simply unresponsive. And a URL is written to every access
+    log it passes through, so the credential was printed in clear text on
+    every single delivery.
+
+    Telegram's own ``secret_token`` mechanism solves both: the value goes
+    in ``X-Telegram-Bot-Api-Secret-Token`` and the path is constant.
+
+    Still 404 rather than 401 on a mismatch: an unauthenticated caller
+    should not be able to learn that this path exists.
+    """
     settings = get_settings()
-    if not settings.bot_webhook_secret or secret != settings.bot_webhook_secret:
+    expected = settings.bot_webhook_secret
+    presented = request.headers.get(WEBHOOK_SECRET_HEADER, "")
+    if not expected or not constant_time_equals(presented, webhook_token(expected)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     bot = get_bot()
