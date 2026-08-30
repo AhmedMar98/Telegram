@@ -28,6 +28,7 @@
 | `APP_API_KEY` | — | — | `report-run.yml` | ✅ |  |
 | `APP_BASE_URL` | — | — | `report-run.yml`، `smoke.yml` | ✅ |  |
 | `APP_NAME` | ✅ | `Link Intelligence Platform` | — | ❌ |  |
+| `BACKUP_PASSPHRASE` | — | — | `backup.yml` | ✅ |  |
 | `BCRYPT_ROUNDS` | ✅ | `12` | — | ❌ |  |
 | `BOT_TOKEN` | ✅ | — | `monthly-report.yml`، `verify-setup.yml`، `weekly-digest.yml` | ✅ | 🔑 |
 | `BOT_WEBHOOK_SECRET` | ✅ | — | `verify-setup.yml` | ✅ | 🔑 |

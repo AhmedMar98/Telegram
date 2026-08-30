@@ -359,3 +359,22 @@ def test_production_secrets_check_is_silent_in_development(monkeypatch):
     check_setup.check_production_secrets()
 
     assert "production secrets" not in _statuses()
+
+
+def test_missing_backup_passphrase_is_warned_about(monkeypatch):
+    """An unset passphrase means backup.yml fails, i.e. no backup exists —
+    a fact that otherwise surfaces only in an Actions log nobody reads
+    until the day they need a restore."""
+    monkeypatch.delenv("BACKUP_PASSPHRASE", raising=False)
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["backup encryption"] == check_setup.WARN
+
+
+def test_a_set_backup_passphrase_passes(monkeypatch):
+    monkeypatch.setenv("BACKUP_PASSPHRASE", "a-long-random-backup-passphrase")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["backup encryption"] == check_setup.OK

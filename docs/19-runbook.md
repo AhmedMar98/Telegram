@@ -14,7 +14,7 @@
 | فشل تشغيلة مجدولة | GitHub (بريد فشل Actions) **و** لوحة «حالة النظام» | ساعة |
 | توقّف الجمع كلّياً | تنبيه البوت (`collector_failed`، مفعَّل افتراضاً) | التشغيلة نفسها |
 | اقتراب حدّ التخزين | تنبيه البوت (`storage_high`) | شهرياً أو عند الفحص |
-| فشل النسخ الاحتياطي | تنبيه البوت (`backup_result`، مفعَّل افتراضاً) | التشغيلة الأسبوعية |
+| فشل النسخ الاحتياطي | تنبيه البوت (`backup_result`، مفعَّل افتراضاً) | التشغيلة اليومية |
 | نفاد حصة Groq الاختيارية | تنبيه البوت (`groq_quota`) **إن كشفت رؤوس استجابته ذلك** | تشغيلة الجمع |
 | توقّف الخدمة نفسها | اختبار الدخان (`smoke.yml`) كل ٦ ساعات | ٦ ساعات |
 | توقّف الخدمة، خارجياً | UptimeRobot إن ضُبط (§٢) | ٥ دقائق |
@@ -72,7 +72,8 @@ UptimeRobot مجاني لخمسين فحصاً بفاصل خمس دقائق، و
 النسخ في GitHub Actions artifacts (تبقى ٣٥ يوماً):
 
 ```bash
-# نزّل آخر artifact من صفحة تشغيل "Weekly DB backup"، ثم:
+# نزّل آخر artifact من صفحة تشغيل "Daily encrypted DB backup"، وفُكّ تشفيره ثم:
+# gpg --batch --decrypt --passphrase "$BACKUP_PASSPHRASE" -o backup.dump backup.dump.gpg
 pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" backup.dump
 ```
 
