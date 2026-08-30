@@ -110,7 +110,15 @@ class Settings(BaseSettings):
     # bearer credentials. Configurable because the right number depends on
     # how many channels a deployment follows, not on anything this code
     # can know.
-    max_accounts_per_workspace: int = 5
+    #
+    # Raised 5 -> 10 by owner decision. The number is a deliberate ceiling,
+    # not a guess: each account is one more real Telegram login whose
+    # session string sits encrypted in the database, and at 20 channels per
+    # account (DEFAULT_MAX_CHANNELS_PER_ACCOUNT in scripts/collect.py) ten
+    # accounts already cover 200 channels — well past what one person
+    # follows. Raising it further multiplies the bearer-credential blast
+    # radius for capacity nobody has asked for.
+    max_accounts_per_workspace: int = 10
 
     # --- Telegram bot (webhook mode; no polling worker required) --------
     bot_token: str | None = None
@@ -224,10 +232,52 @@ def production_secrets_check(settings: Settings) -> list[str]:
     """
     if settings.environment != "production":
         return []
+    return published_defaults_in_use(settings)
 
-    problems: list[str] = []
-    if settings.secret_key == _PUBLISHED_DEFAULTS["SECRET_KEY"]:
-        problems.append("SECRET_KEY")
-    if settings.field_encryption_key == _PUBLISHED_DEFAULTS["FIELD_ENCRYPTION_KEY"]:
-        problems.append("FIELD_ENCRYPTION_KEY")
-    return problems
+
+def published_defaults_in_use(
+    settings: Settings,
+    *,
+    names: tuple[str, ...] = ("SECRET_KEY", "FIELD_ENCRYPTION_KEY"),
+) -> list[str]:
+    """Which of the named secrets still carry the value published here.
+
+    Deliberately **not** gated on ``environment``: the caller decides what
+    a published default means for its own job. The web app only cares in
+    production, because development legitimately runs on these values. A
+    scheduled job that encrypts a real Telegram session string cares
+    always — nothing about ``ENVIRONMENT`` changes the fact that a key
+    printed in this repository cannot protect a bearer credential, and no
+    workflow in .github/workflows sets ``ENVIRONMENT`` at all, so gating
+    on it there would have made the check permanently silent.
+    """
+    values = {
+        "SECRET_KEY": settings.secret_key,
+        "FIELD_ENCRYPTION_KEY": settings.field_encryption_key,
+    }
+    return [name for name in names if values[name] == _PUBLISHED_DEFAULTS[name]]
+
+
+def require_real_secrets(settings: Settings, *, names: tuple[str, ...], job: str) -> None:
+    """Refuse to run a job that would handle real credentials with a published key.
+
+    Raised rather than logged, and raised *before* any work starts, because
+    the damage is done the moment a session string is written encrypted
+    under a key anyone can read off this repository — at that point the row
+    is plaintext to anybody who obtains the database, and re-encrypting it
+    later does not un-leak whatever was already exposed.
+
+    ``job`` names the caller in the message so the operator reading a
+    GitHub Actions log knows which workflow to fix without opening code.
+    """
+    problems = published_defaults_in_use(settings, names=names)
+    if not problems:
+        return
+    raise RuntimeError(
+        f"{job}: refusing to run with published default(s): {', '.join(problems)}. "
+        "These values are committed to this repository, so anything encrypted or signed "
+        "with them is readable by anyone who has the code. Set the real value(s) as "
+        "repository secrets before the next scheduled run. Generate FIELD_ENCRYPTION_KEY "
+        'with: python -c "from cryptography.fernet import Fernet; '
+        'print(Fernet.generate_key().decode())"'
+    )

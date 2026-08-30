@@ -11,12 +11,29 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import _PUBLISHED_DEFAULTS, get_settings
 from app.crypto import decrypt_field
 from app.database import SessionLocal
 from app.models import TelegramAccount, Workspace
 from scripts.add_account import MIN_SESSION_LENGTH, add_account, main
 
 SESSION = "1BVtsOK" + "x" * 130
+
+# A value that is merely *not* the published default. add_account refuses to
+# run under the published key (app/config.py: require_real_secrets), because
+# its whole job is writing an encrypted Telegram session string and that key
+# is readable by anyone holding this repository. The CLI-validation tests
+# below are about argument handling, so they need that precondition met
+# before they can reach the code they are actually testing.
+REAL_KEY = "JKNC01_IblUq4BOC3jZeo9TioypnWal13ubijLDJL0M="
+
+
+@pytest.fixture(autouse=True)
+def _real_encryption_key(monkeypatch):
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", REAL_KEY)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -108,3 +125,18 @@ def test_cli_never_prints_the_session_string(monkeypatch, capsys, workspace_id):
     printed = capsys.readouterr().out
     assert SESSION not in printed
     assert "registered account" in printed
+
+
+def test_the_cli_refuses_to_store_an_account_under_the_published_key(monkeypatch, workspace_id):
+    """CR-01 on the write path: this script is how a session string first
+    enters the database, so a published encryption key here means the row
+    is plaintext to anyone who obtains the database."""
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", _PUBLISHED_DEFAULTS["FIELD_ENCRYPTION_KEY"])
+    monkeypatch.setenv("TG_SESSION_STRING", SESSION)
+    monkeypatch.setattr("sys.argv", ["add_account.py", "--workspace", str(workspace_id), "--label", "guarded"])
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="add_account"):
+            main()
+    finally:
+        get_settings.cache_clear()

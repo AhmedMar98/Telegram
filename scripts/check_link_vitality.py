@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.models import Link  # noqa: E402
+from app.ssrf import check_url as ssrf_check  # noqa: E402
 from app.timeutil import utcnow  # noqa: E402
 from app.vitality import (  # noqa: E402
     TRANSIENT_STATUSES,
@@ -53,6 +54,12 @@ from app.vitality import (  # noqa: E402
 
 logger = logging.getLogger("vitality")
 
+
+# Redirect hops followed before giving up. Each hop is re-validated
+# against app/ssrf.py, so this also bounds how many DNS lookups one
+# hostile link can cost. Five covers every legitimate chain seen in
+# practice (http->https, apex->www, shortener->target).
+MAX_REDIRECT_HOPS = 5
 DEFAULT_BATCH_LIMIT = 300
 DEFAULT_CONCURRENCY = 15
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -162,14 +169,52 @@ class ProbeResult:
     http_status: int | None
 
 
-async def check_one(client: httpx.AsyncClient, url: str) -> ProbeResult:
-    """Probe a single URL."""
-    try:
-        response = await client.head(url, follow_redirects=True)
+async def _probe(client: httpx.AsyncClient, url: str) -> httpx.Response | ProbeResult:
+    """One HEAD (falling back to GET), following redirects hop by hop.
+
+    ``follow_redirects=True`` is deliberately **not** used. httpx would
+    then chase a redirect for us, and a URL that resolves publicly is free
+    to answer 302 pointing at 127.0.0.1 — so validating only the URL we
+    started with would protect nothing. Each hop is re-validated by
+    app/ssrf.py before it is requested.
+
+    Returns the final response, or a ProbeResult when the chain was
+    refused or ran too long.
+    """
+    current = url
+    for _ in range(MAX_REDIRECT_HOPS):
+        reason = await ssrf_check(current)
+        if reason is not None:
+            logger.warning("refusing %s: %s", current, reason)
+            # "dead", not "unreachable": a link that points into private
+            # space is not a resource this deployment should ever fetch,
+            # and marking it unreachable would retry it on every run.
+            return ProbeResult("dead", None)
+
+        response = await client.head(current, follow_redirects=False)
         if response.status_code in (405, 501):
             # Some servers reject HEAD outright; a real GET is the only way
             # to know whether the resource itself is actually there.
-            response = await client.get(url, follow_redirects=True)
+            response = await client.get(current, follow_redirects=False)
+
+        if not response.is_redirect:
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = str(response.url.join(location))
+
+    logger.warning("redirect chain too long for %s", url)
+    return ProbeResult("unreachable", None)
+
+
+async def check_one(client: httpx.AsyncClient, url: str) -> ProbeResult:
+    """Probe a single URL."""
+    try:
+        outcome = await _probe(client, url)
+        if isinstance(outcome, ProbeResult):
+            return outcome
+        response = outcome
     except httpx.HTTPError:
         # A connection error is genuinely ambiguous — a retired domain and
         # a momentary DNS failure look identical from here. It is counted as

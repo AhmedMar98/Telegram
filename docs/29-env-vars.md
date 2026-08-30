@@ -45,7 +45,7 @@
 | `GROQ_QUOTA_ALERT_FRACTION` | ✅ | `0.1` | — | ❌ |  |
 | `INVITE_CODE` | ✅ | — | `verify-setup.yml` | ✅ | 🔑 |
 | `LOG_LEVEL` | — | — | — | ✅ |  |
-| `MAX_ACCOUNTS_PER_WORKSPACE` | ✅ | `5` | — | ❌ |  |
+| `MAX_ACCOUNTS_PER_WORKSPACE` | ✅ | `10` | — | ❌ |  |
 | `PUBLIC_BASE_URL` | ✅ | — | `verify-setup.yml` | ✅ |  |
 | `RENDER_GIT_COMMIT` | ✅ | — | — | ❌ |  |
 | `RENDER_SERVICE_NAME` | ✅ | — | — | ❌ |  |

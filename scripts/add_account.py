@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import get_settings  # noqa: E402
+from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import TelegramAccount, Workspace  # noqa: E402
@@ -81,6 +81,13 @@ def main() -> None:
     parser.add_argument("--workspace", type=int, required=True, help="workspace id this account collects for")
     parser.add_argument("--label", required=True, help="human-readable name, unique within the workspace")
     args = parser.parse_args()
+
+    # Same reason as the collector's guard: this script's one job is to
+    # write a Telegram session string encrypted under FIELD_ENCRYPTION_KEY.
+    # Under the published default that row is plaintext to anyone holding
+    # the database, so the refusal happens before the string is even read
+    # from the environment.
+    require_real_secrets(get_settings(), names=("FIELD_ENCRYPTION_KEY",), job="add_account")
 
     session_string = os.environ.get("TG_SESSION_STRING", "").strip()
     if not session_string:
