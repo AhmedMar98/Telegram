@@ -16,6 +16,11 @@ on:
     - cron: "0 */6 * * *" # every 6 hours
   workflow_dispatch: {}
 
+# Checks out the code to run the vitality probe. Its results go to the
+# database, not to GitHub.
+permissions:
+  contents: read
+
 jobs:
   check-vitality:
     runs-on: ubuntu-latest

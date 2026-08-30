@@ -35,6 +35,17 @@ on:
       APP_API_KEY:
         required: false
 
+# None at all: this reusable workflow only POSTs a run outcome to the
+# application's own API with APP_API_KEY. It never touches the
+# repository.
+#
+# Declaring it explicitly matters more here than anywhere else. A called
+# workflow without its own block inherits the caller's, so this file
+# would quietly run at whatever level five different callers happened to
+# hold. An empty block is always a subset of any caller's, so it can
+# never break the call.
+permissions: {}
+
 jobs:
   report:
     runs-on: ubuntu-latest

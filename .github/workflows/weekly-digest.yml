@@ -15,6 +15,11 @@ on:
     - cron: "0 7 * * 0" # every Sunday, 07:00 UTC — after the 03:00 backup
   workflow_dispatch: {}
 
+# Checks out the code to build the digest; delivery is through the
+# application, not the token.
+permissions:
+  contents: read
+
 jobs:
   digest:
     runs-on: ubuntu-latest

@@ -13,6 +13,11 @@ on:
   schedule:
     - cron: "20 */6 * * *" # four times a day, offset off the hour
 
+# None at all: this job never checks out the repository. It issues curl
+# requests against the deployed site and nothing else, so the token has
+# no job to do here.
+permissions: {}
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
