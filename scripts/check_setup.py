@@ -355,6 +355,19 @@ def check_optional_features() -> None:
     else:
         report(WARN, "session cookie", f"ENVIRONMENT={environment!r} — Secure flag off (correct for local http)")
 
+    # The daily backup refuses to run without this, so an unset value is a
+    # backup that is not happening at all — and the failure surfaces only
+    # in the Actions log, which nobody reads until they need a restore.
+    if os.environ.get("BACKUP_PASSPHRASE"):
+        report(OK, "backup encryption", "BACKUP_PASSPHRASE set — the daily dump is encrypted")
+    else:
+        report(
+            WARN,
+            "backup encryption",
+            "BACKUP_PASSPHRASE not set — backup.yml will fail rather than upload a plaintext "
+            "dump, so there is currently no backup at all",
+        )
+
     invite = os.environ.get("INVITE_CODE")
     # Common guessable words are the same as no gate at all — checked
     # first, and separately from the length check, so the message names

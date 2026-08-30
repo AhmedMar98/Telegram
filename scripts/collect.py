@@ -49,7 +49,7 @@ from app.accounts import record_failure, record_success  # noqa: E402
 from app.alerts import COLLECTOR_FAILED, GROQ_QUOTA  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
 from app.classifier.llm import lowest_quota  # noqa: E402
-from app.config import get_settings  # noqa: E402
+from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
@@ -445,6 +445,20 @@ def main() -> None:
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    # Before anything touches Telegram or the database. This job's entire
+    # purpose involves a Telegram session string — a bearer credential for
+    # a real account — which it stores encrypted under FIELD_ENCRYPTION_KEY.
+    # If that key is the one published in this repository, the encryption
+    # is decorative: anyone with the database and the public code reads the
+    # session string and controls the account. app/main.py has refused to
+    # start the web service on a published default since 6bda8ba; the
+    # collector was still exempt, which is the more dangerous of the two
+    # because it is the process that writes those rows in the first place.
+    #
+    # SECRET_KEY is not checked here: the collector serves no HTTP and
+    # signs no cookie, and collector.yml sets it to a placeholder on
+    # purpose. Checking it would fail the run for an irrelevant reason.
+    require_real_secrets(get_settings(), names=("FIELD_ENCRYPTION_KEY",), job="collector")
     asyncio.run(collect())
 
 

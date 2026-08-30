@@ -1,39 +1,93 @@
-name: Weekly DB backup
+name: Daily encrypted DB backup
 
-# Render's free Postgres plan expires 30 days after creation (plus a grace
-# period) — there is no free tier that avoids this. This workflow is the
-# documented mitigation (docs/01-critical-analysis.md, Appendix C): a
-# weekly pg_dump stored as a GitHub Actions artifact, independent of
-# Render, so a forced database recreation is a restore, not a data loss.
+# A pg_dump stored as a GitHub Actions artifact, independent of whoever
+# hosts the database, so a forced recreation is a restore rather than a
+# data loss.
 #
-# Required repository secret: DATABASE_URL (same value used by the web
-# service and the collector).
+# Two owner decisions changed this workflow:
+#
+#   * **Daily, not weekly.** A weekly cadence means up to seven days of
+#     collection can be lost to one bad restore point. The job costs well
+#     under a minute, so the only thing the weekly schedule was saving was
+#     artifact storage.
+#
+#   * **Encrypted, always.** The dump contains every collected link and —
+#     more to the point — the `telegram_accounts` rows. Those are already
+#     encrypted at the field level, but a plain dump still hands an
+#     attacker the whole database to work on offline. Symmetric AES-256
+#     via gpg, which is preinstalled on ubuntu-latest, so this adds no
+#     dependency and no cost.
+#
+# Required repository secrets:
+#   DATABASE_URL       - same value used by the web service and collector
+#   BACKUP_PASSPHRASE  - decrypts the dump; store it somewhere that is NOT
+#                        this repository and NOT the same place as the
+#                        database credentials. Losing it makes every
+#                        backup permanently unreadable — that is the
+#                        trade being made, and it is the right one.
+#
+# To restore:
+#   gpg --batch --decrypt --passphrase "$BACKUP_PASSPHRASE" \
+#       -o backup.dump backup.dump.gpg
+#   pg_restore --no-owner --no-privileges -d "$DATABASE_URL" backup.dump
 
 on:
   schedule:
-    - cron: "0 3 * * 0" # every Sunday, 03:00 UTC
+    - cron: "0 3 * * *" # daily, 03:00 UTC
   workflow_dispatch: {}
+
+# Least privilege: this job reads the repository and writes an artifact.
+# It needs no write access to code, issues, or anything else.
+permissions:
+  contents: read
 
 jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - name: Dump database
+      - name: Dump and encrypt database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
-          if [ -z "$DATABASE_URL" ]; then
+          set -euo pipefail
+
+          if [ -z "${DATABASE_URL:-}" ]; then
             echo "DATABASE_URL secret is not set yet; skipping backup." >&2
             exit 0
           fi
+
+          # Deliberately a hard failure, not a fallback to an unencrypted
+          # upload. A backup that quietly downgrades itself to plaintext is
+          # the same class of defect as a service that quietly starts with
+          # a published key: it looks healthy and protects nothing.
+          if [ -z "${BACKUP_PASSPHRASE:-}" ]; then
+            echo "BACKUP_PASSPHRASE is not set. Refusing to upload an unencrypted dump." >&2
+            echo "Set the secret, or disable this workflow deliberately." >&2
+            exit 1
+          fi
+
           pg_dump "$DATABASE_URL" --no-owner --no-privileges -F c -f backup.dump
 
+          # --batch with the passphrase on stdin: passing it as an argument
+          # would put it in the process list, which other steps can read.
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --symmetric \
+            --cipher-algo AES256 \
+            --passphrase-fd 0 \
+            --output backup.dump.gpg \
+            backup.dump
+
+          # The plaintext dump must not survive into the upload step.
+          shred -u backup.dump 2>/dev/null || rm -f backup.dump
+
       - uses: actions/upload-artifact@v5
-        if: hashFiles('backup.dump') != ''
+        if: hashFiles('backup.dump.gpg') != ''
         with:
           name: db-backup-${{ github.run_id }}
-          path: backup.dump
-          retention-days: 35
+          path: backup.dump.gpg
+          # Thirty daily restore points. Rotation is GitHub's expiry rather
+          # than a script this project has to maintain and get right.
+          retention-days: 30
 
   report:
     needs: backup

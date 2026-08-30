@@ -28,6 +28,7 @@
 | `APP_API_KEY` | — | — | `report-run.yml` | ✅ |  |
 | `APP_BASE_URL` | — | — | `report-run.yml`، `smoke.yml` | ✅ |  |
 | `APP_NAME` | ✅ | `Link Intelligence Platform` | — | ❌ |  |
+| `BACKUP_PASSPHRASE` | — | — | `backup.yml` | ✅ |  |
 | `BCRYPT_ROUNDS` | ✅ | `12` | — | ❌ |  |
 | `BOT_TOKEN` | ✅ | — | `monthly-report.yml`، `verify-setup.yml`، `weekly-digest.yml` | ✅ | 🔑 |
 | `BOT_WEBHOOK_SECRET` | ✅ | — | `verify-setup.yml` | ✅ | 🔑 |
@@ -45,7 +46,7 @@
 | `GROQ_QUOTA_ALERT_FRACTION` | ✅ | `0.1` | — | ❌ |  |
 | `INVITE_CODE` | ✅ | — | `verify-setup.yml` | ✅ | 🔑 |
 | `LOG_LEVEL` | — | — | — | ✅ |  |
-| `MAX_ACCOUNTS_PER_WORKSPACE` | ✅ | `5` | — | ❌ |  |
+| `MAX_ACCOUNTS_PER_WORKSPACE` | ✅ | `10` | — | ❌ |  |
 | `PUBLIC_BASE_URL` | ✅ | — | `verify-setup.yml` | ✅ |  |
 | `RENDER_GIT_COMMIT` | ✅ | — | — | ❌ |  |
 | `RENDER_SERVICE_NAME` | ✅ | — | — | ❌ |  |
