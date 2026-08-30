@@ -74,6 +74,31 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      # --- Live collection (app/live.py) ---------------------------------
+      #
+      # These four are what turn hourly collection into instant collection.
+      # The web process opens its own Telegram connection and stores links
+      # as they are posted, which is why credentials that previously lived
+      # only in GitHub Actions secrets now have to exist here too.
+      #
+      # Leave LIVE_COLLECTOR_ENABLED unset and nothing changes: the app
+      # boots, logs one line saying live collection is off, and the hourly
+      # collector keeps working exactly as before.
+      #
+      # TG_SESSION_STRING is listed but is only a bootstrap. app/live.py
+      # prefers the encrypted account row in the database, because that is
+      # what the dashboard shows and what re-authorisation updates; this
+      # value is read only by a workspace that has never registered one.
+      - key: LIVE_COLLECTOR_ENABLED
+        sync: false
+      - key: TG_API_ID
+        sync: false
+      - key: TG_API_HASH
+        sync: false
+      - key: TG_SESSION_STRING
+        sync: false
+      - key: COLLECTOR_WORKSPACE_ID
+        sync: false
 
 databases:
   - name: link-intel-db

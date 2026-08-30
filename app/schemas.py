@@ -808,6 +808,44 @@ class WorkflowRunOut(BaseModel):
     )
 
 
+class LiveStatus(BaseModel):
+    """Is live collection actually running, right now, in this process.
+
+    Every field answers a question an operator would otherwise have to
+    read a deploy log to answer — and could not answer at all once the
+    log had scrolled.
+
+    ``enabled`` and ``connected`` are separate on purpose, and the gap
+    between them is the interesting state: enabled-but-not-connected
+    means the listener is configured and failing, which is exactly the
+    condition that would otherwise look identical to working. ``reason``
+    then distinguishes *switched off* from *misconfigured*, because only
+    one of those is something to go and fix.
+    """
+
+    enabled: bool
+    connected: bool
+    reason: str | None
+    channels_watched: int
+    messages_seen: int
+    links_stored: int
+    last_event_at: datetime | None
+    last_error: str | None
+
+    model_config = _config(
+        {
+            "enabled": True,
+            "connected": True,
+            "reason": None,
+            "channels_watched": 6,
+            "messages_seen": 148,
+            "links_stored": 37,
+            "last_event_at": "2026-08-21T02:41:09",
+            "last_error": None,
+        }
+    )
+
+
 class SystemStatus(BaseModel):
     """The operator's one screen: what is deployed, and is it healthy.
 
@@ -830,6 +868,9 @@ class SystemStatus(BaseModel):
     # Newest run per workflow, so a stopped job is visible by its absence
     # or its age rather than by scrolling a log.
     latest_runs: list[WorkflowRunOut]
+    # The other half of collection: the cron runs above say what happened
+    # hourly, this says whether anything is listening in between.
+    live: LiveStatus
 
     model_config = _config(
         {
@@ -854,6 +895,16 @@ class SystemStatus(BaseModel):
                     "started_at": "2026-08-21T02:00:11",
                 }
             ],
+            "live": {
+                "enabled": True,
+                "connected": True,
+                "reason": None,
+                "channels_watched": 6,
+                "messages_seen": 148,
+                "links_stored": 37,
+                "last_event_at": "2026-08-21T02:41:09",
+                "last_error": None,
+            },
         }
     )
 
