@@ -24,14 +24,14 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import metrics
+from app import live, metrics
 from app.alerts import BACKUP_RESULT
 from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user, get_session_user
 from app.models import User, WorkflowRun
 from app.notify import raise_alert
-from app.schemas import SystemStatus, WorkflowRunOut, WorkflowRunReport
+from app.schemas import LiveStatus, SystemStatus, WorkflowRunOut, WorkflowRunReport
 
 router = APIRouter(prefix="/status", tags=["status"])
 
@@ -75,6 +75,7 @@ def system_status(db: Session = Depends(get_db), current_user: User = Depends(ge
         service_name=settings.render_service_name,
         schema_version=_schema_version(db),
         latest_runs=[WorkflowRunOut.model_validate(r) for r in rows],
+        live=LiveStatus(**live.state().snapshot()),
         **metrics.snapshot(),
     )
 

@@ -1,4 +1,10 @@
-# Installed only inside the scheduled GitHub Actions collector job
-# (.github/workflows/collector.yml), never on the Render web service.
+# The scheduled GitHub Actions collector job
+# (.github/workflows/collector.yml).
+#
+# This file no longer adds anything: telethon moved into requirements.txt
+# when live collection (app/live.py) put a Telegram connection inside the
+# web process too. It is kept rather than deleted because collector.yml
+# installs from it by name, and because the two environments are still
+# free to diverge — a collector-only dependency belongs here, not in the
+# file that ships to the 512MB web tier.
 -r requirements.txt
-telethon>=1.36,<2.0

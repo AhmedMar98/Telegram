@@ -1277,7 +1277,28 @@ async function loadSystemStatus() {
     `منذ إقلاع العملية (${Math.round(s.process_uptime_seconds / 60)} دقيقة): ` +
     `${s.requests_since_start} طلباً · ${s.server_errors_since_start} خطأ خادم · ` +
     `وسيط ${s.median_response_ms}ms · p95 ${s.p95_response_ms}ms` +
-    `</div><div class="gap-top-s">${runs}</div>`;
+    `</div><div class="gap-top-s">${liveLine(s.live)}</div>` +
+    `<div class="gap-top-s">${runs}</div>`;
+}
+
+// Three states, not two. "Off" and "on but broken" are the pair that
+// matter: a listener that is enabled and not connected looks exactly
+// like a working one from every other part of this dashboard, so it is
+// the one case that gets a red mark and the error text spelled out.
+function liveLine(live) {
+  if (!live) return "";
+  if (!live.enabled) {
+    return `<span class="muted">⚪ الجمع الفوري: متوقّف — ${escapeText(live.reason || "غير مفعَّل")}</span>`;
+  }
+  if (!live.connected) {
+    const why = live.last_error || live.reason || "يحاول الاتصال";
+    return `🔴 الجمع الفوري: مفعَّل لكن غير متّصل — ${escapeText(why)}`;
+  }
+  const seen = live.last_event_at
+    ? `آخر رسالة قبل ${Math.round((Date.now() - new Date(live.last_event_at)) / 60000)} دقيقة`
+    : "لم تصل رسالة بعد";
+  return `🟢 الجمع الفوري: متّصل · ${live.channels_watched} قناة · ` +
+    `${live.links_stored} رابط منذ الإقلاع · ${escapeText(seen)}`;
 }
 
 // --- Tabs ------------------------------------------------------------

@@ -1,6 +1,4 @@
 # Render free web service — kept deliberately lean (512MB RAM tier).
-# Telethon and other collector-only dependencies live in
-# requirements-collector.txt and never ship to this process.
 fastapi>=0.115,<1.0
 # Declared directly, not left to FastAPI's transitive pin: the routers use
 # starlette's HTTP_422_UNPROCESSABLE_CONTENT, which does not exist before
@@ -28,3 +26,12 @@ alembic>=1.14,<2.0
 # locally from a shared secret, which is what keeps the second factor
 # inside the zero-cost constraint.
 pyotp>=2.9,<3.0
+# Live collection (app/live.py) holds an open Telegram connection inside
+# this process, so telethon now ships here as well as to the scheduled
+# collector. It used to be excluded from this file to keep the 512MB tier
+# lean, and that reasoning still deserves an answer: telethon is pure
+# Python and pulls only pyaes and rsa, and app/live.py imports it lazily
+# behind a try/except, so a deployment with LIVE_COLLECTOR_ENABLED unset
+# pays an import that never runs. What it buys is a link stored in about a
+# second instead of up to an hour.
+telethon>=1.36,<2.0

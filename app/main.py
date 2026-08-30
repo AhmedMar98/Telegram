@@ -1,9 +1,15 @@
 """FastAPI application entrypoint.
 
 Single process, single free Render web service: serves the JSON API, the
-server-rendered search UI, and the Telegram bot webhook. There is no
-second process to pay for — the collector runs separately on a schedule
-(see scripts/collect.py, driven by .github/workflows/collector.yml).
+server-rendered search UI, the Telegram bot webhook, and — when it is
+switched on — the live collection listener (app/live.py) as a background
+task on the same event loop. There is still no second process to pay for.
+
+Collection therefore has two paths, and both are wanted. The listener
+stores a link the second it is posted but is only as continuous as the
+free instance's uptime; the hourly job (scripts/collect.py, driven by
+.github/workflows/collector.yml) is the guarantee that anything the
+listener missed is picked up anyway.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session
 from starlette.middleware.gzip import GZipMiddleware
 
-from app import metrics
+from app import live, metrics
 from app.classifier import CATEGORIES
 from app.classifier.llm import probe as groq_probe
 from app.config import get_settings, production_secrets_check
@@ -141,7 +147,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 await bot.session.close()
 
-    yield
+    # Live collection (app/live.py). Started last, after the checks that
+    # can legitimately refuse to boot, and deliberately unable to fail
+    # startup itself: a listener that cannot reach Telegram must cost a
+    # delayed link, never a dead website. `start()` returns None on every
+    # unhappy path and records the reason for the status endpoint.
+    live_task = live.start()
+    try:
+        yield
+    finally:
+        await live.stop(live_task)
 
 
 app = FastAPI(title=get_settings().app_name, lifespan=lifespan)

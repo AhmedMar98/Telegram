@@ -120,6 +120,23 @@ class Settings(BaseSettings):
     # radius for capacity nobody has asked for.
     max_accounts_per_workspace: int = 10
 
+    # --- Live collection --------------------------------------------------
+    # Off by default, and the default is the conservative one on purpose.
+    #
+    # When on, app/live.py holds an open Telegram connection inside the web
+    # process and stores links the second they are posted, instead of on
+    # the hourly cron tick. It does not replace the cron job: the listener
+    # is best-effort (the free instance sleeps, connections drop) and the
+    # scheduled collector remains the guarantee that nothing was missed.
+    #
+    # Default False because turning it on has three preconditions this
+    # code cannot check for you — TG_API_ID/TG_API_HASH/COLLECTOR_WORKSPACE_ID
+    # present in the *web* service's environment, telethon installed there,
+    # and something keeping the instance awake. Defaulting to True would
+    # mean every existing deployment starts logging a listener failure it
+    # never asked for.
+    live_collector_enabled: bool = False
+
     # --- Telegram bot (webhook mode; no polling worker required) --------
     bot_token: str | None = None
     bot_webhook_secret: str | None = None

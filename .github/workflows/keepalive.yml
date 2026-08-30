@@ -1,0 +1,77 @@
+name: Keep awake
+
+# Live collection (app/live.py) only works while the process is running,
+# and the free Render web instance sleeps after ~15 minutes with no
+# inbound HTTP request. A sleeping process holds no Telegram connection
+# and hears nothing — so without something in this role, "live" collection
+# quietly degrades to "collects whenever somebody happens to open the
+# site".
+#
+# READ THIS BEFORE ENABLING — the honest limits:
+#
+#   1. GitHub's scheduled runners are best-effort and are routinely late
+#      by five to fifteen minutes under load. A schedule written as every
+#      ten minutes will sometimes not fire for twenty, and the instance
+#      will sleep in that gap. This narrows the window; it does not close
+#      it. The hourly collector remains the guarantee.
+#
+#   2. It is not free on a private repository. Billing rounds every run
+#      up to a whole minute, so */10 is ~4,300 minutes a month against a
+#      2,000-minute allowance. On a **public** repository Actions minutes
+#      are unmetered and this costs nothing.
+#
+#   3. An external uptime pinger (UptimeRobot's free tier polls every 5
+#      minutes) does this job better, more punctually, and without
+#      touching the Actions budget at all. If the repository is private,
+#      prefer that and leave this workflow disabled.
+#
+#   4. Render's free plan allows 750 instance-hours a month and a month
+#      is ~730 hours, so keeping ONE service awake continuously fits.
+#      Keeping a second one awake does not.
+#
+# Disabled by default: the schedule is commented out, because a workflow
+# that silently spends someone's Actions budget the moment they merge is
+# not a default anyone consented to. Uncomment the two schedule lines to
+# turn it on, or run it by hand to test.
+
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: "*/10 * * * *"
+
+# None at all: this job never checks out the repository. It issues one
+# curl against the deployed site, which needs no token.
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the web service
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "APP_BASE_URL not configured — nothing to ping."
+            exit 0
+          fi
+
+          # /healthz, not /: it is the cheapest route in the app and does
+          # not touch the database, so a ping every ten minutes costs the
+          # free instance essentially nothing.
+          #
+          # The timeout is generous because the whole point of this
+          # request may be to pay a cold start — the request that wakes a
+          # sleeping instance is the slow one, and treating that as a
+          # failure would report an outage every time the job did its job.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 120 "$BASE/healthz" || echo 000)
+          echo "healthz -> $code"
+
+          # Deliberately not a failure. This workflow exists to keep the
+          # instance warm, not to monitor it — smoke.yml is the check that
+          # is allowed to go red. A ping that failed once would otherwise
+          # send a red-X email every ten minutes, which is how people end
+          # up muting the notifications that matter.
+          if [ "$code" != "200" ]; then
+            echo "::warning::healthz returned $code; smoke.yml is the workflow that judges this"
+          fi
