@@ -15,6 +15,11 @@ on:
     - cron: "0 * * * *" # hourly
   workflow_dispatch: {}
 
+# Checks out the code to run scripts/collect.py. Everything it writes
+# goes to the database over DATABASE_URL, never through the token.
+permissions:
+  contents: read
+
 jobs:
   collect:
     runs-on: ubuntu-latest

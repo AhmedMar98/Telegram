@@ -10,6 +10,11 @@ name: Verify setup
 on:
   workflow_dispatch: {}
 
+# Checks out the code to run the setup diagnostic. It reads secrets to
+# report whether they are present and never writes anything back.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest

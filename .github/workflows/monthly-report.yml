@@ -12,6 +12,11 @@ on:
     - cron: "0 6 1 * *" # 06:00 UTC on the first of each month
   workflow_dispatch: {}
 
+# Checks out the code to build the report; the report is delivered
+# through the application, not through the token.
+permissions:
+  contents: read
+
 jobs:
   report:
     runs-on: ubuntu-latest

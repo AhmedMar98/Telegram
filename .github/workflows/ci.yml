@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ["**"]
 
+# Checks out the code and uploads a coverage artifact. It never writes
+# to the repository, opens a PR, or comments on one.
+permissions:
+  contents: read
+
 jobs:
   lint-type-test:
     runs-on: ubuntu-latest
