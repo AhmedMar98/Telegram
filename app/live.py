@@ -64,6 +64,15 @@ from typing import Any
 
 from app.config import get_settings
 from app.database import SessionLocal
+from app.dialogs import (
+    canonical_id,
+    canonical_username,
+    dialog_identity,
+    dialog_kind,
+    existing_channel,
+    parse_scope,
+    register_dialog,
+)
 from app.ingest import IngestSummary, ingest_text
 from app.models import Channel, TelegramAccount
 from app.rls import scope_session_to_workspace
@@ -123,38 +132,12 @@ def state() -> LiveState:
 # --- which channel is this message from? ------------------------------------
 
 
-def canonical_id(raw: object) -> str | None:
-    """One spelling for a Telegram peer id, whichever form it arrived in.
-
-    Telethon reports a channel as ``-1001234567890``; an operator typing
-    the id into the dashboard usually pastes ``1234567890``. Both have to
-    match the same row.
-
-    The ``-100`` prefix is stripped **only from negative ids**, because
-    that minus sign is the marker that the prefix is a peer-type tag
-    rather than part of the number. Stripping a leading ``100`` from
-    positive ids too would be the plausible-looking version of this
-    function that is wrong: a channel genuinely numbered ``1001234``
-    would canonicalise to ``1234`` from the dashboard and to ``1001234``
-    from Telethon, and would silently never match.
-    """
-    try:
-        text = str(int(str(raw).strip()))
-    except (TypeError, ValueError):
-        return None
-    if text.startswith("-100"):
-        return text[4:]
-    if text.startswith("-"):
-        return text[1:]
-    return text
-
-
-def canonical_username(raw: object) -> str | None:
-    """One spelling for a @handle. Telegram handles are case-insensitive."""
-    if not isinstance(raw, str):
-        return None
-    handle = raw.strip().lstrip("@").lower()
-    return handle or None
+# canonical_id and canonical_username live in app/dialogs.py and are
+# re-exported here rather than re-implemented. They started as a copy in
+# this module; the scheduled collector needed exactly the same "one
+# spelling for an identity" rule once it began discovering dialogs, and
+# two copies of a matching rule are two chances for the batch path and the
+# live path to disagree about whether a message belongs to a row.
 
 
 def build_index(channels: list[Channel]) -> dict[str, int]:
@@ -326,6 +309,91 @@ def _forward_origin(message: object) -> str | None:
     return None
 
 
+def _register_dialog_row(
+    workspace_id: int, kind: str, tg_id: str, username: str | None, title: str | None
+) -> int | None:
+    """Insert (or find) the row for a dialog seen live. Runs in a thread.
+
+    Returns the row id, or None if the write failed. Blocking SQLAlchemy,
+    so the caller hands it to ``asyncio.to_thread`` for the same reason
+    ``store_message`` is handed over: this process serves HTTP on the same
+    event loop.
+
+    ``account_id`` is deliberately left NULL rather than pointed at the
+    account whose session heard the message. NULL means "the default
+    account collects this", which is what the listener is using anyway,
+    and it keeps the assignment something the operator changes on purpose
+    in the dashboard rather than something a passing message decides.
+    """
+    db = SessionLocal()
+    try:
+        scope_session_to_workspace(db, workspace_id)
+        existing = existing_channel(db, workspace_id, tg_id=tg_id, username=username)
+        row, created = register_dialog(
+            db,
+            workspace_id=workspace_id,
+            account_id=None,
+            kind=kind,
+            tg_id=tg_id,
+            username=username,
+            title=title,
+            existing=existing,
+        )
+        db.commit()
+        if created:
+            logger.info("live: registered a new %s dialog (%s)", kind, title or tg_id)
+        return row.id
+    except Exception as exc:  # noqa: BLE001 - a failed registration must not kill the listener
+        db.rollback()
+        logger.warning("live: could not register dialog %s: %s", tg_id, exc)
+        return None
+    finally:
+        db.close()
+
+
+async def _register_unknown_dialog(event: Any, chat: Any, chat_id: object, index: _Index) -> int | None:
+    """Register the dialog this event came from, if it is in scope.
+
+    The entity is fetched only when the event did not carry one: that call
+    costs a round trip to Telegram, and paying it for every message from
+    an out-of-scope dialog would be a per-message tax for a decision that
+    is nearly always "no".
+    """
+    settings = get_settings()
+    if not settings.collector_auto_discover:
+        return None
+
+    entity = chat
+    if entity is None:
+        getter = getattr(event, "get_chat", None)
+        if getter is None:
+            return None
+        try:
+            entity = await getter()
+        except Exception as exc:  # noqa: BLE001 - an unresolvable chat is not a listener failure
+            logger.debug("live: could not resolve the chat for an update: %s", exc)
+            return None
+
+    kind = dialog_kind(entity)
+    if kind is None or kind not in parse_scope(settings.collector_scope):
+        return None
+
+    tg_id, username, title = dialog_identity(entity)
+    # The event's own chat_id is the marked form (-100…) and the entity's
+    # is not; prefer the event's so a row written here is spelled the way
+    # the rest of Telethon will report it.
+    tg_id = str(chat_id) if chat_id is not None else tg_id
+    if not tg_id:
+        return None
+
+    channel_id = await asyncio.to_thread(_register_dialog_row, index.workspace_id, kind, tg_id, username, title)
+    if channel_id is not None:
+        # Force the next lookup to rebuild rather than wait out the TTL,
+        # so the row just written is matched by the very next message.
+        index.built_at = 0.0
+    return channel_id
+
+
 async def handle_event(event: Any, index: _Index) -> int:
     """One incoming message. Returns links stored; never raises.
 
@@ -337,11 +405,20 @@ async def handle_event(event: Any, index: _Index) -> int:
     try:
         message = getattr(event, "message", event)
         chat = getattr(event, "chat", None)
-        channel_id = lookup(await index.get(), getattr(event, "chat_id", None), getattr(chat, "username", None))
+        chat_id = getattr(event, "chat_id", None)
+        channel_id = lookup(await index.get(), chat_id, getattr(chat, "username", None))
         if channel_id is None:
-            # Traffic from a chat this workspace does not follow. The
-            # account is a real Telegram login with its own DMs and
-            # groups; most of what it hears is not ours to store.
+            # A dialog no row stands for yet. With discovery on this is the
+            # normal case for anything new — a channel joined this morning,
+            # a group someone was added to, a first message from a
+            # contact — and dropping it would mean the live path only ever
+            # sees what the hourly collector already registered, which is
+            # the gap discovery exists to close.
+            channel_id = await _register_unknown_dialog(event, chat, chat_id, index)
+        if channel_id is None:
+            # Either discovery is off, or this dialog's kind is out of
+            # scope. Both are configured decisions, so this is silence by
+            # request rather than a drop worth logging on every message.
             return 0
 
         _state.messages_seen += 1

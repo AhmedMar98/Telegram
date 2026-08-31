@@ -169,7 +169,18 @@ class Channel(Base):
     tg_channel_id: Mapped[str] = mapped_column(String(64))
     username: Mapped[str | None] = mapped_column(String(200), nullable=True)
     title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Which sort of dialog this row stands for: "channel", "group" or
+    # "private". A row is still a row — the collector, the ingest path and
+    # search treat all three identically — but the distinction is real to
+    # a reader, and collection scope is configured per kind, so it is
+    # stored rather than inferred from the id's sign at read time.
+    kind: Mapped[str] = mapped_column(String(16), default="channel", server_default="channel")
     last_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    # When the scheduled collector last read this dialog. Ordering by it
+    # (never-collected first) is what keeps the per-run channel cap a
+    # rotation rather than a cliff once an account holds more dialogs than
+    # one run may touch.
+    last_collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

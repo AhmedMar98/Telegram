@@ -40,8 +40,10 @@ _CHANNEL_EXAMPLE: dict[str, Any] = {
     "tg_channel_id": "-1001234567890",
     "username": "python_weekly",
     "title": "Python Weekly",
+    "kind": "channel",
     "is_active": True,
     "account_id": 3,
+    "last_collected_at": "2026-03-01T10:00:00",
     "created_at": "2026-03-01T09:15:00",
 }
 
@@ -176,8 +178,17 @@ class ChannelOut(BaseModel):
     tg_channel_id: str
     username: str | None
     title: str | None
+    # "channel", "group" or "private". A dialog discovered automatically
+    # is not distinguishable from a hand-added one anywhere else in the
+    # API, and it should not be — but which *sort* of dialog a link came
+    # from is context a reader wants and the row already carries.
+    kind: str
     is_active: bool
     account_id: int | None
+    # When the scheduled collector last read this dialog; None until it
+    # has. Exposed because "why has this group produced nothing" is
+    # answered by it, and by nothing else in this response.
+    last_collected_at: datetime | None
     created_at: datetime
 
     model_config = _config(_CHANNEL_EXAMPLE, from_attributes=True)

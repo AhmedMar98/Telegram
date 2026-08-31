@@ -709,6 +709,22 @@ async function reassignChannel(channelId, value) {
   loadChannels();
 }
 
+function dialogBadge(kind) {
+  // Which sort of dialog a link came from is context the reader wants:
+  // a link from a private conversation and one from a public channel are
+  // not the same thing, even though collection treats them identically.
+  const labels = { channel: "📢 قناة", group: "👥 مجموعة", private: "💬 خاصة" };
+  return `<span class="muted">${labels[kind] || labels.channel}</span>`;
+}
+
+function lastCollected(value) {
+  // "Why has this group produced nothing?" is usually answered by this
+  // and by nothing else on the row: never collected, or collected and
+  // genuinely empty.
+  if (!value) return " · لم تُقرأ بعد";
+  return ` · آخر قراءة ${new Date(value + "Z").toLocaleString("ar")}`;
+}
+
 function fillChannelFilter(channels) {
   const select = document.getElementById("channelFilter");
   const previous = select.value;
@@ -727,11 +743,11 @@ async function loadChannels() {
   fillChannelFilter(data);
   document.getElementById("channels").innerHTML = data.map(c =>
     `<div class="card">
-       ${c.title || c.username || c.tg_channel_id}
-       <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}</span>
+       ${dialogBadge(c.kind)} ${c.title || c.username || c.tg_channel_id}
+       <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}${lastCollected(c.last_collected_at)}</span>
        ${ACCOUNTS.length > 1 ? `<select data-action="reassignChannel" data-args='[${c.id}]' data-pass-value class="indent-s">${accountOptions(c.account_id)}</select>` : ""}
      </div>`
-  ).join("") || "<p class='muted'>لا توجد قنوات مضافة بعد</p>";
+  ).join("") || "<p class='muted'>لا توجد محادثات بعد — أول تشغيلة جمع تسجّل ما يراه حساب الجمع تلقائياً</p>";
 }
 
 async function loadTotp() {

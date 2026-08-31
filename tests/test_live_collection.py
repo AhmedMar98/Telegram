@@ -131,8 +131,32 @@ class FakeMarkup:
 
 
 class FakeChat:
-    def __init__(self, username: str | None = None) -> None:
+    """A chat as an update carries it.
+
+    ``kind`` shapes the object the way Telethon would: a broadcast channel
+    carries the channel flags, a person carries ``first_name``. Discovery
+    classifies by those attributes, so a fake without them is a chat whose
+    type cannot be told — which is its own case, tested below.
+    """
+
+    def __init__(self, username: str | None = None, *, kind: str | None = None, title: str = "Discovered") -> None:
         self.username = username
+        if kind == "channel":
+            self.id = 5550002
+            self.title = title
+            self.broadcast = True
+            self.megagroup = False
+        elif kind == "group":
+            self.id = 5550003
+            self.title = title
+            self.broadcast = False
+            self.megagroup = True
+        elif kind == "private":
+            self.id = 5550004
+            self.first_name = title
+            self.last_name = None
+            self.bot = False
+            self.phone = None
 
 
 class FakeEvent:
@@ -146,9 +170,11 @@ class FakeEvent:
         message_id: int = 1,
         username: str | None = None,
         reply_markup: FakeMarkup | None = None,
+        chat_kind: str | None = None,
+        chat_title: str = "Discovered",
     ) -> None:
         self.chat_id = chat_id
-        self.chat = FakeChat(username)
+        self.chat = FakeChat(username, kind=chat_kind, title=chat_title)
         self.id = message_id
         self.raw_text = text
         self.date = datetime.now(UTC)
@@ -194,7 +220,12 @@ def test_a_link_that_only_exists_on_a_button_is_still_captured(channel):
     assert _stored_urls(channel.workspace_id) == ["https://example.com/from-button"]
 
 
-def test_a_message_from_an_unfollowed_chat_stores_nothing(channel):
+def test_a_message_from_a_chat_of_no_identifiable_kind_stores_nothing(channel):
+    """An update whose chat cannot be classified is not guessed at.
+
+    Discovery registers dialogs by kind; an object that answers to none of
+    the kinds is not filed under the most common one, it is left alone.
+    """
     index = live._Index(workspace_id=channel.workspace_id)
     event = FakeEvent(chat_id=-100999999, text="https://example.com/not-ours")
 
@@ -202,6 +233,73 @@ def test_a_message_from_an_unfollowed_chat_stores_nothing(channel):
 
     assert stored == 0
     assert _stored_urls(channel.workspace_id) == []
+
+
+def test_an_unfollowed_chat_is_registered_and_collected(channel, monkeypatch):
+    """The gap discovery closes on the live path.
+
+    Before it, the listener heard everything the account heard and stored
+    only what somebody had typed into the dashboard first — so a channel
+    joined this morning produced nothing until it was registered by hand.
+    """
+    monkeypatch.setenv("COLLECTOR_AUTO_DISCOVER", "true")
+    monkeypatch.setenv("COLLECTOR_SCOPE", "all")
+    live.get_settings.cache_clear()
+    index = live._Index(workspace_id=channel.workspace_id)
+    event = FakeEvent(
+        chat_id=-1005550002,
+        text="https://example.com/from-a-new-channel",
+        chat_kind="channel",
+        chat_title="Joined this morning",
+    )
+
+    stored = asyncio.run(live.handle_event(event, index))
+
+    assert stored == 1
+    assert _stored_urls(channel.workspace_id) == ["https://example.com/from-a-new-channel"]
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(Channel)
+            .filter(Channel.workspace_id == channel.workspace_id, Channel.title == "Joined this morning")
+            .one()
+        )
+        assert row.kind == "channel"
+        # Left to the default account on purpose: a passing message is not
+        # a decision about which account should collect a dialog.
+        assert row.account_id is None
+    finally:
+        db.close()
+    live.get_settings.cache_clear()
+
+
+def test_a_private_chat_is_left_alone_when_the_scope_excludes_it(channel, monkeypatch):
+    """The setting that makes collecting personal conversations a decision
+    rather than a surprise."""
+    monkeypatch.setenv("COLLECTOR_AUTO_DISCOVER", "true")
+    monkeypatch.setenv("COLLECTOR_SCOPE", "channel,group")
+    live.get_settings.cache_clear()
+    index = live._Index(workspace_id=channel.workspace_id)
+    event = FakeEvent(chat_id=5550004, text="https://example.com/from-a-dm", chat_kind="private")
+
+    stored = asyncio.run(live.handle_event(event, index))
+
+    assert stored == 0
+    assert _stored_urls(channel.workspace_id) == []
+    live.get_settings.cache_clear()
+
+
+def test_discovery_off_means_the_listener_stores_only_registered_dialogs(channel, monkeypatch):
+    monkeypatch.setenv("COLLECTOR_AUTO_DISCOVER", "false")
+    live.get_settings.cache_clear()
+    index = live._Index(workspace_id=channel.workspace_id)
+    event = FakeEvent(chat_id=-1005550002, text="https://example.com/not-ours", chat_kind="channel")
+
+    stored = asyncio.run(live.handle_event(event, index))
+
+    assert stored == 0
+    assert _stored_urls(channel.workspace_id) == []
+    live.get_settings.cache_clear()
 
 
 def test_the_watermark_is_never_touched(channel):

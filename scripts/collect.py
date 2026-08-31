@@ -52,10 +52,19 @@ from app.classifier.llm import lowest_quota  # noqa: E402
 from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
+from app.dialogs import (  # noqa: E402
+    dialog_identity,
+    dialog_kind,
+    index_channels,
+    lookup_channel,
+    parse_scope,
+    register_dialog,
+)
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 from app.notify import raise_alert, report_adult_links  # noqa: E402
 from app.rls import scope_session_to_workspace  # noqa: E402
+from app.timeutil import utcnow  # noqa: E402
 
 logger = logging.getLogger("collector")
 
@@ -170,6 +179,12 @@ async def _collect_channel(
         logger.warning("flood wait on channel %s (%s): %s", channel.id, label, exc)
 
     channel.last_message_id = new_watermark
+    # Stamped even when the run found nothing: the question this answers is
+    # "when did anything last look at this dialog", which is what the
+    # rotation ordering in _channels_for needs. Stamping only on a
+    # non-empty run would park every quiet dialog permanently at the front
+    # of the queue and starve the rest.
+    channel.last_collected_at = utcnow()
     audit_record(
         db,
         workspace_id=channel.workspace_id,
@@ -257,9 +272,128 @@ def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, i
         query = query.filter((Channel.account_id == account.id) | (Channel.account_id.is_(None)))
     else:
         query = query.filter(Channel.account_id == account.id)
-    # Ordered by id so the cap takes a stable prefix; each channel carries
-    # its own watermark, so a capped run resumes rather than skipping.
-    return query.order_by(Channel.id).limit(limit).all()
+    # Least recently collected first, never-collected before everything.
+    #
+    # This used to order by id and take a stable prefix, which was fine
+    # while every row was hand-added and there were a dozen of them. With
+    # automatic discovery an account can hold hundreds of dialogs, and a
+    # fixed prefix means the rows past the cap are never read *at all* —
+    # not "later", never. Ordering by age of last collection turns the cap
+    # into a rotation: every dialog gets its turn, and each keeps its own
+    # watermark so a turn resumes rather than skips.
+    #
+    # Sorting on a boolean expression rather than NULLS FIRST on purpose:
+    # both engines this project runs on order it the same way, which the
+    # NULLS syntax cannot claim across SQLite versions.
+    return (
+        query.order_by(
+            Channel.last_collected_at.is_(None).desc(),
+            Channel.last_collected_at.asc(),
+            Channel.id,
+        )
+        .limit(limit)
+        .all()
+    )
+
+
+def _discovery_settings() -> tuple[bool, frozenset[str], int]:
+    """``(enabled, kinds, cap)`` for this run, read at call time.
+
+    Read here rather than at import so a deployment can change the scope
+    by changing an environment variable, without a code change and
+    without a stale value captured when the module was first imported.
+    """
+    settings = get_settings()
+    return (
+        settings.collector_auto_discover,
+        parse_scope(settings.collector_scope),
+        max(1, settings.collector_max_dialogs),
+    )
+
+
+async def _discover_dialogs(
+    client: TelegramClient, db: Session, workspace_id: int, account: TelegramAccount
+) -> int:
+    """Register the account's dialogs that this workspace does not know yet.
+
+    This is what makes "collect from Telegram" mean the account's actual
+    Telegram — channels, groups and private conversations — rather than
+    the subset somebody remembered to type into the dashboard.
+
+    Three properties worth stating because each one is a bug if absent:
+
+    - **Incremental.** A dialog already known is refreshed, never
+      duplicated, and matching is on the canonicalised id/handle so the
+      two spellings of the same channel cannot become two rows with two
+      watermarks (see ``app.dialogs.existing_channel``).
+    - **Bounded.** ``collector_max_dialogs`` caps one pass. An account with
+      a thousand conversations registers the first N now and the rest on
+      later runs, instead of turning the first run into an hour of
+      ``iter_dialogs`` and a FloodWait.
+    - **Never fatal.** Discovery failing is not collection failing. The
+      channels already registered are still collectable, so a failure here
+      is logged and the run continues rather than losing everything to a
+      feature that is an addition.
+    """
+    enabled, kinds, cap = _discovery_settings()
+    if not enabled:
+        return 0
+
+    known = index_channels(db.query(Channel).filter(Channel.workspace_id == workspace_id).all())
+    created = 0
+    seen = 0
+    try:
+        async for dialog in client.iter_dialogs():
+            if seen >= cap:
+                logger.info(
+                    "account %s (%s): discovery stopped at the %d-dialog cap; the rest follow next run",
+                    account.id,
+                    account.label,
+                    cap,
+                )
+                break
+            seen += 1
+
+            kind = dialog_kind(dialog)
+            if kind is None or kind not in kinds:
+                continue
+
+            tg_id, username, title = dialog_identity(dialog)
+            if not tg_id:
+                continue
+
+            row, is_new = register_dialog(
+                db,
+                workspace_id=workspace_id,
+                account_id=account.id,
+                kind=kind,
+                tg_id=tg_id,
+                username=username,
+                title=title,
+                existing=lookup_channel(known, tg_id, username),
+            )
+            if is_new:
+                created += 1
+                # Index the row as soon as it exists, so a second dialog
+                # resolving to the same peer later in this same pass finds
+                # it instead of inserting a duplicate.
+                known.update(index_channels([row]))
+    except Exception as exc:  # noqa: BLE001 - discovery is additive; collection still runs
+        logger.warning("account %s (%s): dialog discovery failed: %s", account.id, account.label, exc)
+        db.rollback()
+        return 0
+
+    db.commit()
+    if created:
+        logger.info(
+            "account %s (%s): discovered %d new dialog(s) out of %d scanned (kinds: %s)",
+            account.id,
+            account.label,
+            created,
+            seen,
+            ", ".join(sorted(kinds)),
+        )
+    return created
 
 
 async def _collect_with_account(
@@ -269,8 +403,15 @@ async def _collect_with_account(
     api_id: int,
     api_hash: str,
     run: IngestSummary | None = None,
-) -> int:
+    *,
+    is_default: bool = False,
+) -> tuple[int, int]:
     """Run one account's share of the channels. Never raises.
+
+    Returns ``(links stored, dialogs actually read)``. The second number is
+    not ``len(channels)`` as the caller passed it: discovery can register
+    dialogs *during* this call, and the run's own log line and the
+    "everything failed" alert both describe what was really attempted.
 
     Per-account isolation is the point: a revoked session, a banned
     account or a network failure on one account must not cost the run the
@@ -289,17 +430,30 @@ async def _collect_with_account(
         # as a failure like any other and will eventually disable the
         # account rather than being retried hourly forever.
         record_failure(db, account, "session string could not be decrypted (FIELD_ENCRYPTION_KEY mismatch)")
-        return 0
+        return 0, 0
 
-    client = TelegramClient(StringSession(session_string), api_id, api_hash)
     try:
+        # Constructing the client is inside the try, not before it:
+        # StringSession() *parses* the stored string and raises on a
+        # malformed one. Outside the try that exception escapes
+        # _collect_with_account entirely and ends the whole run — which is
+        # the opposite of the per-account isolation this function promises,
+        # and it happens for exactly the account most likely to be broken.
+        client = TelegramClient(StringSession(session_string), api_id, api_hash)
         await client.start()
     except Exception as exc:  # noqa: BLE001 - one bad account must not end the run
         logger.error("account %s (%s): cannot connect: %s", account.id, account.label, exc)
         record_failure(db, account, f"cannot connect: {exc}")
-        return 0
+        return 0, 0
 
     try:
+        # Discovery first, and its result re-reads the channel list: a
+        # dialog registered a moment ago is collectable in this same run,
+        # not only in the next one. The caller's list was computed before
+        # the connection existed, so it cannot contain anything new.
+        if await _discover_dialogs(client, db, account.workspace_id, account):
+            channels = _channels_for(db, account.workspace_id, account, is_default=is_default)
+
         total = 0
         for channel in channels:
             total += await _collect_channel(client, db, channel, run)
@@ -311,11 +465,11 @@ async def _collect_with_account(
             len(channels),
         )
         record_success(db, account, links_collected=total)
-        return total
+        return total, len(channels)
     except Exception as exc:  # noqa: BLE001 - same reasoning as above
         logger.error("account %s (%s): run aborted: %s", account.id, account.label, exc)
         record_failure(db, account, f"run aborted: {exc}")
-        return 0
+        return 0, len(channels)
     finally:
         await client.disconnect()
 
@@ -383,6 +537,7 @@ async def collect() -> None:
         # The lowest-numbered account is the default, and inherits every
         # channel that has not been assigned to a specific account.
         default_account_id = accounts[0].id
+        auto_discover = get_settings().collector_auto_discover
 
         total = 0
         collected_channels = 0
@@ -391,13 +546,21 @@ async def collect() -> None:
         # would otherwise get twenty separate messages from one run.
         run = IngestSummary()
         for account in accounts:
-            channels = _channels_for(db, workspace_id, account, is_default=account.id == default_account_id)
-            if not channels:
+            is_default = account.id == default_account_id
+            channels = _channels_for(db, workspace_id, account, is_default=is_default)
+            if not channels and not auto_discover:
+                # With discovery off this is genuinely nothing to do. With
+                # it on, the account may hold dialogs nobody has registered
+                # yet — which is exactly the case discovery exists for, so
+                # the run must reach the connection to find out.
                 logger.info("account %s (%s): no channels assigned", account.id, account.label)
                 continue
-            collected_channels += len(channels)
             before = account.consecutive_failures
-            total += await _collect_with_account(db, account, channels, api_id, api_hash, run)
+            links, read = await _collect_with_account(
+                db, account, channels, api_id, api_hash, run, is_default=is_default
+            )
+            total += links
+            collected_channels += read
             # A run that raised increments the counter; one that worked
             # resets it. Comparing across the call is how this tells the
             # two apart without duplicating the bookkeeping.
