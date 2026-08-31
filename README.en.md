@@ -21,7 +21,7 @@ Three constraints drove almost every architectural decision:
 |---|---|
 | **No Docker, no Oracle Cloud** | Render's native Python runtime, described by `render.yaml` |
 | **Zero cost, unconditionally** | No paid plan anywhere, and the LLM classification tier is optional by construction |
-| **No free background-worker plan exists** | Everything periodic is a scheduled GitHub Actions job, not a daemon |
+| **No free background-worker plan exists** | Everything periodic is a scheduled GitHub Actions job. One exception: an optional near-instant listener that runs as a task *inside* the web process itself — the free web service is already persistent, so it costs nothing extra (`docs/42-live-collection.md`) |
 
 That third one is the interesting one. Collection, link-health checking,
 pruning, backups and digests are all one-shot scheduled runs. The Telegram
@@ -108,9 +108,11 @@ Stated here rather than discovered later:
   Past it a request gets **503 with `Retry-After`** after five seconds
   rather than a long hang and a 500. The capacity is a written choice and
   the failure is explicit.
-- **Five endpoints still do database work on the event loop.** Each is
-  authenticated, none runs bcrypt, and each awaits real network I/O — the
-  reasons they were left alone. They are named in `ASYNC_BY_DESIGN` in
+- **Seven endpoints still run on the event loop instead of a worker
+  thread.** Each is authenticated, none runs bcrypt, and each awaits real
+  network I/O — the reasons they were left alone. Two are the dashboard's
+  Telethon-based account login (send the code, confirm it) added
+  alongside live collection. They are named in `ASYNC_BY_DESIGN` in
   `tests/test_event_loop_discipline.py`, so a new one has to justify
   itself. `POST /auth/login` used to be among them, and the cost was
   measured: it serialised every login and froze `/healthz` — the path
@@ -144,6 +146,7 @@ account, no API keys, no payment method.
 | Every environment variable | [`docs/29-env-vars.md`](docs/29-env-vars.md) |
 | Ideas evaluated and rejected, with reasons | [`docs/06-rejected.md`](docs/06-rejected.md) |
 | Incident runbook | [`docs/19-runbook.md`](docs/19-runbook.md) |
+| Near-instant collection (optional) | [`docs/42-live-collection.md`](docs/42-live-collection.md) |
 | Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 Most documents are in Arabic. The tables and code in them are readable
