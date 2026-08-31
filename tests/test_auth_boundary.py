@@ -67,6 +67,12 @@ SESSION_ONLY = {
     ("GET", "/status"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
+    # Adding a collecting account is a real Telegram login: this mints a
+    # new bearer credential for a third-party account. An API key must
+    # not be able to trigger that any more than it can change the
+    # workspace's own password.
+    ("POST", "/channels/accounts/login/start"),
+    ("POST", "/channels/accounts/login/verify"),
 }
 
 

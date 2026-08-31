@@ -151,6 +151,25 @@
 <p class="muted">حساب الجمع ليس البوت: هو حساب تيليجرام عادي يقرأ القنوات. البوت واحد فقط وللبحث.</p>
 <div id="accountHealth"></div>
 
+<h3>إضافة حساب جمع جديد</h3>
+<p class="muted">
+  هذا تسجيل دخول حقيقي بحساب تيليجرام — لا نطلب رمز التحقّق ولا كلمة جلستك إلا هنا،
+  ولا تُعرَض جلسة الحساب لك ولا لأي شخص بعد حفظها.
+</p>
+<div id="acctLoginStep1" class="row stack">
+  <input id="acctLabel" placeholder="تسمية للحساب (مثال: حساب ٢)">
+  <input id="acctPhone" placeholder="رقم الهاتف بصيغة دولية، مثل ‎+9665xxxxxxxx">
+  <input id="acctCurPass" type="password" placeholder="كلمة مرور لوحتك الحالية (للتأكيد)">
+  <button data-action="startAccountLogin">إرسال رمز التحقّق</button>
+</div>
+<div id="acctLoginStep2" class="row stack" hidden>
+  <input id="acctCode" placeholder="رمز التحقّق من تطبيق تيليجرام">
+  <input id="acct2fa" type="password" placeholder="كلمة مرور التحقّق بخطوتين (إن طُلبت)" hidden>
+  <button data-action="verifyAccountLogin">تأكيد وإضافة الحساب</button>
+  <button data-action="cancelAccountLogin">إلغاء</button>
+</div>
+<p id="acctLoginMsg" class="muted"></p>
+
 <h2>القنوات</h2>
 <div class="row">
   <input id="chId" placeholder="معرّف القناة (tg_channel_id)">

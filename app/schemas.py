@@ -17,7 +17,7 @@ schema and the schema it nests show the same values.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -205,6 +205,56 @@ class TelegramAccountOut(BaseModel):
     channel_count: int
 
     model_config = _config(_ACCOUNT_EXAMPLE, from_attributes=True)
+
+
+class AccountLoginStart(BaseModel):
+    """Step 1 of adding a collecting account from the dashboard: prove it's
+    really the operator, then ask Telegram to send a login code."""
+
+    current_password: str
+    label: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=5, max_length=32)
+
+    model_config = _config(
+        {"current_password": "correct-horse-battery-staple", "label": "second account", "phone": "+9665xxxxxxxx"}
+    )
+
+
+class AccountLoginStartOut(BaseModel):
+    """The token step 2 is submitted with. Not a secret by itself — it
+    names a pending login this process is already holding open, and
+    expires with it — but it is bound to the workspace that requested it."""
+
+    login_token: str
+
+    model_config = _config({"login_token": "8f6b3c1e9a2d4f7b0c5e8a1d3f6b9c2e"})
+
+
+class AccountLoginVerify(BaseModel):
+    """Step 2. ``code`` is required on the first call. If the account also
+    has two-factor login, the response comes back ``needs_password``
+    instead of an account — resubmit with the same ``login_token`` and
+    only ``password`` filled in; the code was already accepted and is not
+    asked for again."""
+
+    login_token: str
+    code: str | None = None
+    password: str | None = None
+
+    model_config = _config({"login_token": "8f6b3c1e9a2d4f7b0c5e8a1d3f6b9c2e", "code": "12345", "password": None})
+
+
+class AccountLoginVerifyOut(BaseModel):
+    """Either the new account, or a signal that a 2FA password is needed
+    next — never both, which is what the ``status`` field distinguishes."""
+
+    status: Literal["added", "needs_password"]
+    account: TelegramAccountOut | None = None
+
+    model_config = _config(
+        {"status": "added", "account": _ACCOUNT_EXAMPLE},
+        {"status": "needs_password", "account": None},
+    )
 
 
 class LinkOut(BaseModel):

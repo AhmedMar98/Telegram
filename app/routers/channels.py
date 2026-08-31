@@ -6,14 +6,32 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import account_login
 from app.accounts import reactivate
 from app.audit import record as audit_record
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, get_session_user
+from app.errors import ErrorCode, rate_limited
 from app.models import Channel, TelegramAccount, User
-from app.schemas import ChannelCreate, ChannelOut, ChannelUpdate, TelegramAccountOut
+from app.schemas import (
+    AccountLoginStart,
+    AccountLoginStartOut,
+    AccountLoginVerify,
+    AccountLoginVerifyOut,
+    ChannelCreate,
+    ChannelOut,
+    ChannelUpdate,
+    TelegramAccountOut,
+)
+from app.security import is_action_rate_limited, record_action_event, verify_password, waste_password_time
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+
+# Generous enough that adding a full batch of ten accounts in one sitting
+# never trips it, tight enough that a script cannot use this endpoint to
+# hammer Telegram's own code-request rate limiting on the app's behalf.
+ACCOUNT_LOGIN_LIMIT = 15
+ACCOUNT_LOGIN_WINDOW_MINUTES = 15
 
 
 @router.get("", response_model=list[ChannelOut])
@@ -160,6 +178,100 @@ def reactivate_account(
         channel_count=db.query(Channel)
         .filter(Channel.workspace_id == current_user.workspace_id, Channel.account_id == account.id)
         .count(),
+    )
+
+
+@router.post("/accounts/login/start", response_model=AccountLoginStartOut)
+async def start_account_login(
+    payload: AccountLoginStart,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> AccountLoginStartOut:
+    """Step 1 of adding an account from the dashboard: send the code.
+
+    ``get_session_user`` rather than ``get_current_user`` — an API key
+    must not be able to mint a new Telegram bearer credential, only a
+    browser session can. The current password is re-checked on top of
+    that session, the same gate idea 55's precedent uses for
+    change-password, TOTP-disable and account-delete: this action is at
+    least as sensitive as any of those.
+    """
+    if not verify_password(payload.current_password, current_user.password_hash):
+        waste_password_time()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="incorrect password")
+
+    scope_id = str(current_user.workspace_id)
+    if is_action_rate_limited(
+        db, "account_login", scope_id, limit=ACCOUNT_LOGIN_LIMIT, window_minutes=ACCOUNT_LOGIN_WINDOW_MINUTES
+    ):
+        raise rate_limited(
+            ErrorCode.RATE_LIMITED,
+            "too many login attempts, please slow down",
+            retry_after_seconds=ACCOUNT_LOGIN_WINDOW_MINUTES * 60,
+        )
+    record_action_event(db, "account_login", scope_id)
+
+    try:
+        token = await account_login.start_login(db, current_user.workspace_id, payload.label, payload.phone)
+    except account_login.LoginError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="account.login_started",
+        detail=payload.label,
+    )
+    db.commit()
+    return AccountLoginStartOut(login_token=token)
+
+
+@router.post("/accounts/login/verify", response_model=AccountLoginVerifyOut)
+async def verify_account_login(
+    payload: AccountLoginVerify,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> AccountLoginVerifyOut:
+    """Step 2: the code, or — once ``needs_password`` comes back — the
+    account's own two-factor password. No password re-confirmation here:
+    step 1 already proved it is the operator, and this call cannot do
+    anything step 1 did not already authorise."""
+    try:
+        account = await account_login.verify_login(
+            db, current_user.workspace_id, payload.login_token, payload.code, payload.password
+        )
+    except account_login.NeedsPassword:
+        return AccountLoginVerifyOut(status="needs_password")
+    except account_login.LoginError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="account.login_completed",
+        target_type="account",
+        target_id=str(account.id),
+        detail=account.label,
+    )
+    db.commit()
+
+    return AccountLoginVerifyOut(
+        status="added",
+        account=TelegramAccountOut(
+            id=account.id,
+            label=account.label,
+            is_active=account.is_active,
+            created_at=account.created_at,
+            last_success_at=account.last_success_at,
+            last_failure_at=account.last_failure_at,
+            last_error=account.last_error,
+            consecutive_failures=account.consecutive_failures,
+            disabled_reason=account.disabled_reason,
+            links_collected=account.links_collected,
+            channel_count=0,  # a freshly logged-in account has no channels assigned yet
+        ),
     )
 
 

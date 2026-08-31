@@ -371,6 +371,32 @@ curl -sS -X GET \
   -H "Authorization: Bearer $LIP_API_KEY"
 ```
 
+### `POST /channels/accounts/login/start`
+
+Start Account Login  
+**المصادقة:** 🍪 جلسة فقط
+
+```bash
+curl -sS -X POST \
+  "$BASE/channels/accounts/login/start" \
+  -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "correct-horse-battery-staple", "label": "second account", "phone": "+9665xxxxxxxx"}'
+```
+
+### `POST /channels/accounts/login/verify`
+
+Verify Account Login  
+**المصادقة:** 🍪 جلسة فقط
+
+```bash
+curl -sS -X POST \
+  "$BASE/channels/accounts/login/verify" \
+  -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"code": "12345", "login_token": "8f6b3c1e9a2d4f7b0c5e8a1d3f6b9c2e"}'
+```
+
 ### `POST /channels/accounts/{account_id}/reactivate`
 
 Reactivate Account  
