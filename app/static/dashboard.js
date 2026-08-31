@@ -619,6 +619,83 @@ async function reactivateAccount(id) {
   loadAccounts();
 }
 
+// Adding an account is a real Telegram login, done in two calls because
+// Telegram's own flow is two steps (send a code, then confirm it — and
+// sometimes a third, the account's 2FA password). Nothing here ever
+// prints the resulting session string; the server encrypts and stores it
+// and only ever hands back the account's health, same as every other
+// account in the panel.
+let ACCT_LOGIN_TOKEN = null;
+
+function resetAccountLoginForm() {
+  ACCT_LOGIN_TOKEN = null;
+  document.getElementById("acctLoginStep1").hidden = false;
+  document.getElementById("acctLoginStep2").hidden = true;
+  document.getElementById("acct2fa").hidden = true;
+  document.getElementById("acctCode").value = "";
+  document.getElementById("acct2fa").value = "";
+  document.getElementById("acctCurPass").value = "";
+}
+
+async function startAccountLogin() {
+  const label = document.getElementById("acctLabel").value.trim();
+  const phone = document.getElementById("acctPhone").value.trim();
+  const current_password = document.getElementById("acctCurPass").value;
+  const msg = document.getElementById("acctLoginMsg");
+  if (!label || !phone || !current_password) {
+    msg.textContent = "املأ التسمية ورقم الهاتف وكلمة المرور.";
+    return;
+  }
+  msg.textContent = "يرسل رمز التحقّق...";
+  const res = await api("/channels/accounts/login/start", {
+    method: "POST",
+    body: JSON.stringify({ label, phone, current_password }),
+  });
+  if (!res.ok) {
+    msg.textContent = (await res.json()).detail || "تعذّر إرسال رمز التحقّق.";
+    return;
+  }
+  const data = await res.json();
+  ACCT_LOGIN_TOKEN = data.login_token;
+  document.getElementById("acctLoginStep1").hidden = true;
+  document.getElementById("acctLoginStep2").hidden = false;
+  msg.textContent = "وصلك رمز في تطبيق تيليجرام نفسه — أدخله أدناه.";
+}
+
+async function verifyAccountLogin() {
+  const code = document.getElementById("acctCode").value.trim();
+  const passwordField = document.getElementById("acct2fa");
+  const password = passwordField.hidden ? null : passwordField.value;
+  const msg = document.getElementById("acctLoginMsg");
+  if (!ACCT_LOGIN_TOKEN) {
+    msg.textContent = "ابدأ من جديد — اضغط «إرسال رمز التحقّق».";
+    return;
+  }
+  msg.textContent = "يتحقّق...";
+  const res = await api("/channels/accounts/login/verify", {
+    method: "POST",
+    body: JSON.stringify({ login_token: ACCT_LOGIN_TOKEN, code: code || null, password }),
+  });
+  if (!res.ok) {
+    msg.textContent = (await res.json()).detail || "تعذّر التحقّق.";
+    return;
+  }
+  const data = await res.json();
+  if (data.status === "needs_password") {
+    passwordField.hidden = false;
+    msg.textContent = "هذا الحساب لديه تحقّق بخطوتين — أدخل كلمة مروره أعلاه ثم أكّد مجدداً.";
+    return;
+  }
+  toast(`أُضيف الحساب «${data.account.label}».`);
+  resetAccountLoginForm();
+  loadAccounts();
+}
+
+function cancelAccountLogin() {
+  resetAccountLoginForm();
+  document.getElementById("acctLoginMsg").textContent = "";
+}
+
 function accountOptions(selectedId) {
   const auto = `<option value="" ${selectedId == null ? "selected" : ""}>الحساب الافتراضي</option>`;
   return auto + ACCOUNTS.map(a =>

@@ -59,6 +59,8 @@ ASYNC_BY_DESIGN = {
     "app.routers.links.add_links": "awaits request.body() for the size-limited raw read",
     "app.routers.links.recategorize_link": "awaits the domain-instability alert",
     "app.routers.status.report_workflow_run": "awaits the workflow-failure alert",
+    "app.routers.channels.start_account_login": "awaits Telethon's connect() and send_code_request()",
+    "app.routers.channels.verify_account_login": "awaits Telethon's sign_in()",
 }
 
 
