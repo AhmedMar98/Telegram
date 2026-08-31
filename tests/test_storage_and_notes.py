@@ -340,31 +340,10 @@ def test_prune_on_an_empty_database_is_a_no_op(client: TestClient):
     assert counts["action_events"] == 0
 
 
-# --- generated schema doc --------------------------------------------------
-
-
-def test_the_schema_doc_is_current():
-    """A hand-maintained schema doc is wrong the moment a column is added
-    and nothing notices. This regenerates it and compares — a stale doc
-    fails here rather than misleading a reader."""
-    import pathlib
-    import subprocess
-    import sys
-
-    root = pathlib.Path(__file__).resolve().parent.parent
-    doc = root / "docs" / "12-schema.md"
-    before = doc.read_text(encoding="utf-8")
-
-    result = subprocess.run(
-        [sys.executable, "scripts/db_report.py", "--schema"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        env={**__import__("os").environ, "DATABASE_URL": "sqlite:///./local.db"},
-    )
-    assert result.returncode == 0, result.stderr
-
-    after = doc.read_text(encoding="utf-8")
-    if after != before:
-        doc.write_text(before, encoding="utf-8")
-    assert after == before, "docs/12-schema.md is stale — run: python scripts/db_report.py --schema"
+# A generated schema doc (docs/12-schema.md) used to be regenerated and
+# compared here on every run. It was deleted along with the rest of
+# docs/ when documentation was consolidated into DOCS_CONSOLIDATED.md
+# (repository owner's decision). Regenerate it on demand with
+# ``python scripts/db_report.py --schema`` if a standalone schema
+# reference is ever needed again; nothing in CI depends on a committed
+# copy now.

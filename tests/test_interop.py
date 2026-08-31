@@ -11,11 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-import re
-import subprocess
-import sys
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 import yaml
@@ -25,7 +21,6 @@ from app.bookmarks import parse, parse_bookmark_csv, parse_netscape_html
 from app.database import SessionLocal
 from app.errors import ERROR_CODE_HEADER, ErrorCode
 from app.models import Channel, Link, Workspace
-from app.vitality import status_category
 from scripts.import_bookmarks import run as import_bookmarks
 from tests.conftest import register_workspace
 
@@ -354,27 +349,13 @@ def test_the_csv_export_has_a_stable_header_row(client: TestClient):
     assert "category" in header
 
 
-def test_the_export_format_doc_is_current():
-    """Generated from EXPORT_COLUMNS, so a new column with no description
-    fails here rather than shipping an undocumented field to whoever built
-    an integration on it."""
-    result = subprocess.run(
-        [sys.executable, "scripts/export_schema.py", "--check"], capture_output=True, text=True
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_the_doc_describes_exactly_the_served_columns(client: TestClient):
-    """The document and the endpoint compared against each other, not each
-    against a list someone typed."""
-    register_workspace(client, email="js3@example.com", workspace_name="JS3")
-    _add(client, "https://example.com/a.pdf")
-
-    served = set(json.loads(client.get("/links/export.json").text)[0])
-    documented = set(re.findall(r"^\| `(\w+)` \|", Path("docs/18-export-format.md").read_text(), re.M))
-
-    assert served <= documented
+# A hand-written export-format doc used to be generated and cross-checked
+# here (against EXPORT_COLUMNS, and against what /links/export.json
+# actually serves). It lived at docs/18-export-format.md, deleted along
+# with the rest of docs/ when documentation was consolidated into
+# DOCS_CONSOLIDATED.md. Regenerate it on demand with
+# ``python scripts/export_schema.py`` if a written export contract is
+# ever needed again; nothing in CI depends on a committed copy now.
 
 
 # --- the importer script, against a real database --------------------------
@@ -506,29 +487,6 @@ def test_the_front_matter_is_valid_yaml_not_merely_yaml_shaped(client: TestClien
     assert "hi" in parsed["query"]
 
 
-def test_the_documented_vocabularies_are_the_ones_the_code_emits():
-    """This test exists because the first draft of the export document
-    described `source_type` as "channel/manual/import/bot" — four values
-    the code has never produced. The generator guarantees the *field list*
-    is real; only a check like this makes the *descriptions* real too."""
-    doc = Path("docs/18-export-format.md").read_text(encoding="utf-8")
-    source_row = next(line for line in doc.splitlines() if line.startswith("| `source_type`"))
-
-    for emitted in ("text", "hyperlink", "button"):
-        assert f"`{emitted}`" in source_row, f"{emitted} is emitted but not documented"
-
-    status_row = next(line for line in doc.splitlines() if line.startswith("| `status_category`"))
-    for label in ("ok", "redirect", "blocked", "missing", "throttled", "server_error", "unreachable", "unchecked"):
-        assert f"`{label}`" in status_row or label in status_row, f"{label} missing from the doc"
-
-
-def test_the_documented_status_labels_match_the_vitality_module():
-    """Same idea, checked against the code rather than a second list."""
-    doc = Path("docs/18-export-format.md").read_text(encoding="utf-8")
-
-    for label in {
-        status_category(code, alive)
-        for code in (None, 200, 301, 403, 404, 429, 500)
-        for alive in (None, True, False)
-    }:
-        assert label in doc, f"status_category can return {label!r}, which the doc never mentions"
+# Two more doc-vs-code cross-checks (vocabulary and status labels) used to
+# live here, against the same now-deleted docs/18-export-format.md. See
+# the note above.
