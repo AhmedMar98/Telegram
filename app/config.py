@@ -137,6 +137,35 @@ class Settings(BaseSettings):
     # never asked for.
     live_collector_enabled: bool = False
 
+    # --- What the collector is allowed to read ---------------------------
+    # A row in `channels` used to arrive one way only: typed into the
+    # dashboard. That made "collect from Telegram" mean "collect from the
+    # handful you remembered to add", while the groups and private chats
+    # that carry most links stayed unreachable.
+    #
+    # With discovery on, every run asks the account which dialogs it has
+    # and registers the ones it does not know yet. Left on by default
+    # because a collector that silently reads a fraction of what the
+    # account can see is the more surprising of the two behaviours.
+    collector_auto_discover: bool = True
+
+    # Which dialog kinds discovery may register: any comma-separated
+    # subset of channel, group, private — or "all".
+    #
+    # Worth stating plainly rather than burying: `private` means personal
+    # one-to-one conversations, and a stored link carries up to 2,000
+    # characters of the message around it, including messages the other
+    # person wrote. That is a real privacy consequence of a real setting,
+    # so it is written here and in the governance section rather than
+    # discovered later.
+    collector_scope: str = "all"
+
+    # Cap on dialogs one discovery pass may register per account. Bounds
+    # the first run on an account that has hundreds of them; the rest are
+    # picked up on the runs that follow, because discovery is incremental
+    # and never re-registers what it already knows.
+    collector_max_dialogs: int = 200
+
     # --- Telegram bot (webhook mode; no polling worker required) --------
     bot_token: str | None = None
     bot_webhook_secret: str | None = None

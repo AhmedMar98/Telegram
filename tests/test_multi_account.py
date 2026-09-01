@@ -198,13 +198,22 @@ def test_an_undecryptable_account_is_skipped_not_fatal(workspace, monkeypatch):
 
 
 def test_inactive_accounts_are_not_used(workspace, monkeypatch):
+    """A disabled account's session is never started, whatever it owns.
+
+    The assertion is on *which* sessions ran rather than on whether any
+    ran at all: since dialog discovery shipped, an active account with no
+    channels assigned still connects — that is the run finding out what
+    the account can see. What must not happen is the disabled account's
+    session being used, and that is what this pins.
+    """
     _add_account(workspace, "primary")
-    disabled = _add_account(workspace, "disabled", session="disabled" + "x" * 110, active=False)
+    disabled_session = "disabled" + "x" * 110
+    disabled = _add_account(workspace, "disabled", session=disabled_session, active=False)
     _add_channel(workspace, "100", account_id=disabled)
 
     started = _run_collect(monkeypatch, workspace, {SESSION: FakeClient([])})
 
-    assert started == []  # the only active account owns no channels
+    assert disabled_session not in started
     assert _urls(workspace) == set()
 
 

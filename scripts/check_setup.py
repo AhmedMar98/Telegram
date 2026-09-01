@@ -210,7 +210,9 @@ def check_row_level_security() -> None:
 
 
 def check_workspace_and_channels() -> bool:
+    from app.config import get_settings
     from app.database import SessionLocal
+    from app.dialogs import parse_scope
     from app.models import Channel, Link, User, Workspace
     from app.rls import scope_session_to_workspace
 
@@ -247,10 +249,21 @@ def check_workspace_and_channels() -> bool:
         active = (
             db.query(Channel).filter(Channel.workspace_id == workspace_id, Channel.is_active.is_(True)).count()
         )
-        if active == 0:
-            report(WARN, "channels", "no active channels — add them in the dashboard, or nothing is collected")
+        settings = get_settings()
+        kinds = ", ".join(sorted(parse_scope(settings.collector_scope)))
+        if settings.collector_auto_discover:
+            # With discovery on, an empty channel list is the normal state
+            # of a fresh deployment, not a misconfiguration: the first run
+            # registers whatever the account can see. Reporting it as a
+            # warning would train the reader to ignore this line.
+            report(OK, "discovery", f"on — the collector registers the account's dialogs itself (kinds: {kinds})")
+            report(OK if active else WARN, "channels", f"{active} active (the first run adds the rest)")
         else:
-            report(OK, "channels", f"{active} active")
+            report(OK, "discovery", "off — only dialogs added by hand are collected")
+            if active == 0:
+                report(WARN, "channels", "no active channels — add them in the dashboard, or nothing is collected")
+            else:
+                report(OK, "channels", f"{active} active")
 
         report(OK, "links", f"{db.query(Link).filter(Link.workspace_id == workspace_id).count()} collected so far")
         return True
