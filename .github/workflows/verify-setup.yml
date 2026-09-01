@@ -42,4 +42,13 @@ jobs:
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           INVITE_CODE: ${{ secrets.INVITE_CODE }}
+          # The four the scheduled jobs need. They were missing here,
+          # which meant the workflow whose whole job is "tell me what is
+          # not configured" stayed silent about the secrets whose absence
+          # is hardest to notice: no backups, an empty status board, and a
+          # collector that cannot decrypt the session it is meant to use.
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          APP_API_KEY: ${{ secrets.APP_API_KEY }}
         run: python scripts/check_setup.py

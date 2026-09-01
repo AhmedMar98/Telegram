@@ -378,3 +378,94 @@ def test_a_set_backup_passphrase_passes(monkeypatch):
     check_setup.check_optional_features()
 
     assert _statuses()["backup encryption"] == check_setup.OK
+
+
+# --- the secrets only the scheduled workflows need --------------------------
+#
+# Every check above this point asks about the web service. These four are
+# read by GitHub Actions jobs only, and each fails in a way whose symptom
+# is *nothing happening*: no backup message, an empty status board, a
+# collector that cannot decrypt the session it was given. They were absent
+# from both this diagnostic and verify-setup.yml, so the workflow whose
+# entire purpose is "tell me what is not configured" said nothing about
+# the four hardest to notice.
+
+
+def _only_scheduled(monkeypatch, **env):
+    for name in ("FIELD_ENCRYPTION_KEY", "BACKUP_PASSPHRASE", "APP_BASE_URL", "APP_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    check_setup.check_scheduled_job_secrets()
+
+
+def test_the_published_default_key_is_left_to_the_check_that_already_owns_it(monkeypatch):
+    """No second opinion on a secret another check already reports.
+
+    check_optional_features says its piece about the published default;
+    repeating it here in different words is how a diagnostic becomes
+    something people skim.
+    """
+    _only_scheduled(monkeypatch, FIELD_ENCRYPTION_KEY=check_setup._DEFAULT_FIELD_ENCRYPTION_KEY)
+
+    assert "FIELD_ENCRYPTION_KEY" not in _statuses()
+
+
+def test_a_malformed_encryption_key_fails_rather_than_waits_for_the_collector(monkeypatch):
+    """A key that is set but unusable is worse than one that is absent: it
+    reads as configured everywhere until an hourly job fails on it."""
+    _only_scheduled(monkeypatch, FIELD_ENCRYPTION_KEY="not-a-fernet-key")
+
+    assert _statuses()["FIELD_ENCRYPTION_KEY"] == check_setup.FAIL
+
+
+def test_a_well_formed_encryption_key_does_not_claim_more_than_it_knows(monkeypatch):
+    """Whether it matches the *web service's* copy is the question that
+    actually matters, and no single side can answer it. Saying so is the
+    difference between a diagnostic and a false reassurance."""
+    from cryptography.fernet import Fernet
+
+    _only_scheduled(monkeypatch, FIELD_ENCRYPTION_KEY=Fernet.generate_key().decode())
+
+    detail = _details()["FIELD_ENCRYPTION_KEY"]
+    assert _statuses()["FIELD_ENCRYPTION_KEY"] == check_setup.OK
+    assert "cannot be checked" in detail
+
+
+def test_half_configured_status_reporting_is_a_failure_not_a_warning(monkeypatch):
+    """One of the pair without the other cannot work at all, and unlike
+    "neither is set" it is not a deliberate choice — it is a typo."""
+    _only_scheduled(monkeypatch, APP_BASE_URL="https://example.onrender.com")
+
+    assert _statuses()["status board"] == check_setup.FAIL
+
+
+def test_a_plain_http_status_url_is_refused(monkeypatch):
+    _only_scheduled(monkeypatch, APP_BASE_URL="http://example.onrender.com", APP_API_KEY="lipk_abc")
+
+    assert _statuses()["APP_BASE_URL"] == check_setup.FAIL
+
+
+def test_a_key_that_is_not_shaped_like_a_dashboard_key_is_questioned(monkeypatch):
+    _only_scheduled(monkeypatch, APP_BASE_URL="https://example.onrender.com", APP_API_KEY="ghp_wrongkind")
+
+    assert _statuses()["APP_API_KEY"] == check_setup.WARN
+
+
+def test_a_complete_status_pair_passes(monkeypatch):
+    _only_scheduled(monkeypatch, APP_BASE_URL="https://example.onrender.com", APP_API_KEY="lipk_abc123")
+
+    assert _statuses()["status board"] == check_setup.OK
+
+
+def test_the_check_is_actually_wired_into_main(monkeypatch):
+    """Guards the wiring, not the logic.
+
+    Every other test here calls the function directly, so all of them
+    still pass if the call is dropped from main() — which is exactly the
+    shape of guard this project keeps getting bitten by. Deleting the
+    line from main() must fail something.
+    """
+    import inspect
+
+    assert "check_scheduled_job_secrets()" in inspect.getsource(check_setup.main)

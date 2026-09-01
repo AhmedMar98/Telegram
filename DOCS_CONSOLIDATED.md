@@ -1315,6 +1315,54 @@ scripts/env_report.py` — يبنيه من `app/config.py` ومسارات
 `LIVE_COLLECTOR_ENABLED`, `APP_API_KEY`/`APP_BASE_URL` (لتفعيل لوحة
 الحالة).
 
+### أين يوضع كل سرّ — الجدول القاطع
+
+**موضعان مختلفان لا واحد، والخلط بينهما هو أشيع سبب لجمعٍ لا يعمل:**
+لوحة **Render** تخدم الموقع، وأسرار **GitHub Actions** تخدم التشغيلات
+المجدولة. بعض القيم لازمة في الاثنين معاً، **وبالقيمة نفسها حرفياً**.
+
+| السرّ | GitHub Actions | Render | ملاحظة حاسمة |
+|---|---|---|---|
+| `DATABASE_URL` | ✅ | ✅ (تلقائي من `render.yaml`) | نفس القاعدة في الاثنين، وإلّا فالجامع يكتب في مكان والموقع يقرأ من آخر |
+| `FIELD_ENCRYPTION_KEY` | ✅ | ✅ | **يجب أن تتطابق القيمتان.** نسخة Render هي التي شفّرت الجلسات، ونسخة GitHub هي التي تفكّها. اختلافهما = «session string could not be decrypted» كل ساعة |
+| `COLLECTOR_WORKSPACE_ID` | ✅ | ✅ (للجمع الفوري) | رقم مساحة عملك من `GET /auth/me` |
+| `TG_API_ID` · `TG_API_HASH` | ✅ | للجمع الفوري فقط | من my.telegram.org |
+| `TG_SESSION_STRING` | ✅ | للجمع الفوري فقط | **يعادل كلمة مرور حسابك.** لا يُلصَق في أيّ محادثة — بما فيها محادثة مع مساعد ذكي |
+| `BACKUP_PASSPHRASE` | ✅ | ❌ | بدونه **لا نسخ احتياطي إطلاقاً** (`backup.yml` يفشل عمداً بدل رفع نسخة غير مشفَّرة). احفظه خارج المستودع وخارج مكان اعتمادات القاعدة |
+| `APP_BASE_URL` · `APP_API_KEY` | ✅ | ❌ | الاثنان معاً أو لا شيء. واحد بلا الآخر عطل. المفتاح من «مفاتيح API» في اللوحة ويبدأ بـ`lipk_` |
+| `SECRET_KEY` | ✅ | ✅ | يوقّع الكعكة؛ نفس القيمة |
+| `BOT_TOKEN` · `BOT_WEBHOOK_SECRET` · `PUBLIC_BASE_URL` | ✅ | ✅ | لازمة للبوت فقط |
+| `INVITE_CODE` | ✅ | ✅ | يمنع أيّ زائر من التسجيل |
+| `GROQ_API_KEY` | اختياري | اختياري | غيابه يخفّض الدقّة ولا يكسر شيئاً |
+
+**ومتغيّران ليسا سرّين** — يوضعان في **Variables** لا Secrets، لأنّ قيمتهما
+يجب أن تبقى مقروءة لاحقاً: `COLLECTOR_AUTO_DISCOVER` و`COLLECTOR_SCOPE`
+([§٧](#7)).
+
+#### توليد ما يجب توليده — لا تخترع القيم يدوياً
+
+```bash
+# FIELD_ENCRYPTION_KEY  (وتُلصَق نفسها في Render وGitHub)
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# BACKUP_PASSPHRASE و BOT_WEBHOOK_SECRET و SECRET_KEY
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# TG_SESSION_STRING — على جهازك أنت، ولا يخرج منه إلّا إلى حقل السرّ مباشرة
+python scripts/make_session_string.py
+```
+
+#### التحقّق — بضغطة واحدة، وبلا كشف أيّ قيمة
+
+بعد اللصق: **Actions ← Verify setup ← Run workflow**. يقرأ الأسرار ويقول
+عن كل واحد: موجود؟ صالح الشكل؟ متّسق مع أخيه؟ — **ولا يطبع أيّ قيمة
+إطلاقاً**، فسجلّ التشغيلة آمن للقراءة والمشاركة. `FAIL` يجب إصلاحه،
+و`WARN` ميزة اختيارية معطّلة والنظام يعمل بدونها.
+
+**وما لا يستطيع أحد فحصه من طرف واحد:** هل نسخة `FIELD_ENCRYPTION_KEY`
+في GitHub **هي نفسها** التي في Render. الأداة تقول ذلك صراحةً بدل أن
+توحي بأنّها تحقّقت منه.
+
 **قاعدة ثابتة:** لا يُكتب أيّ سرّ في هذا المستودع. المفاتيح تُضبَط في
 لوحة Render (للخدمة) وأسرار GitHub Actions (للتشغيلات المجدولة) فقط.
 
