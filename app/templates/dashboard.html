@@ -82,6 +82,13 @@
             </select>
           </div>
           <div class="field">
+            <label for="platform">المنصّة</label>
+            <select id="platform">
+              <option value="">كل المنصّات</option>
+              {% for p in platforms %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
             <label for="sort">الترتيب</label>
             <select id="sort">
               <option value="date">الأحدث أوّلاً</option>
@@ -246,9 +253,30 @@
   <section>
     <div class="section-head">
       <h2>المحادثات المتابَعة</h2>
-      <p>تُسجَّل تلقائياً من حساب الجمع — قنوات ومجموعات ومحادثات خاصّة. الإضافة اليدوية أدناه للحالات التي تريد فيها محادثة بعينها قبل أوّل تشغيلة.</p>
+      <p>تُسجَّل تلقائياً من حساب الجمع — قنوات ومجموعات ومحادثات خاصّة وبوتات. الإضافة اليدوية أدناه للحالات التي تريد فيها محادثة بعينها قبل أوّل تشغيلة.</p>
     </div>
     <div id="channels"></div>
+
+    <!-- The account-free path, given its own card rather than hidden in a
+         disclosure: it is the answer to the most-asked question about this
+         system ("can I read a channel without risking an account?") and
+         burying the answer is how it kept being asked. -->
+    <div class="card gap-top">
+      <h3>قراءة قناة عامّة بلا حساب</h3>
+      <p class="hint">
+        تُقرأ من معاينة الويب العامّة التي ينشرها تيليجرام — بلا تسجيل دخول وبلا استهلاك أيّ من حسابات الجمع،
+        فلا خطر حظر عليها إطلاقاً. تعمل مع <strong>القنوات العامّة فقط</strong>: المجموعات وروابط الدعوة
+        (‎+‎ أو joinchat) تحتاج حساباً منضمّاً، وسيقول لك النظام ذلك بدل أن يقبلها ويعيد صفراً.
+      </p>
+      <div class="field-row gap-top">
+        <div class="field grow">
+          <label for="publicRef">رابط القناة أو معرّفها</label>
+          <input id="publicRef" type="text" dir="ltr" placeholder="@channel_name أو https://t.me/channel_name">
+        </div>
+        <button type="button" class="btn-primary" data-action="addPublicSource">أضِف مصدراً عامّاً</button>
+      </div>
+      <p id="publicMsg" class="muted" role="status"></p>
+    </div>
     <details class="disclosure gap-top">
       <summary>إضافة محادثة يدوياً</summary>
       <div class="disclosure-body">

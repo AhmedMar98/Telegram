@@ -175,6 +175,14 @@ class Channel(Base):
     # a reader, and collection scope is configured per kind, so it is
     # stored rather than inferred from the id's sign at read time.
     kind: Mapped[str] = mapped_column(String(16), default="channel", server_default="channel")
+    # Which reader owns this row: "userbot" (MTProto) or "public" (the
+    # t.me web preview, which needs no account at all).
+    #
+    # Not descriptive — protective. ``last_message_id`` below is a single
+    # watermark. Two readers on one row means whichever finishes last moves
+    # it past messages the other never read, and those are skipped
+    # permanently with nothing raised. One row, one reader.
+    source: Mapped[str] = mapped_column(String(20), default="userbot", server_default="userbot")
     last_message_id: Mapped[int] = mapped_column(Integer, default=0)
     # When the scheduled collector last read this dialog. Ordering by it
     # (never-collected first) is what keeps the per-run channel cap a
@@ -222,6 +230,17 @@ class Link(Base):
     url: Mapped[str] = mapped_column(Text)
     url_hash: Mapped[str] = mapped_column(String(64), index=True)
     domain: Mapped[str] = mapped_column(String(300), index=True)
+    # Which service the link points at — Telegram, WhatsApp, YouTube, a
+    # plain web page. Deliberately a second axis beside ``category``, not a
+    # replacement for it: a t.me link can be a film or a course, and a
+    # course can live on Telegram or on a university's own site. One column
+    # would force a choice between "how many Telegram links" and "how many
+    # course links", and both are questions people actually ask.
+    #
+    # Stored rather than computed per query because it is filtered and
+    # grouped on; derived deterministically from ``url`` by
+    # ``app.classifier.platform.link_platform``.
+    platform: Mapped[str] = mapped_column(String(20), index=True, default="web", server_default="web")
     category: Mapped[str] = mapped_column(String(50), index=True, default="other")
     confidence: Mapped[float] = mapped_column(default=0.0)
     classified_by: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm

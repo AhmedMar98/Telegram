@@ -447,6 +447,23 @@ details.disclosure.danger-zone > summary { color: var(--danger); }
 .link-card.compact { padding: var(--s-2) var(--s-3); margin-bottom: var(--s-1); }
 .link-card.compact .link-context { display: none; }
 
+/* A small labelled fact, not a control. Distinct from .btn-* on purpose:
+   these are read, never clicked, and giving them button affordances is how
+   an interface teaches people to click things that do nothing. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 0 var(--s-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--fg-soft);
+  font-size: var(--text-xs);
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
 /* --- empty states -------------------------------------------------------- */
 /* A bare sentence in muted grey is what the page used to show when there
    was nothing — indistinguishable from a page that failed to load. */

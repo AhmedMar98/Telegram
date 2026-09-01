@@ -1,0 +1,51 @@
+name: Public sources
+
+# Reads the public channels registered as `source = public` — Telegram's own
+# anonymous web preview at t.me/s/<username>.
+#
+# A separate workflow from Collector, not a step inside it, and the reason
+# is operational rather than tidy:
+#
+#   1. It holds NO Telegram credentials. Collector holds a session string
+#      for a real account; this job holds a database URL and nothing else.
+#      Keeping them in one workflow would give this one access to a
+#      credential it has no use for.
+#   2. Their failures are unrelated. A revoked session stops Collector; a
+#      renamed channel stops a source here. One workflow would make either
+#      failure look like the other in the Actions list.
+#   3. It can be retried freely. There is no account to rate-limit and no
+#      FloodWait to inherit, so it does not need Collector's caution.
+#
+# Runs more often than Collector for the same reason: nothing here is at
+# risk from running often.
+
+on:
+  schedule:
+    - cron: "20 */2 * * *" # every two hours, offset off the hour
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-collector.txt
+
+      - name: Read public sources
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SECRET_KEY: "scraper-process-does-not-serve-http"
+          SCRAPER_MAX_SOURCES: ${{ vars.SCRAPER_MAX_SOURCES }}
+        run: python -m scripts.scrape_public

@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.gzip import GZipMiddleware
 
 from app import live, metrics
-from app.classifier import CATEGORIES
+from app.classifier import CATEGORIES, PLATFORMS
 from app.classifier.llm import probe as groq_probe
 from app.config import get_settings, production_secrets_check
 from app.database import Base, engine, get_db
@@ -419,4 +419,8 @@ def dashboard_page(
     # The header needs to know. Without it every page rendered the signed-out
     # navigation — "دخول" and "تسجيل" offered to somebody already signed in,
     # and no way out except clearing a cookie by hand.
-    return templates.TemplateResponse(request, "dashboard.html", {"categories": CATEGORIES, "authenticated": True})
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {"categories": CATEGORIES, "platforms": PLATFORMS, "authenticated": True},
+    )

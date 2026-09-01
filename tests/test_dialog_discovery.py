@@ -160,8 +160,8 @@ def test_a_person_without_a_title_is_still_named():
 
 
 def test_scope_parsing():
-    assert parse_scope("all") == frozenset({"channel", "group", "private"})
-    assert parse_scope(None) == frozenset({"channel", "group", "private"})
+    assert parse_scope("all") == frozenset({"channel", "group", "private", "bot"})
+    assert parse_scope(None) == frozenset({"channel", "group", "private", "bot"})
     assert parse_scope("channel, group") == frozenset({"channel", "group"})
     # A scope naming nothing known narrows to channels rather than
     # collecting everything: the safe reading of an unreadable setting.
@@ -402,11 +402,117 @@ def test_a_malformed_stored_session_fails_only_its_own_account(workspace_and_acc
         monkeypatch.setattr(collector, "decrypt_field", lambda _: "definitely not a session string")
 
         links, read = asyncio.run(
-            collector._collect_with_account(db, account, [], api_id=1, api_hash="h", is_default=True)
+            collector._collect_with_account(
+                db, account, [], collector._pacer(), api_id=1, api_hash="h", is_default=True
+            )
         )
 
         assert (links, read) == (0, 0)
         assert account.consecutive_failures == 1
         assert "cannot connect" in (account.last_error or "")
+    finally:
+        db.close()
+
+
+# --- bots are their own kind ----------------------------------------------
+#
+# The claim under review was "Telegram models a bot chat as a User, so bots
+# cannot be separated". That is true of the type and false of the entity: a
+# Telethon User carries a `bot` boolean, and the classifier below was
+# already testing for the attribute's existence before discarding what it
+# said.
+
+
+class _Entity:
+    def __init__(self, **fields):
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+
+def test_a_bot_chat_is_classified_as_a_bot_not_a_private_chat():
+    from app.dialogs import dialog_kind
+
+    assert dialog_kind(_Entity(is_user=True, entity=_Entity(bot=True))) == "bot"
+
+
+def test_a_person_is_still_a_private_chat():
+    from app.dialogs import dialog_kind
+
+    assert dialog_kind(_Entity(is_user=True, entity=_Entity(bot=False))) == "private"
+
+
+def test_a_peer_that_cannot_prove_it_is_a_bot_is_treated_as_private():
+    """Fail towards the more cautious of the two settings: `private` is the
+    privacy-sensitive scope, and misfiling a person's chat as a high-volume
+    bot feed is the worse of the two errors."""
+    from app.dialogs import dialog_kind
+
+    assert dialog_kind(_Entity(is_user=True, entity=_Entity())) == "private"
+
+
+def test_bot_is_a_scope_that_can_be_selected_on_its_own():
+    from app.dialogs import parse_scope
+
+    assert parse_scope("bot") == frozenset({"bot"})
+
+
+def test_an_existing_private_row_is_upgraded_to_bot_on_rediscovery(workspace_and_account):
+    """The bug that would have made this feature look finished.
+
+    `register_dialog` only ever overwrote the *default* kind, so every bot
+    chat already on disk — all of them, since "bot" did not exist until now
+    — would have stayed filed as `private` forever. New rows would classify
+    correctly, which is exactly what anyone testing the feature would check.
+    """
+    from app.dialogs import register_dialog
+    from app.models import Channel
+
+    workspace_id, _ = workspace_and_account
+    db = SessionLocal()
+    try:
+        db.add(Channel(workspace_id=workspace_id, tg_channel_id="777", kind="private", username="helperbot"))
+        db.commit()
+
+        register_dialog(
+            db,
+            workspace_id=workspace_id,
+            account_id=None,
+            kind="bot",
+            tg_id="777",
+            username="helperbot",
+            title="Helper",
+        )
+        db.commit()
+
+        row = db.query(Channel).filter(Channel.tg_channel_id == "777").one()
+        assert row.kind == "bot", "an existing private row was never reclassified"
+    finally:
+        db.close()
+
+
+def test_a_bot_row_is_never_demoted_back_to_private(workspace_and_account):
+    """Upgrades go one way. Losing the distinction is not a refinement, and
+    a single ambiguous observation must not undo a confident one."""
+    from app.dialogs import register_dialog
+    from app.models import Channel
+
+    workspace_id, _ = workspace_and_account
+    db = SessionLocal()
+    try:
+        db.add(Channel(workspace_id=workspace_id, tg_channel_id="888", kind="bot", username="knownbot"))
+        db.commit()
+
+        register_dialog(
+            db,
+            workspace_id=workspace_id,
+            account_id=None,
+            kind="private",
+            tg_id="888",
+            username="knownbot",
+            title="Known",
+        )
+        db.commit()
+
+        assert db.query(Channel).filter(Channel.tg_channel_id == "888").one().kind == "bot"
     finally:
         db.close()

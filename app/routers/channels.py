@@ -11,8 +11,10 @@ from app.accounts import reactivate
 from app.audit import record as audit_record
 from app.database import get_db
 from app.deps import get_current_user, get_session_user
+from app.dialogs import SOURCE_PUBLIC, SOURCE_USERBOT, existing_channel
 from app.errors import ErrorCode, rate_limited
 from app.models import Channel, TelegramAccount, User
+from app.publicsource import classify_source
 from app.schemas import (
     AccountLoginStart,
     AccountLoginStartOut,
@@ -21,6 +23,7 @@ from app.schemas import (
     ChannelCreate,
     ChannelOut,
     ChannelUpdate,
+    PublicSourceCreate,
     TelegramAccountOut,
 )
 from app.security import is_action_rate_limited, record_action_event, verify_password, waste_password_time
@@ -307,6 +310,78 @@ def add_channel(
         target_type="channel",
         target_id=str(channel.id),
         detail=payload.username or payload.tg_channel_id,
+    )
+    db.commit()
+    db.refresh(channel)
+    return channel
+
+
+@router.post("/public", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
+def add_public_source(
+    payload: PublicSourceCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> Channel:
+    """Register a public channel to be read with no account at all.
+
+    This is the honest version of "put the link in the web and skip the
+    userbot". It works for exactly one case — a channel with a public
+    username, read through Telegram's own anonymous web preview — and the
+    router refuses everything else *by name* rather than accepting it and
+    producing an empty result that looks like an empty channel.
+    """
+    ref = classify_source(payload.ref)
+    if ref is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="لم أتعرّف على هذا المدخل. المتوقّع: @اسم_القناة أو رابط t.me/اسم_القناة",
+        )
+    if ref.kind == "invite":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "رابط دعوة لمحادثة خاصّة — لا يمكن قراءته بلا حساب. "
+                "أضِفه من «حسابات الجمع» بعد انضمام أحد الحسابات إليه."
+            ),
+        )
+    if ref.kind == "id":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="المعرّف الرقمي لا يُقرأ إلا من حساب منضمّ للمحادثة. استخدم اسم المستخدم العام بدلاً منه.",
+        )
+
+    username = ref.value
+    # The uniqueness key is the workspace's own tg_channel_id, and a public
+    # source is addressed by name, so the name is that id. Checked against
+    # the username column too: the same channel may already be here as a
+    # userbot row, and registering a second row for it would split its
+    # watermark in two — the exact corruption `source` exists to prevent.
+    existing = existing_channel(db, current_user.workspace_id, tg_id=username, username=username)
+    if existing is not None:
+        detail = (
+            "هذه القناة مُتابَعة بالفعل عبر أحد حسابات الجمع، وهي القراءة الأكمل — لا داعي لإضافتها كمصدر عام."
+            if existing.source == SOURCE_USERBOT
+            else "هذا المصدر العام مُضاف مسبقاً."
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+    channel = Channel(
+        workspace_id=current_user.workspace_id,
+        tg_channel_id=username,
+        username=username,
+        title=username,
+        kind="channel",  # the preview exists for broadcast channels and nothing else
+        source=SOURCE_PUBLIC,
+        account_id=None,  # deliberately: no account reads this row
+    )
+    db.add(channel)
+    db.flush()
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="channel.add_public",
+        target_type="channel",
+        target_id=str(channel.id),
+        detail=username,
     )
     db.commit()
     db.refresh(channel)

@@ -22,6 +22,7 @@ from app.classifier import (
     detect_language,
     extract_url_spans,
     hash_url,
+    link_platform,
     split_context,
 )
 from app.models import Channel, Link
@@ -127,6 +128,7 @@ def store_link(
         url=url,
         url_hash=hash_url(url),
         domain=domain_of(url),
+        platform=link_platform(url),
         category=result.category,
         confidence=result.confidence,
         classified_by="llm" if result.matched_rule.startswith("llm") else "rules",

@@ -166,7 +166,49 @@ class Settings(BaseSettings):
     # and never re-registers what it already knows.
     collector_max_dialogs: int = 200
 
+    # --- proactive pacing (anti-ban) ------------------------------------
+    #
+    # Until now the only defence against a ban was reactive: catch
+    # FloodWaitError after Telegram has already decided you were reading
+    # too fast. This adds the missing half — a randomised pause between
+    # dialogs so the request pattern does not look mechanical in the first
+    # place.
+    #
+    # Randomised rather than fixed on purpose: a constant 3-second gap is
+    # itself a signature, and the thing being avoided is *looking like a
+    # program*.
+    collector_pace_min_seconds: float = 1.5
+    collector_pace_max_seconds: float = 4.0
+
+    # The pacing budget, and the reason this is not simply "sleep between
+    # every dialog".
+    #
+    # Naively: 4s x 20 dialogs x 10 accounts = up to 800 seconds added to a
+    # job that runs hourly, on GitHub Actions runners that are already
+    # late under load. The shield would cause the outage it exists to
+    # prevent, and a timed-out run looks exactly like a broken collector.
+    #
+    # So pacing is spent from a budget. While there is budget the collector
+    # paces; when it runs out the collector stops pacing and finishes the
+    # dialogs it has left — the run completes either way, and the rotation
+    # picks up the rest next hour.
+    collector_pace_budget_seconds: float = 240.0
+
     # --- Telegram bot (webhook mode; no polling worker required) --------
+    # Which chats may talk to the bot at all. Comma-separated chat ids.
+    #
+    # Empty means "any chat may talk to it", which is what it has always
+    # done and what every existing deployment depends on — so an empty
+    # value cannot become a lockout on upgrade. Setting it turns the bot
+    # private in the strong sense: an unlisted chat gets no reply, not
+    # even the help text, so the bot's existence is not confirmed to
+    # someone who found it by guessing.
+    #
+    # Note what this is *not*: the link code already prevents an unlisted
+    # chat from reading anyone's data. This closes the smaller gap of a
+    # stranger being able to interact with the bot at all.
+    bot_allowed_chat_ids: str = ""
+
     bot_token: str | None = None
     bot_webhook_secret: str | None = None
     public_base_url: str | None = None  # e.g. https://link-intel-web.onrender.com

@@ -35,6 +35,7 @@ def filtered_links(
     channel_id: int | None = None,
     language: str | None = None,
     domain: str | None = None,
+    platform: str | None = None,
     since: date | None = None,
     until: date | None = None,
     include_archived: bool = False,
@@ -72,6 +73,17 @@ def filtered_links(
         query = query.filter(Link.created_at >= datetime.combine(since, time.min))
     if until is not None:
         query = query.filter(Link.created_at < datetime.combine(until, time.min) + timedelta(days=1))
+
+    # Comma-separated means "any of these", matching how `category` behaves
+    # one filter up. The two are independent axes and combine as an AND:
+    # "Telegram links that are courses" is a question the pair answers and
+    # neither answers alone.
+    if platform:
+        wanted = [part.strip() for part in platform.split(",") if part.strip()]
+        if len(wanted) == 1:
+            query = query.filter(Link.platform == wanted[0])
+        elif wanted:
+            query = query.filter(Link.platform.in_(wanted))
 
     if favorite is not None:
         query = query.filter(Link.is_favorite == favorite)

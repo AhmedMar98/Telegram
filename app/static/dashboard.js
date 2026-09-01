@@ -271,12 +271,14 @@ function currentParams() {
   const params = new URLSearchParams();
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
+  const platform = document.getElementById("platform").value;
   const sort = document.getElementById("sort").value;
   const alive = document.getElementById("aliveFilter").value;
   const channelId = document.getElementById("channelFilter").value;
   const language = document.getElementById("languageFilter").value;
   if (q) params.set("q", q);
   if (category) params.set("category", category);
+  if (platform) params.set("platform", platform);
   if (sort && sort !== "date") params.set("sort", sort);
   if (document.getElementById("favoriteOnly").checked) params.set("favorite", "true");
   if (alive) params.set("alive", alive);
@@ -356,6 +358,7 @@ function linkCard(i, terms) {
   return `<div class="link-card${compact ? " compact" : ""}">
        <a class="link-title" href="/links/${i.id}/open" target="_blank" rel="noopener" title="${escapeText(i.url)}">${highlighted(i.url, terms)}</a>
        <div class="link-meta">
+         <span class="pill" title="المنصّة التي يشير إليها الرابط">${escapeText(i.platform || "web")}</span>
          <span title="${classifierTitle(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
          ${compact ? "" : originBadge(i)}
          <span title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
@@ -756,8 +759,17 @@ function dialogBadge(kind) {
   // Which sort of dialog a link came from is context the reader wants:
   // a link from a private conversation and one from a public channel are
   // not the same thing, even though collection treats them identically.
-  const labels = { channel: "📢 قناة", group: "👥 مجموعة", private: "💬 خاصة" };
+  const labels = { channel: "📢 قناة", group: "👥 مجموعة", private: "💬 خاصة", bot: "🤖 بوت" };
   return `<span class="muted">${labels[kind] || labels.channel}</span>`;
+}
+
+function sourceBadge(source) {
+  // Shown only for public sources. A badge on every row would be noise —
+  // "userbot" is what every row was until this existed and still is by
+  // default — while the public ones behave visibly differently: no
+  // account, no ban risk, and only what the channel chose to publish.
+  if (source !== "public") return "";
+  return `<span class="pill" title="تُقرأ من معاينة الويب العامّة — بلا حساب وبلا خطر حظر">🌐 عامّ</span>`;
 }
 
 function lastCollected(value) {
@@ -786,7 +798,7 @@ async function loadChannels() {
   fillChannelFilter(data);
   document.getElementById("channels").innerHTML = data.map(c =>
     `<div class="card">
-       ${dialogBadge(c.kind)} ${c.title || c.username || c.tg_channel_id}
+       ${dialogBadge(c.kind)} ${sourceBadge(c.source)} ${c.title || c.username || c.tg_channel_id}
        <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}${lastCollected(c.last_collected_at)}</span>
        ${ACCOUNTS.length > 1 ? `<select data-action="reassignChannel" data-args='[${c.id}]' data-pass-value class="indent-s">${accountOptions(c.account_id)}</select>` : ""}
      </div>`
@@ -1527,4 +1539,36 @@ function restoreTab() {
     /* no stored preference is a normal state, not an error */
   }
   if (saved) selectTab(saved, { focus: false });
+}
+
+
+// --- public sources: reading a channel with no account at all -------------
+//
+// The refusal messages matter more than the success path here. The server
+// distinguishes "this is an invite link", "this is a numeric id" and "I
+// could not place this at all", and each one names what would work
+// instead — so the message is shown verbatim rather than flattened into a
+// generic failure, which is what made the same question keep coming back.
+async function addPublicSource() {
+  const input = document.getElementById("publicRef");
+  const note = document.getElementById("publicMsg");
+  const ref = input.value.trim();
+
+  if (!ref) {
+    note.textContent = "أدخل رابط القناة أو معرّفها أوّلاً.";
+    return;
+  }
+
+  const res = await api("/channels/public", { method: "POST", body: JSON.stringify({ ref }) });
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    note.textContent = data.detail || "تعذّرت الإضافة.";
+    return;
+  }
+
+  input.value = "";
+  note.textContent = `أُضيفت «${data.username}» كمصدر عامّ. ستُقرأ في التشغيلة القادمة بلا استهلاك أيّ حساب.`;
+  announce("أُضيف المصدر العامّ.");
+  loadChannels();
 }

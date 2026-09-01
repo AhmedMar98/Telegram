@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.classifier import llm, rules
+from app.classifier.platform import DEFAULT_PLATFORM, PLATFORMS, link_platform
 from app.classifier.rules import (
     ADULT_CATEGORY,
     CATEGORIES,
@@ -27,11 +28,14 @@ def classify_link(url: str, raw_text: str | None = None) -> ClassificationResult
 __all__ = [
     "ADULT_CATEGORY",
     "CATEGORIES",
+    "DEFAULT_PLATFORM",
+    "PLATFORMS",
     "ClassificationResult",
     "classify_link",
     "detect_language",
     "extract_url_spans",
     "extract_urls",
     "hash_url",
+    "link_platform",
     "split_context",
 ]
