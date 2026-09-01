@@ -11,7 +11,7 @@ Three rules keep an alert from becoming a liability:
 
 - **It never blocks the login.** A notification failure is not an
   authentication failure. Everything here is best-effort and swallows its
-  own errors, exactly like the optional Groq tier.
+  own errors.
 - **It is only ever sent to a chat the workspace linked itself.** There is
   no address in the payload and no way to aim one elsewhere.
 - **It says what happened without quoting attacker-controlled text.** A

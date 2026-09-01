@@ -31,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import inspect, text  # noqa: E402
 from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 
-from app.classifier.llm import probe as groq_probe  # noqa: E402
 from app.config import _PUBLISHED_DEFAULTS, Settings, production_secrets_check  # noqa: E402
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -331,23 +330,6 @@ def check_optional_features() -> None:
                 )
         else:
             report(OK, "bot", "token, public URL and webhook secret all set")
-
-    # Actually reached, not merely "set". A revoked key is present in the
-    # environment and completely dead, and reporting OK for it would hide
-    # the one failure this check exists to surface. Never FAIL: the whole
-    # tier is optional, so a dead key degrades the service rather than
-    # breaking it.
-    groq = groq_probe()
-    if groq["status"] == "ok":
-        report(OK, "llm tier", "GROQ_API_KEY set and Groq reachable — low-confidence links get a second opinion")
-    elif groq["status"] == "unauthorized":
-        report(WARN, "llm tier", "GROQ_API_KEY set but rejected by Groq — paste a fresh key from console.groq.com")
-    elif groq["status"] == "unreachable":
-        report(WARN, "llm tier", "GROQ_API_KEY set but Groq could not be reached — network or an outage there")
-    elif groq["status"] == "error":
-        report(WARN, "llm tier", f"GROQ_API_KEY set but Groq answered {groq['detail']}")
-    else:
-        report(WARN, "llm tier", "GROQ_API_KEY not set — rules-only classification (still fully functional)")
 
     # The session cookie's Secure flag is *conditional on configuration*
     # (`secure=settings.environment == "production"`), so a service that

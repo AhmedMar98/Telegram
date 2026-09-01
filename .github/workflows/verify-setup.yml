@@ -40,7 +40,6 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           BOT_WEBHOOK_SECRET: ${{ secrets.BOT_WEBHOOK_SECRET }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           INVITE_CODE: ${{ secrets.INVITE_CODE }}
           # The four the scheduled jobs need. They were missing here,
           # which meant the workflow whose whole job is "tell me what is

@@ -89,13 +89,22 @@ def run(paths: list[Path], workspace_id: int, *, dry_run: bool) -> tuple[IngestS
                 title=f"Bookmarks: {path.name}",
             )
 
-            for index, bookmark in enumerate(parsed.bookmarks, start=1):
+            for bookmark in parsed.bookmarks:
                 ingest_text(
                     db,
                     workspace_id=workspace_id,
                     channel_id=channel.id,
                     text=bookmark.as_text(),
-                    message_id=index,
+                    # Zero, not the row's position in the file. Position
+                    # used to be passed here as a stand-in message id, and
+                    # since §43 a message id is an *identity*: bookmark #1
+                    # of a re-imported file would be "already processed"
+                    # and skipped. That is harmless while the file never
+                    # changes and silently loses a bookmark the moment it
+                    # does — insert one at the top and every position
+                    # shifts onto an id that has already been claimed.
+                    # A bookmark has no Telegram message, and 0 says so.
+                    message_id=0,
                     posted_at=bookmark.added_at,
                     summary=summary,
                 )

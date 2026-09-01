@@ -20,15 +20,14 @@ looking at a false positive — which a score from a language model cannot.
 from __future__ import annotations
 
 import logging
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from app.arabic import normalise
 from app.config import get_settings
-from app.models import Beneficiary, KeywordRule, Lead
+from app.models import Beneficiary, KeywordRule, Lead, Message
 from app.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -44,38 +43,10 @@ def leads_enabled() -> bool:
     return bool(get_settings().leads_enabled)
 
 
-# --- Arabic-aware normalisation -------------------------------------------
-#
-# Matching "مشروع" must find "مشروعي" and "المشروع", and must not miss a
-# word because it was written with a different alef or carries harakat.
-# Without this the rule set has to enumerate spellings, which is how a
-# keyword list becomes unmaintainable and quietly stops matching.
-
-_HARAKAT = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")
-_ALEF = re.compile(r"[آأإٱ]")
-
-
-def normalise(text: str) -> str:
-    """Fold the spelling differences that are not meaning differences."""
-    folded = unicodedata.normalize("NFKC", text or "").lower()
-    folded = _HARAKAT.sub("", folded)
-    folded = _ALEF.sub("ا", folded)  # أ إ آ ٱ  ->  ا
-    folded = folded.replace("ى", "ي")  # ى -> ي
-    folded = folded.replace("ة", "ه")  # ة -> ه
-    folded = re.sub(r"\s+", " ", folded).strip()
-
-    # Strip the definite article from each word. Without this the rule
-    # "مشروع تخرج" does not match "مشروع التخرج" — an article *between*
-    # the two words of a phrase, which is how people actually write it, and
-    # no amount of substring matching gets past it.
-    #
-    # Applied to both the rule and the message, so the two are folded the
-    # same way and the comparison stays symmetric. Skipped when the
-    # remainder would be shorter than three characters, which is what keeps
-    # "الآن" from becoming "ان".
-    return " ".join(
-        word[2:] if word.startswith("ال") and len(word) - 2 >= 3 else word for word in folded.split(" ")
-    )
+# Arabic normalisation lives in app/arabic.py: the classifier folds message
+# text exactly the same way when weighing keywords as evidence, and two
+# foldings that drift apart would make one message match a lead rule and
+# not a category rule for reasons nobody could see.
 
 
 @dataclass
@@ -279,6 +250,13 @@ def forget(db: Session, workspace_id: int, beneficiary_id: int) -> bool:
     Deletes the leads too rather than orphaning them: a lead's text is that
     person's words, so "forget this person" that left their messages behind
     would be a deletion in name only.
+
+    ``messages`` rows are **kept but stripped of attribution**. That row is
+    the provenance of a *link* — the record that a URL came from a
+    particular message in a particular channel — and deleting it would
+    erase the origin of somebody else's data to satisfy this request. What
+    it must not do is keep naming the person, so the sender columns are
+    cleared. Their own words are already gone with the leads.
     """
     person = (
         db.query(Beneficiary)
@@ -291,6 +269,13 @@ def forget(db: Session, workspace_id: int, beneficiary_id: int) -> bool:
     db.query(Lead).filter(Lead.workspace_id == workspace_id, Lead.beneficiary_id == person.id).delete(
         synchronize_session=False
     )
+    if person.tg_user_id:
+        db.query(Message).filter(
+            Message.workspace_id == workspace_id, Message.sender_id == person.tg_user_id
+        ).update(
+            {"sender_id": None, "sender_username": None, "sender_name": None},
+            synchronize_session=False,
+        )
     db.delete(person)
     db.commit()
     return True

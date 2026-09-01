@@ -6,12 +6,8 @@ are worth testing: a false "all clear" would be worse than no check at all.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import httpx
 import pytest
 
-from app.classifier import llm
 from scripts import check_setup
 
 
@@ -216,41 +212,6 @@ def test_real_field_encryption_key_passes(monkeypatch):
 
     check_setup.check_optional_features()
     assert _statuses()["field encryption"] == check_setup.OK
-
-
-def test_a_revoked_groq_key_is_reported_rather_than_passed(monkeypatch):
-    """The failure this check exists for. The key is present in the
-    environment and completely dead — reporting "set" would hide that."""
-    llm.reset_probe_cache()
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="revoked"))
-    monkeypatch.setattr(llm.httpx, "get", lambda *a, **k: httpx.Response(401))
-
-    check_setup.check_optional_features()
-
-    assert _statuses()["llm tier"] == check_setup.WARN
-    assert "rejected by Groq" in _details()["llm tier"]
-
-
-def test_a_working_groq_key_passes(monkeypatch):
-    llm.reset_probe_cache()
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="live"))
-    monkeypatch.setattr(llm.httpx, "get", lambda *a, **k: httpx.Response(200))
-
-    check_setup.check_optional_features()
-
-    assert _statuses()["llm tier"] == check_setup.OK
-
-
-def test_a_dead_llm_tier_never_fails_the_whole_check(monkeypatch):
-    """The tier is optional by design, so an outage there must not make the
-    script report the deployment as broken."""
-    llm.reset_probe_cache()
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="live"))
-    monkeypatch.setattr(llm.httpx, "get", lambda *a, **k: (_ for _ in ()).throw(llm.httpx.ConnectError("x")))
-
-    check_setup.check_optional_features()
-
-    assert _statuses()["llm tier"] != check_setup.FAIL
 
 
 def test_https_without_production_environment_is_a_failure(monkeypatch):

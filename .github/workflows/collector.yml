@@ -8,7 +8,6 @@ name: Collector
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   TG_API_ID, TG_API_HASH, TG_SESSION_STRING, DATABASE_URL,
 #   COLLECTOR_WORKSPACE_ID, FIELD_ENCRYPTION_KEY
-# Optional: GROQ_API_KEY
 #
 # Each run also *discovers*: it asks the account which dialogs it has —
 # channels, groups and private chats — and registers the ones this
@@ -49,7 +48,6 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           COLLECTOR_WORKSPACE_ID: ${{ secrets.COLLECTOR_WORKSPACE_ID }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SECRET_KEY: "collector-process-does-not-serve-http"
           # Repository *variables*, not secrets: neither is a credential,
           # and a variable can be read back in the Actions UI, which is

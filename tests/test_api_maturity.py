@@ -8,17 +8,13 @@ that has not changed — none of which should require parsing English.
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
 
-import httpx
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from app import schemas
-from app.classifier import llm
 from app.database import SessionLocal
 from app.errors import ERROR_CODE_HEADER, ErrorCode
-from app.main import app
 from app.models import TelegramAccount
 from tests.conftest import register_workspace
 
@@ -451,83 +447,6 @@ def test_readiness_carries_no_diagnostics_unless_asked(client: TestClient):
 
     assert body["status"] == "ready"
     assert "diagnostics" not in body
-
-
-def test_the_groq_diagnostic_reports_an_unconfigured_key_as_such(client: TestClient):
-    llm.reset_probe_cache()
-    body = client.get("/readyz", params={"diagnostics": "true"}).json()
-
-    assert body["status"] == "ready"
-    assert body["diagnostics"]["groq"] == {"configured": False, "status": "not_configured", "detail": None}
-
-
-def test_groq_being_down_does_not_make_this_service_unready(monkeypatch):
-    """The point of idea 118's "does not block readiness" clause. Wiring an
-    optional third party into readiness would have Render restart a healthy
-    process because somebody else had an outage."""
-    llm.reset_probe_cache()
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="test-key"))
-    monkeypatch.setattr(
-        llm.httpx, "get", lambda *a, **k: (_ for _ in ()).throw(llm.httpx.ConnectTimeout("timed out"))
-    )
-
-    with TestClient(app) as client:
-        response = client.get("/readyz", params={"diagnostics": "true"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ready"
-    assert response.json()["diagnostics"]["groq"]["status"] == "unreachable"
-
-
-def test_the_diagnostic_separates_a_bad_key_from_an_outage(monkeypatch):
-    """A revoked key is fixed by pasting a new one; an outage is fixed by
-    waiting. One "error" status would not tell the operator which."""
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="test-key"))
-
-    for status_code, expected in ((200, "ok"), (401, "unauthorized"), (403, "unauthorized"), (500, "error")):
-        llm.reset_probe_cache()
-        monkeypatch.setattr(llm.httpx, "get", lambda *a, s=status_code, **k: httpx.Response(s))
-        assert llm.probe()["status"] == expected, status_code
-
-
-def test_the_diagnostic_is_cached_so_it_cannot_be_used_to_amplify(monkeypatch):
-    """/readyz needs no session, so an uncached probe would let anyone turn
-    one cheap request into one outbound request to a third party."""
-    llm.reset_probe_cache()
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="test-key"))
-    calls = []
-
-    def _record(*args, **kwargs):
-        calls.append(1)
-        return httpx.Response(200)
-
-    monkeypatch.setattr(llm.httpx, "get", _record)
-
-    first = llm.probe(now=1000.0)
-    repeated = [llm.probe(now=1000.0 + n) for n in range(1, 30)]
-
-    assert len(calls) == 1
-    assert first["cached"] is False
-    assert all(r["cached"] is True for r in repeated)
-    # And the cache does expire, rather than freezing a stale answer.
-    assert llm.probe(now=1000.0 + llm._PROBE_CACHE_SECONDS + 1)["cached"] is False
-    assert len(calls) == 2
-
-
-def test_the_diagnostic_never_returns_the_key(monkeypatch):
-    """It is a bearer credential on an endpoint that requires no session."""
-    llm.reset_probe_cache()
-    secret = "gsk-do-not-leak-this"
-    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key=secret))
-    monkeypatch.setattr(
-        llm.httpx, "get", lambda *a, **k: (_ for _ in ()).throw(llm.httpx.ConnectError(f"failed for {secret}"))
-    )
-
-    with TestClient(app) as client:
-        raw = client.get("/readyz", params={"diagnostics": "true"}).text
-
-    assert secret not in raw
-    assert "gsk" not in raw
 
 
 def test_a_rejected_password_carries_its_own_code(client: TestClient):

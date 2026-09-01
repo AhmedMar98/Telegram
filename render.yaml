@@ -72,8 +72,6 @@ services:
         generateValue: true
       - key: PUBLIC_BASE_URL
         sync: false
-      - key: GROQ_API_KEY
-        sync: false
       # --- Live collection (app/live.py) ---------------------------------
       #
       # These four are what turn hourly collection into instant collection.

@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import account_login
+from app import account_login, roles
 from app.accounts import reactivate
+from app.assignment import apply_assignments, capacity_per_account, collectable_channels, plan_assignments
 from app.audit import record as audit_record
 from app.database import get_db
 from app.deps import get_current_user, get_session_user
@@ -20,6 +21,8 @@ from app.schemas import (
     AccountLoginStartOut,
     AccountLoginVerify,
     AccountLoginVerifyOut,
+    AssignmentAccountOut,
+    AssignmentReportOut,
     ChannelCreate,
     ChannelOut,
     ChannelUpdate,
@@ -132,6 +135,88 @@ def list_accounts(
         )
         for account in accounts
     ]
+
+
+@router.get("/assignments", response_model=AssignmentReportOut)
+def show_assignments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(roles.require(roles.COLLECTION_MANAGE)),
+) -> AssignmentReportOut:
+    """The current distribution, computed without changing anything.
+
+    A dry run on purpose: an operator opening the panel wants to see where
+    things stand, and a GET that silently rewrites four hundred rows is not
+    a view, it is a side effect nobody asked for.
+    """
+    return _assignment_view(db, current_user.workspace_id, apply=False)
+
+
+@router.post("/assignments/rebalance", response_model=AssignmentReportOut)
+def rebalance_assignments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(roles.require(roles.COLLECTION_MANAGE)),
+) -> AssignmentReportOut:
+    """Redistribute sources across the active accounts, and report.
+
+    The collector already does this at the start of every run; this exists
+    for the operator who has just re-enabled an account and does not want
+    to wait an hour to see stranded sources come back.
+    """
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="assignment.rebalance",
+        target_type="workspace",
+        target_id=str(current_user.workspace_id),
+    )
+    return _assignment_view(db, current_user.workspace_id, apply=True)
+
+
+def _assignment_view(db: Session, workspace_id: int, *, apply: bool) -> AssignmentReportOut:
+    accounts = (
+        db.query(TelegramAccount)
+        .filter(TelegramAccount.workspace_id == workspace_id)
+        .order_by(TelegramAccount.id)
+        .all()
+    )
+    if apply:
+        report = apply_assignments(db, workspace_id)
+    else:
+        active = [account for account in accounts if account.is_active]
+        _, report = plan_assignments(
+            collectable_channels(db, workspace_id), active, capacity=capacity_per_account()
+        )
+    return AssignmentReportOut(
+        moved=report.moved,
+        kept=report.kept,
+        stranded=report.stranded,
+        overflow=report.overflow,
+        capacity_per_account=capacity_per_account(),
+        accounts=[
+            AssignmentAccountOut(
+                account_id=account.id,
+                label=account.label,
+                # Inactive accounts are listed with what they still hold
+                # rather than omitted: "this disabled account is still
+                # named by 300 sources" is the fact that explains why
+                # collection dropped, and hiding it hides the cause.
+                assigned=report.per_account.get(account.id, _held_by(db, workspace_id, account.id)),
+                capacity=capacity_per_account(),
+                is_active=account.is_active,
+            )
+            for account in accounts
+        ],
+    )
+
+
+def _held_by(db: Session, workspace_id: int, account_id: int) -> int:
+    return (
+        db.query(func.count(Channel.id))
+        .filter(Channel.workspace_id == workspace_id, Channel.account_id == account_id)
+        .scalar()
+        or 0
+    )
 
 
 @router.post("/accounts/{account_id}/reactivate", response_model=TelegramAccountOut)

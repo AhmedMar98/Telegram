@@ -214,6 +214,24 @@
     </div>
     <div id="accountHealth"></div>
 
+    <!-- Distribution, next to the accounts it distributes across. The
+         number that matters here is "معلَّقة": sources no live account can
+         open. Rebalancing cannot fix those, and showing them as a count
+         with no names would send an operator hunting. -->
+    <div class="card gap-top">
+      <h3>توزيع المصادر على الحسابات</h3>
+      <p class="hint">
+        كل مصدر يقرأه حساب واحد. القنوات العامّة (@معرّف) تنتقل بين الحسابات بحرّية؛ والخاصّة لا —
+        لا يقرؤها إلا حساب عضو فيها، فإن توقّف حسابها تُعرَض هنا <strong>معلَّقة</strong> بدل أن
+        تُسنَد إلى حساب لا يستطيع فتحها.
+      </p>
+      <div id="assignmentSummary"></div>
+      <button type="button" class="btn-primary gap-top" data-action="rebalanceAssignments">
+        أعد التوزيع الآن
+      </button>
+      <p id="assignmentMsg" class="muted" role="status"></p>
+    </div>
+
     <h3>إضافة حساب جمع</h3>
     <p class="muted">تسجيل دخول حقيقي بحساب تيليجرام. رمز التحقّق وكلمة الجلسة لا يُطلبان إلا هنا، ولا تُعرَض الجلسة لك ولا لأحد بعد حفظها.</p>
     <div id="acctLoginStep1" class="card">

@@ -19,7 +19,7 @@ import pytest
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.dialogs import DEFAULT_KIND, dialog_identity, dialog_kind, parse_scope
+from app.dialogs import DEFAULT_KIND, DEFAULT_SCOPE, dialog_identity, dialog_kind, parse_scope
 from app.models import Channel, TelegramAccount, Workspace
 from app.timeutil import utcnow
 from scripts import collect as collector
@@ -161,8 +161,14 @@ def test_a_person_without_a_title_is_still_named():
 
 def test_scope_parsing():
     assert parse_scope("all") == frozenset({"channel", "group", "private", "bot"})
-    assert parse_scope(None) == frozenset({"channel", "group", "private", "bot"})
     assert parse_scope("channel, group") == frozenset({"channel", "group"})
+    # Absent or blank means the default scope, never everything (§43, ت٥).
+    # It used to mean everything, so an unset COLLECTOR_SCOPE — which is
+    # what a missing repository variable expands to — silently switched on
+    # collection of private conversations.
+    assert parse_scope(None) == DEFAULT_SCOPE == frozenset({"channel", "group"})
+    assert parse_scope("") == DEFAULT_SCOPE
+    assert parse_scope("   ") == DEFAULT_SCOPE
     # A scope naming nothing known narrows to channels rather than
     # collecting everything: the safe reading of an unreadable setting.
     assert parse_scope("nonsense") == frozenset({DEFAULT_KIND})

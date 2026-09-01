@@ -33,7 +33,6 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from app import live, metrics
 from app.classifier import CATEGORIES, PLATFORMS
-from app.classifier.llm import probe as groq_probe
 from app.config import get_settings, production_secrets_check
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
@@ -361,14 +360,11 @@ def readyz(diagnostics: bool = False, db: Session = Depends(get_db)) -> dict:
     process. A read failure degrades to ``None`` — the service is ready if
     the database answers, whether or not this extra fact is available.
 
-    ``?diagnostics=true`` adds a check of the optional Groq tier (idea
-    118). It is opt-in, and deliberately so on both counts: the platform's
-    own probe calls this endpoint on a schedule and must stay cheap, and
-    the result must never change ``status`` or the HTTP code. Groq being
-    down is not this service being down — wiring it into readiness would
-    have Render restart a healthy process because a third party had an
-    outage. See ``app.classifier.llm.probe`` for the rate and timeout
-    limits that keep the unauthenticated path safe.
+    ``?diagnostics=true`` used to add a reachability check of the
+    optional Groq tier (idea 118). That tier was removed in §43, and the
+    parameter is kept as an accepted no-op rather than a 422: it is in
+    deployed probe URLs, and breaking a monitor to delete a flag is a
+    worse trade than answering it with nothing extra.
     """
     try:
         db.execute(text("SELECT 1"))
@@ -387,9 +383,9 @@ def readyz(diagnostics: bool = False, db: Session = Depends(get_db)) -> dict:
 
     body: dict = {"status": "ready", "schema_version": revision}
     if diagnostics:
-        # Nested under "diagnostics" so it reads as what it is, and so a
-        # caller checking readiness never trips over it.
-        body["diagnostics"] = {"groq": groq_probe()}
+        # Empty, not absent: a monitor that reads body["diagnostics"] keeps
+        # working, and gets an honest "nothing optional is configured".
+        body["diagnostics"] = {}
     return body
 
 

@@ -150,21 +150,33 @@ class Settings(BaseSettings):
     collector_auto_discover: bool = True
 
     # Which dialog kinds discovery may register: any comma-separated
-    # subset of channel, group, private — or "all".
+    # subset of channel, group, private, bot — or "all".
     #
-    # Worth stating plainly rather than burying: `private` means personal
-    # one-to-one conversations, and a stored link carries up to 2,000
-    # characters of the message around it, including messages the other
-    # person wrote. That is a real privacy consequence of a real setting,
-    # so it is written here and in the governance section rather than
-    # discovered later.
-    collector_scope: str = "all"
+    # **Defaults to channels and groups only.** It used to default to
+    # "all", which meant a deployment collected personal one-to-one
+    # conversations because nobody had typed a value, not because anybody
+    # had decided to. A stored link carries up to 2,000 characters of the
+    # message around it, including what the other person wrote, so
+    # `private` is a real privacy decision and now has to be made
+    # explicitly. `bot` is opt-in for a different reason: bot feeds are
+    # high-volume and would swamp a 1 GiB database with content nobody
+    # chose to follow.
+    collector_scope: str = "channel,group"
 
     # Cap on dialogs one discovery pass may register per account. Bounds
     # the first run on an account that has hundreds of them; the rest are
     # picked up on the runs that follow, because discovery is incremental
     # and never re-registers what it already knows.
     collector_max_dialogs: int = 200
+
+    # How many sources the assignment engine gives one account before it
+    # starts reporting overflow (app/assignment.py).
+    #
+    # **An operating limit, not a safety claim.** What an account can carry
+    # depends on the dialogs, their message rate, the account's age and
+    # Telegram's limits on the day — none of which this system measures. So
+    # it is configurable, and no number here is promised to be safe.
+    assignment_capacity_per_account: int = 200
 
     # --- proactive pacing (anti-ban) ------------------------------------
     #
@@ -242,14 +254,6 @@ class Settings(BaseSettings):
     bot_webhook_secret: str | None = None
     public_base_url: str | None = None  # e.g. https://link-intel-web.onrender.com
 
-    # --- Optional free-tier LLM classification tier ----------------------
-    # Left empty by default: the platform is fully functional (rules-based
-    # classification) with zero external API calls and zero cost. Setting
-    # this key only *adds* accuracy on top of the free tier, using Groq's
-    # free API tier, and never blocks a request if it is absent or fails.
-    groq_api_key: str | None = None
-    groq_model: str = "llama-3.1-8b-instant"
-
     # --- Deploy identity (idea 187) ----------------------------------------
     # Render sets RENDER_GIT_COMMIT on every build from a repository, so
     # the running code identifies itself without anything being written by
@@ -269,13 +273,6 @@ class Settings(BaseSettings):
     # Render's number.
     storage_limit_bytes: int = 1_073_741_824  # 1 GiB
     storage_alert_fraction: float = 0.8
-
-    # Idea 160. Warn while there is still enough quota left to matter: at
-    # 10% of a daily allowance there is usually most of a day to react, and
-    # a threshold much lower would fire only once the tier had effectively
-    # already stopped. Only ever consulted when a Groq response actually
-    # reported a limit — see app/classifier/llm.py.
-    groq_quota_alert_fraction: float = 0.1
 
     # --- Field-level encryption -------------------------------------------
     # Encrypts secrets that (unlike passwords or session tokens) must be

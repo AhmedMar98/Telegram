@@ -67,6 +67,7 @@ TENANT_SETTING = "app.workspace_id"
 # Tables carrying workspace_id whose every writer runs with a tenant set.
 PROTECTED_TABLES: tuple[str, ...] = (
     "channels",
+    "messages",
     "audit_log",
     "notification_preferences",
     "notifications",
@@ -229,8 +230,8 @@ def rls_effective(db: Session) -> RlsStatus:
     - a table has RLS enabled but not FORCED, so the owner bypasses it
 
     Returns a description rather than a bare bool so the answer can be
-    shown, logged, and acted on — the same reason the Groq quota reader
-    reports what it saw instead of a verdict.
+    shown, logged, and acted on: "RLS is not protecting anything here"
+    and "RLS is off" need different responses.
     """
     if db.bind is None or db.bind.dialect.name != "postgresql":
         return RlsStatus(

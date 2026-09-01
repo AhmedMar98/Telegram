@@ -27,7 +27,6 @@ Required environment (set as GitHub Actions secrets):
 
 Optional:
   COLLECTOR_MESSAGE_LIMIT - messages scanned per channel per run (default 200)
-  GROQ_API_KEY            - enables the optional free LLM classification tier
 """
 
 from __future__ import annotations
@@ -48,13 +47,15 @@ from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
 from app.accounts import record_failure, record_success  # noqa: E402
-from app.alerts import COLLECTOR_FAILED, GROQ_QUOTA  # noqa: E402
+from app.alerts import COLLECTOR_FAILED  # noqa: E402
+from app.assignment import apply_assignments  # noqa: E402
 from app.audit import record as audit_record  # noqa: E402
-from app.classifier.llm import lowest_quota  # noqa: E402
 from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.dialogs import (
+    IMPORT_CHANNEL_PREFIX,
+    MANUAL_CHANNEL_ID,
     SOURCE_USERBOT,
     dialog_identity,
     dialog_kind,
@@ -185,6 +186,10 @@ async def _collect_channel(
                 # which is exactly what the pacing budget exists to hold
                 # down.
                 sender_id=str(message.sender_id) if getattr(message, "sender_id", None) else None,
+                # Evidence, not decoration: a channel called "أفلام" is a
+                # real signal about a bare URL posted in it, and this is
+                # the one place that already holds the row.
+                channel_title=channel.title,
                 keyword_rules=keyword_rules,
                 summary=summary,
             )
@@ -347,6 +352,12 @@ def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, i
     query = db.query(Channel).filter(
         Channel.workspace_id == workspace_id,
         Channel.is_active.is_(True),
+        # Rows that stand for no Telegram dialog: the manual-entry bucket
+        # and one per import file. get_entity("manual") cannot succeed, so
+        # every run spent a round trip failing on each of them and logged a
+        # warning that meant nothing.
+        Channel.tg_channel_id != MANUAL_CHANNEL_ID,
+        Channel.tg_channel_id.notlike(f"{IMPORT_CHANNEL_PREFIX}%"),
         # Rows the public scraper owns are excluded here and only here.
         # They carry their own watermark and the scraper advances it; a
         # userbot reading the same row would move that watermark past
@@ -572,41 +583,6 @@ async def _collect_with_account(
         await client.disconnect()
 
 
-async def _warn_on_groq_quota(db: Session, workspace_id: int) -> None:
-    """Idea 160: warn while there is still quota left to warn about.
-
-    Reads only what a Groq response actually reported during this run. If
-    the optional tier is unconfigured, was never called, or reports no
-    rate-limit headers at all, ``lowest_quota()`` is None and nothing is
-    sent — the idea is conditional on those headers existing, and this is
-    where that condition is honoured rather than assumed.
-
-    The collector is the right place for the check because it is where
-    classification happens in bulk; the web process classifies one link at
-    a time, on a manual paste.
-    """
-    reading = lowest_quota()
-    if reading is None:
-        return
-
-    fraction = reading.fraction_left
-    if fraction > get_settings().groq_quota_alert_fraction:
-        return
-
-    await raise_alert(
-        db,
-        workspace_id,
-        GROQ_QUOTA.key,
-        title="⏳ اقتراب نفاد حصة Groq",
-        body=(
-            f"المتبقّي من حصّة «{reading.dimension}» هو {reading.remaining:.0f} "
-            f"من {reading.limit:.0f} ({fraction * 100:.0f}٪).\n"
-            "عند النفاد يعود التصنيف إلى القواعد وحدها — وهو السلوك المصمَّم، "
-            "لا عطل: لا يتوقّف الجمع ولا البحث."
-        ),
-    )
-
-
 async def collect() -> None:
     api_id = int(os.environ["TG_API_ID"])
     api_hash = os.environ["TG_API_HASH"]
@@ -636,6 +612,22 @@ async def collect() -> None:
         # channel that has not been assigned to a specific account.
         default_account_id = accounts[0].id
         auto_discover = get_settings().collector_auto_discover
+
+        # Distribute sources across the accounts before reading any of
+        # them. Runs every time rather than on a button, because the input
+        # it reacts to — an account disabled after three failures — is
+        # itself automatic, and an assignment that only refreshes when a
+        # human remembers to click is an assignment that is wrong exactly
+        # when it matters.
+        report = apply_assignments(db, workspace_id)
+        if report.moved or report.needs_attention:
+            logger.info(
+                "assignment: %d moved, %d kept, %d stranded, %d over capacity",
+                report.moved,
+                report.kept,
+                len(report.stranded),
+                len(report.overflow),
+            )
 
         total = 0
         collected_channels = 0
@@ -694,7 +686,6 @@ async def collect() -> None:
         # Idea 152. Sent once for the whole run, after every channel has
         # committed, so nothing is announced that a rollback took back.
         await report_adult_links(db, workspace_id, run.adult_urls)
-        await _warn_on_groq_quota(db, workspace_id)
 
         logger.info(
             "done: %d new link(s) across %d channel(s) using %d account(s)",

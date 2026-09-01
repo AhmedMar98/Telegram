@@ -70,7 +70,7 @@ _LINK_EXAMPLE: dict[str, Any] = {
     "platform": "web",
     "category": "programming",
     "confidence": 0.92,
-    "classified_by": "rules",
+    "classified_by": "rules-v2",
     "is_favorite": True,
     "matched_rule": "domain:peps.python.org",
     "source_type": "channel",
@@ -238,6 +238,49 @@ class TelegramAccountOut(BaseModel):
     channel_count: int
 
     model_config = _config(_ACCOUNT_EXAMPLE, from_attributes=True)
+
+
+class AssignmentAccountOut(BaseModel):
+    """One account's share of the sources, after a planning pass."""
+
+    account_id: int
+    label: str
+    assigned: int
+    capacity: int
+    is_active: bool
+
+    model_config = _config(
+        {"account_id": 3, "label": "حساب أ", "assigned": 84, "capacity": 200, "is_active": True}
+    )
+
+
+class AssignmentReportOut(BaseModel):
+    """What the assignment engine decided, in the operator's terms.
+
+    ``stranded`` is the field worth reading: those sources have no account
+    that can open them, and no amount of rebalancing will fix it — it takes
+    an account being re-enabled, or a new account joining that channel. It
+    is a list of names rather than a count so the answer to "which ones?"
+    does not require a second call.
+    """
+
+    moved: int
+    kept: int
+    stranded: list[str]
+    overflow: list[str]
+    capacity_per_account: int
+    accounts: list[AssignmentAccountOut]
+
+    model_config = _config(
+        {
+            "moved": 7,
+            "kept": 120,
+            "stranded": ["-1001234567890"],
+            "overflow": [],
+            "capacity_per_account": 200,
+            "accounts": [{"account_id": 3, "label": "حساب أ", "assigned": 84, "capacity": 200, "is_active": True}],
+        }
+    )
 
 
 class AccountLoginStart(BaseModel):
