@@ -7,6 +7,8 @@ or writes a link.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -17,6 +19,18 @@ from app.models import BotLink, BotLinkCode
 from app.timeutil import utcnow
 
 router = Router(name="onboarding")
+
+# How long a link code stays usable.
+#
+# It used to be forever: the only condition was ``used_at IS NULL``. A code
+# is a bearer credential — whoever sends it to the bot gets read access to
+# the whole workspace's links — and it is generated on a dashboard, copied
+# through a clipboard, and often pasted into a chat where it stays visible
+# in the history. An unused one from last year still worked.
+#
+# Fifteen minutes is the span between generating a code and sending it,
+# which is the only thing it exists for. Regenerating is one click.
+LINK_CODE_TTL = timedelta(minutes=15)
 
 
 @router.message(Command("start"))
@@ -31,9 +45,19 @@ async def handle_start(message: Message, command: CommandObject, db: Session) ->
             await message.answer(help_text(False))
         return
 
-    record = db.query(BotLinkCode).filter(BotLinkCode.code == code, BotLinkCode.used_at.is_(None)).first()
+    record = (
+        db.query(BotLinkCode)
+        .filter(
+            BotLinkCode.code == code,
+            BotLinkCode.used_at.is_(None),
+            BotLinkCode.created_at >= utcnow() - LINK_CODE_TTL,
+        )
+        .first()
+    )
     if record is None:
-        await message.answer("رمز غير صالح أو مستخدم من قبل.")
+        # One message for invalid, used and expired alike. Distinguishing
+        # them would tell someone trying codes which guesses were once real.
+        await message.answer("رمز غير صالح أو منتهي الصلاحية. ولّد رمزاً جديداً من اللوحة.")
         return
 
     record.used_at = utcnow()

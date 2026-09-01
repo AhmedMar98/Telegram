@@ -3,16 +3,34 @@
 {% block content %}
 <h2>إنشاء مساحة عمل جديدة</h2>
 <div class="card">
-  <form id="regForm" class="row stack">
-    <input name="workspace_name" placeholder="اسم مساحة العمل" required>
-    <input type="email" name="email" placeholder="البريد الإلكتروني" required>
-    <input type="password" name="password" placeholder="كلمة المرور (٨ أحرف على الأقل)" minlength="8" required>
+  <form id="regForm">
+    <div class="field">
+      <label for="workspace_name">اسم مساحة العمل</label>
+      <input id="workspace_name" name="workspace_name" required>
+      <span class="hint">الحاوية التي تملك روابطك ومحادثاتك — يمكن تغييرها لاحقاً</span>
+    </div>
+    <div class="field gap-top">
+      <label for="email">البريد الإلكتروني</label>
+      <input id="email" type="email" name="email" autocomplete="username" dir="ltr" required>
+    </div>
+    <div class="field gap-top">
+      <label for="password">كلمة المرور</label>
+      <input id="password" type="password" name="password" autocomplete="new-password" minlength="8" required>
+      <span class="hint">٨ أحرف على الأقل. بلا قواعد تركيب إجبارية وبلا انتهاء دوري</span>
+    </div>
     {% if invite_required %}
-    <input name="invite_code" placeholder="رمز الدعوة" required>
+    <div class="field gap-top">
+      <label for="invite_code">رمز الدعوة</label>
+      <input id="invite_code" name="invite_code" required>
+      <span class="hint">مضبوط على هذا النشر، فالتسجيل ليس مفتوحاً للجميع</span>
+    </div>
     {% endif %}
-    <button type="submit">إنشاء الحساب</button>
-    <p id="err" class="error"></p>
+    <div class="row gap-top">
+      <button type="submit" class="btn-primary">إنشاء الحساب</button>
+    </div>
+    <p id="err" class="error" role="alert"></p>
   </form>
 </div>
+<p class="muted">لديك حساب؟ <a href="/login">سجّل الدخول</a></p>
 <script src="/static/register.js"></script>
 {% endblock %}

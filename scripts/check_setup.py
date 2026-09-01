@@ -456,6 +456,78 @@ def check_production_secrets() -> None:
     )
 
 
+def check_scheduled_job_secrets() -> None:
+    """What the *scheduled* jobs need beyond what the web service needs.
+
+    Deliberately narrow, because it would be easy to make it wide and
+    wrong: ``BACKUP_PASSPHRASE`` and ``FIELD_ENCRYPTION_KEY`` are already
+    reported by check_optional_features, and a second line about the same
+    secret in different words is how a diagnostic teaches people to skim
+    it. What is *not* covered anywhere else is what this adds:
+
+    - **The status-board pair.** ``APP_BASE_URL`` and ``APP_API_KEY``
+      together are what lets a scheduled run report its outcome. Neither
+      set is a choice; exactly one set is a typo that cannot work. And an
+      unreported run leaves the board empty — which reads exactly like
+      every run having stopped, the one ambiguity the board exists to
+      remove.
+    - **Whether the encryption key is usable at all**, as opposed to
+      merely non-default. A key that is set but malformed reads as
+      configured everywhere until an hourly collector fails on it.
+    - **The thing no single side can check**: whether this copy of
+      ``FIELD_ENCRYPTION_KEY`` is the *same* value the web service holds.
+      It has to be — that copy encrypted the rows this one must read — and
+      saying so is the difference between a diagnostic and a false
+      reassurance.
+
+    Nothing here prints a value. Presence, shape and length only.
+    """
+    key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
+    if key and key != _DEFAULT_FIELD_ENCRYPTION_KEY:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(key.encode())
+        except Exception:  # noqa: BLE001 - any rejection means the same thing to the reader
+            report(
+                FAIL,
+                "FIELD_ENCRYPTION_KEY",
+                "set but not a valid Fernet key — every job that decrypts a session string will fail on it. "
+                'Regenerate with: python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"',
+            )
+        else:
+            report(
+                OK,
+                "FIELD_ENCRYPTION_KEY",
+                "well-formed — but whether it is the same value the web service uses cannot be checked "
+                "from here, and it has to be: that copy encrypted the rows this one reads",
+            )
+
+    base = os.environ.get("APP_BASE_URL", "")
+    api_key = os.environ.get("APP_API_KEY", "")
+    if not base and not api_key:
+        report(
+            WARN,
+            "status board",
+            "APP_BASE_URL and APP_API_KEY not set — scheduled runs cannot report their outcome, so the "
+            "board stays empty, which reads exactly like every run having stopped",
+        )
+    elif not (base and api_key):
+        missing = "APP_API_KEY" if base else "APP_BASE_URL"
+        report(FAIL, "status board", f"{missing} is missing while the other is set — reporting cannot work")
+    elif not base.startswith("https://"):
+        report(FAIL, "APP_BASE_URL", "must be https — the API key would otherwise travel in clear text")
+    elif not api_key.startswith("lipk_"):
+        report(
+            WARN,
+            "APP_API_KEY",
+            'does not start with "lipk_" — dashboard-issued keys do, so this may be the wrong value',
+        )
+    else:
+        report(OK, "status board", "APP_BASE_URL and APP_API_KEY set — scheduled runs can report in")
+
+
 def main() -> int:
     print("Setup check\n" + "=" * 72)
     healthy = check_core_env()
@@ -467,6 +539,7 @@ def main() -> int:
             check_workspace_and_channels()
         healthy = check_telegram_credentials() and healthy
     check_optional_features()
+    check_scheduled_job_secrets()
     check_production_secrets()
 
     failures = [c for status, c, _ in results if status == FAIL]

@@ -3,11 +3,24 @@
 {% block content %}
 <h2>تسجيل الدخول</h2>
 <div class="card">
-  <form id="loginForm" class="row stack">
-    <input type="email" name="email" placeholder="البريد الإلكتروني" required>
-    <input type="password" name="password" placeholder="كلمة المرور" required>
-    <button type="submit">دخول</button>
-    <p id="err" class="error"></p>
+  <form id="loginForm">
+    <div class="field">
+      <label for="email">البريد الإلكتروني</label>
+      <input id="email" type="email" name="email" autocomplete="username" dir="ltr" required>
+    </div>
+    <div class="field gap-top">
+      <label for="password">كلمة المرور</label>
+      <input id="password" type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <div class="field gap-top" id="totpField" hidden>
+      <label for="totpCode">رمز التحقّق بخطوتين</label>
+      <input id="totpCode" name="totp_code" inputmode="numeric" dir="ltr" autocomplete="one-time-code">
+      <span class="hint">من تطبيق المصادقة، أو أحد رموز الاسترداد</span>
+    </div>
+    <div class="row gap-top">
+      <button type="submit" class="btn-primary">دخول</button>
+    </div>
+    <p id="err" class="error" role="alert"></p>
   </form>
 </div>
 <p class="muted">لا تملك حساباً؟ <a href="/register">أنشئ مساحة عمل جديدة</a></p>

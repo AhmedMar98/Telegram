@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="منصّة استخبارات الروابط">
+  <!-- Two interlocking links. Drawn rather than emoji so the mark is the
+       same shape on every platform, and as SVG so one file covers every
+       size a browser or an installed shortcut asks for. -->
+  <rect width="32" height="32" rx="7" fill="#1a56d6"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round">
+    <path d="M13 19.5 19.5 13"/>
+    <path d="M11.5 15.5 9 18a4.2 4.2 0 0 0 5.9 5.9l2.5-2.5"/>
+    <path d="M20.5 16.5 23 14a4.2 4.2 0 0 0-5.9-5.9l-2.5 2.5"/>
+  </g>
+</svg>

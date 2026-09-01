@@ -4,17 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}منصة استخبارات الروابط{% endblock %}</title>
+<!-- Without this every page load asked for /favicon.ico, got a 404, and
+     left the browser tab showing a blank sheet — the one part of the
+     interface that stays visible when the tab is not. -->
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <header>
-  <strong>🔗 منصة استخبارات الروابط</strong>
-  <nav>
-    <a href="/">الرئيسية</a>
+  <a href="/" class="brand">🔗 منصّة استخبارات الروابط</a>
+  <nav aria-label="التنقّل الرئيسي">
+    {% if authenticated %}
+    <a href="/dashboard">اللوحة</a>
+    <button type="button" class="btn-ghost" data-action="logout">خروج</button>
+    {% else %}
     <a href="/login">دخول</a>
-    <a href="/register">تسجيل</a>
-    <button id="themeToggle" type="button" data-action="cycleTheme" title="تبديل المظهر"></button>
+    <a href="/register">حساب جديد</a>
+    {% endif %}
+    <button id="themeToggle" type="button" class="btn-icon" data-action="cycleTheme" title="تبديل المظهر"></button>
   </nav>
 </header>
 <main>

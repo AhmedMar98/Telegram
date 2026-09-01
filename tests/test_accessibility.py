@@ -39,6 +39,12 @@ def contrast(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def _stylesheet() -> str:
+    return (__import__("pathlib").Path(__file__).resolve().parent.parent / "app/static/app.css").read_text(
+        encoding="utf-8"
+    )
+
+
 def _palette(theme: str) -> dict[str, str]:
     """Read the live tokens out of the stylesheet rather than duplicating them.
 
@@ -49,16 +55,17 @@ def _palette(theme: str) -> dict[str, str]:
     app/static/app.css when the CSP dropped 'unsafe-inline' from
     style-src; the tokens and this test's purpose are unchanged.
     """
-    css = (__import__("pathlib").Path(__file__).resolve().parent.parent / "app/static/app.css").read_text(
-        encoding="utf-8"
-    )
+    css = _stylesheet()
 
     if theme == "light":
         block = css.split(":root {", 1)[1].split("}", 1)[0]
     else:
         block = css.split(':root[data-theme="dark"] {', 1)[1].split("}", 1)[0]
 
-    return dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", block))
+    # The digit in the character class is not cosmetic: without it --surface-2
+    # silently fell out of the palette, and every pair measured against it was
+    # skipped rather than failed.
+    return dict(re.findall(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", block))
 
 
 def test_the_contrast_formula_agrees_with_known_values():
@@ -72,16 +79,25 @@ def test_the_contrast_formula_agrees_with_known_values():
     ("foreground", "background", "minimum", "label"),
     [
         ("fg", "bg", AA_NORMAL_TEXT, "body text on the page"),
-        ("fg", "card-bg", AA_NORMAL_TEXT, "body text on a card"),
+        ("fg", "surface", AA_NORMAL_TEXT, "body text on a card"),
+        ("fg-soft", "bg", AA_NORMAL_TEXT, "secondary text on the page"),
+        ("fg-soft", "surface", AA_NORMAL_TEXT, "secondary text on a card"),
         ("muted", "bg", AA_NORMAL_TEXT, "muted text on the page"),
-        ("muted", "card-bg", AA_NORMAL_TEXT, "muted text on a card"),
+        ("muted", "surface", AA_NORMAL_TEXT, "muted text on a card"),
+        ("muted", "surface-2", AA_NORMAL_TEXT, "muted text on a tile"),
         ("accent", "bg", AA_NORMAL_TEXT, "links on the page"),
-        ("accent", "card-bg", AA_NORMAL_TEXT, "links on a card"),
+        ("accent", "surface", AA_NORMAL_TEXT, "links on a card"),
+        ("accent", "accent-soft", AA_NORMAL_TEXT, "accent text on its own tint"),
         ("danger", "bg", AA_NORMAL_TEXT, "error text"),
-        ("fg", "tag-bg", AA_NORMAL_TEXT, "highlighted search term"),
-        # The one that was failing: 1.54 in light, 1.56 in dark.
+        ("danger", "surface", AA_NORMAL_TEXT, "error text on a card"),
+        ("success", "surface", AA_NORMAL_TEXT, "the live count on a tile"),
+        ("fg", "surface-2", AA_NORMAL_TEXT, "highlighted search term"),
+        # These two were the original failure: 1.54 in light, 1.56 in dark.
         ("border", "bg", AA_NON_TEXT, "input border on the page"),
-        ("border", "card-bg", AA_NON_TEXT, "input border on a card"),
+        ("border", "surface", AA_NON_TEXT, "input border on a card"),
+        # New with the redesign: a filled primary button is the one place
+        # where text sits on the accent rather than beside it.
+        ("accent-fg", "accent", AA_NORMAL_TEXT, "label on a primary button"),
     ],
 )
 def test_palette_meets_wcag_aa(theme: str, foreground: str, background: str, minimum: float, label: str):
@@ -93,7 +109,21 @@ def test_palette_meets_wcag_aa(theme: str, foreground: str, background: str, min
 def test_both_themes_define_every_token_the_tests_check():
     """A token defined only under a media query would make the test above
     silently skip the case it is meant to cover."""
-    expected = {"bg", "fg", "muted", "border", "card-bg", "tag-bg", "accent", "danger"}
+    expected = {
+        "bg",
+        "surface",
+        "surface-2",
+        "fg",
+        "fg-soft",
+        "muted",
+        "border",
+        "border-soft",
+        "accent",
+        "accent-fg",
+        "accent-soft",
+        "danger",
+        "success",
+    }
     assert expected <= set(_palette("light"))
     assert expected <= set(_palette("dark"))
 
@@ -204,8 +234,48 @@ def test_urls_are_bidi_isolated(dashboard: str):
     assert "unicode-bidi: isolate" in dashboard
 
 
-def test_touch_targets_have_a_minimum_size(dashboard: str):
-    assert "min-height: 2.25rem" in dashboard
+TOUCH_TARGET_FLOOR_REM = 2.25  # WCAG 2.5.8 minimum target size, 36px at the default root size
+
+
+def test_every_control_declares_a_touch_target_size():
+    """The base rule has to set a floor, or a control that never gets its
+    own min-height inherits nothing and collapses to its text height."""
+    css = _stylesheet()
+
+    base = css.split("input, select, textarea, button {", 1)[1].split("}", 1)[0]
+
+    assert "min-height:" in base, "the base control rule sets no minimum height"
+
+
+def test_no_control_is_shrunk_below_the_touch_target_floor():
+    """Reading the declared values beats grepping for one magic string: the
+    old assertion passed as long as the literal '2.25rem' appeared anywhere,
+    so shrinking a *different* control regressed nothing.
+
+    Scoped to rules that actually target something tappable. A 1px divider
+    with a min-height is not a touch target, and failing it would push the
+    next person to rename the property rather than fix a real problem.
+    """
+    css = _stylesheet()
+
+    # No \b before the class patterns: a word boundary cannot fire between a
+    # newline and a ".", so "\b\.btn\b" silently matched nothing and every
+    # class-selected control was skipped. The bare-element names keep theirs
+    # so "select" does not match "selection".
+    interactive = re.compile(r"\b(?:button|input|select|textarea)\b|\.(?:btn|tab|check|chip)")
+    offenders = []
+    found_any = False
+
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        for value in re.findall(r"min-height:\s*([\d.]+)rem", body):
+            if not interactive.search(selector):
+                continue
+            found_any = True
+            if float(value) < TOUCH_TARGET_FLOOR_REM:
+                offenders.append(f"{selector.strip()} → {value}rem")
+
+    assert found_any, "no interactive rule declares a min-height — did the selectors change?"
+    assert not offenders, f"controls below the {TOUCH_TARGET_FLOOR_REM}rem floor: {offenders}"
 
 
 # --- collector health -----------------------------------------------------

@@ -304,13 +304,34 @@ class BotLinkCode(Base):
 
 
 class BotLink(Base):
-    """A Telegram chat authorized to query one workspace through the bot."""
+    """A Telegram chat authorized to query one workspace through the bot.
+
+    The three ``last_*`` columns are the chat's most recent result filter.
+    They exist because the number in a result line ("3. [news] ...") is a
+    position *within the active filter and page*, while ``/details 3`` had
+    no way to know what that filter was and re-queried the unfiltered list
+    — so after any search it answered with a different link than the one
+    numbered 3 on screen.
+
+    A Telegram callback arrives with no memory of what produced it, and
+    ``callback_data`` is capped at 64 bytes, so the filter cannot ride the
+    button either: a search term over 30 characters was silently truncated
+    and page 2 listed results from a *different* query than page 1.
+
+    Scoped per chat, which is the trade-off worth naming: two people
+    searching simultaneously in the same group chat share one context and
+    the later search wins. Per-result buttons carry their own link id and
+    are unaffected.
+    """
 
     __tablename__ = "bot_links"
 
     chat_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_query: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_favorite: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class ActionEvent(Base):

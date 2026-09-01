@@ -26,6 +26,16 @@ function applyTheme(theme) {
   if (btn) btn.textContent = THEME_LABEL[theme];
 }
 
+// Signing out lives here rather than in dashboard.js because the header
+// that offers it is on every page, and dashboard.js is loaded on one.
+// POST, not a link: a GET that ends a session is a link a preloader or a
+// prefetching browser can follow on its own.
+function logout() {
+  fetch("/auth/logout", { method: "POST" })
+    .catch(function () { /* a failed call still leaves the page below */ })
+    .then(function () { window.location.href = "/login"; });
+}
+
 function cycleTheme() {
   applyTheme(THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length]);
 }

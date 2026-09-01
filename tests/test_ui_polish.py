@@ -212,5 +212,16 @@ def test_every_colour_token_has_a_light_definition(client: TestClient):
     body = _page_bundle(client)
     base = body.split("@media")[0]
 
-    for token in ("--bg", "--fg", "--muted", "--border", "--card-bg", "--tag-bg", "--accent", "--danger"):
+    # Derived rather than listed. A hand-written list of eight names went
+    # stale the moment the palette was renamed — it kept passing for the
+    # tokens that still existed and stopped covering the ones that replaced
+    # them. Every token the dark themes redefine must exist on bare :root.
+    import re
+
+    dark = body.split("@media", 1)[1]
+    tokens = set(re.findall(r"(--[a-z0-9-]+):\s*#[0-9a-fA-F]{3,8}", dark))
+
+    assert tokens, "no dark-mode colour tokens found — did the stylesheet move?"
+
+    for token in sorted(tokens):
         assert f"{token}:" in base, f"{token} has no light-mode definition"

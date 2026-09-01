@@ -10,17 +10,34 @@ async function loadStats() {
   const topDomains = data.top_domains.slice(0, 5).map(([d, n]) => `${d} (${n})`).join("، ");
   const v = data.vitality;
   const deadest = v.deadest_domains.slice(0, 3).map(([d, n]) => `${d} (${n})`).join("، ");
+
+  // Tiles, not one run-on line. The line put eleven numbers at identical
+  // weight separated by pipes, so finding any one of them meant reading
+  // all of them — and the two that matter (how many links, how many are
+  // dead) were in the middle of it.
+  document.getElementById("statsGrid").innerHTML = [
+    tile(data.total_links, "رابطاً"),
+    tile(data.total_channels, "محادثة"),
+    tile(data.added_this_week, "هذا الأسبوع"),
+    tile(v.alive, "حيّة", "ok"),
+    tile(v.dead, "ميتة", v.dead ? "bad" : ""),
+    tile(v.unchecked, "لم تُفحص"),
+  ].join("");
+
+  // What is left is genuinely secondary — domain lists and storage — and
+  // reads as a sentence rather than as a dashboard.
   document.getElementById("stats").textContent =
-    `إجمالي الروابط: ${data.total_links} | القنوات: ${data.total_channels}` +
-    ` | هذا الأسبوع: ${data.added_this_week} | هذا الشهر: ${data.added_this_month}` +
-    ` | 🟢 ${v.alive} · 🔴 ${v.dead} · ⚪ ${v.unchecked}` +
-    (v.archived ? ` · 🗄 ${v.archived}` : "") +
-    (topDomains ? ` | أعلى النطاقات: ${topDomains}` : "") +
-    (deadest ? ` | الأكثر موتاً: ${deadest}` : "") +
+    (topDomains ? `أعلى النطاقات: ${topDomains}` : "") +
+    (deadest ? ` · الأكثر موتاً: ${deadest}` : "") +
     storageSummary(data.storage);
   renderVitalityBar(v);
   renderCollectorHealth(data.collection);
   renderQuickStart(data.total_links);
+}
+
+function tile(value, label, tone) {
+  return `<div class="stat"><div class="stat-value ${tone || ""}">${value}</div>`
+       + `<div class="stat-label">${label}</div></div>`;
 }
 
 function storageSummary(s) {
@@ -30,7 +47,7 @@ function storageSummary(s) {
   if (s.database_bytes == null) return "";
   const mb = s.database_bytes / (1024 * 1024);
   const size = mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
-  return ` | التخزين: ${size}` + (s.largest_table ? ` (أكبر جدول: ${escapeText(s.largest_table)})` : "");
+  return ` · التخزين: ${size}` + (s.largest_table ? ` (أكبر جدول: ${escapeText(s.largest_table)})` : "");
 }
 
 // A stopped collector is the failure with no symptom: everything keeps
@@ -294,7 +311,7 @@ function positiveTerms() {
 function contextLine(i, terms) {
   if (!i.raw_text) return "";
   const trimmed = i.raw_text.length > 240 ? i.raw_text.slice(0, 240) + "…" : i.raw_text;
-  return `<div class="muted gap-top-s small">${highlighted(trimmed, terms)}</div>`;
+  return `<div class="link-context">${highlighted(trimmed, terms)}</div>`;
 }
 
 // A link that is starred, confirmed working and collected in the last week
@@ -325,33 +342,48 @@ function linkCard(i, terms) {
   const favLabel = i.is_favorite ? "أزل من المفضّلة" : "أضف إلى المفضّلة";
   const archLabel = i.is_archived ? "أعد من الأرشيف" : "أرشف (إخفاء من النتائج دون حذف)";
   const compact = VIEW_MODE === "compact";
-  return `<div class="card${compact ? " compact" : ""}">
-       <a href="/links/${i.id}/open" target="_blank" rel="noopener" title="${escapeText(i.url)}">${highlighted(i.url, terms)}</a>
+  const noteLabel = i.notes ? "عدّل الملاحظة" : "أضف ملاحظة";
+  const pinLabel = i.is_pinned ? "أزل التثبيت" : "ثبّت كمرجع دائم";
+
+  // Three lines, not one. The row used to be a single flat strip holding
+  // four read-only badges and seven controls in whatever order they had
+  // been added, so the URL — the only thing anyone is looking for —
+  // competed with a delete button for the same visual weight.
+  //
+  // Now: what it is (title), what we know about it (meta), what you can do
+  // to it (actions). The stylesheet already had .link-title, .link-meta and
+  // .link-context; the markup had simply never caught up with them.
+  return `<div class="link-card${compact ? " compact" : ""}">
+       <a class="link-title" href="/links/${i.id}/open" target="_blank" rel="noopener" title="${escapeText(i.url)}">${highlighted(i.url, terms)}</a>
+       <div class="link-meta">
+         <span title="${classifierTitle(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
+         ${compact ? "" : originBadge(i)}
+         <span title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
+         ${standoutBadge(i)}
+       </div>
        ${compact ? "" : contextLine(i, terms)}
        ${noteLine(i)}
-       <div class="wrap-row">
+       <div class="link-actions">
          <label class="sr-only" for="cat-${i.id}">تصنيف ${escapeText(i.domain)}</label>
          <select id="cat-${i.id}" data-action="recategorize" data-args='[${i.id}]' data-pass-value>
            ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? "selected" : ""}>${c}</option>`).join("")}
          </select>
-         <span class="muted" title="${classifierTitle(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
-         ${compact ? "" : originBadge(i)}
-         <span class="muted" title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
-         ${standoutBadge(i)}
-         <button data-action="copyLink" data-args='["${escapeText(i.url)}"]' aria-label="انسخ الرابط" title="انسخ الرابط">⧉</button>
-         <button data-action="editNote" data-args='[${i.id}]' aria-label="${i.notes ? "عدّل الملاحظة" : "أضف ملاحظة"}" title="${i.notes ? "عدّل الملاحظة" : "أضف ملاحظة"}">${i.notes ? "📝" : "✎"}</button>
-         <button data-action="togglePin" data-args='[${i.id}, ${!i.is_pinned}]' aria-label="${i.is_pinned ? "أزل التثبيت" : "ثبّت كمرجع دائم"}" aria-pressed="${!!i.is_pinned}" title="${i.is_pinned ? "أزل التثبيت" : "ثبّت كمرجع دائم"}">${i.is_pinned ? "📌" : "📎"}</button>
-         <button data-action="showSimilar" data-args='["${escapeText(i.domain)}", "${i.category}"]' title="روابط أخرى من نفس النطاق والتصنيف">مشابهة</button>
-         <button data-action="toggleFavorite" data-args='[${i.id}, ${!i.is_favorite}]' aria-label="${favLabel}" aria-pressed="${!!i.is_favorite}" title="${favLabel}">${i.is_favorite ? "★" : "☆"}</button>
-         <button data-action="toggleArchive" data-args='[${i.id}, ${!i.is_archived}]' aria-label="${archLabel}" title="${archLabel}">${i.is_archived ? "↩" : "🗄"}</button>
-         <button data-action="removeLink" data-args='[${i.id}]' aria-label="احذف الرابط" class="push-end">حذف</button>
+         <span class="action-sep" aria-hidden="true"></span>
+         <button class="btn-icon" data-action="toggleFavorite" data-args='[${i.id}, ${!i.is_favorite}]' aria-label="${favLabel}" aria-pressed="${!!i.is_favorite}" title="${favLabel}">${i.is_favorite ? "★" : "☆"}</button>
+         <button class="btn-icon" data-action="togglePin" data-args='[${i.id}, ${!i.is_pinned}]' aria-label="${pinLabel}" aria-pressed="${!!i.is_pinned}" title="${pinLabel}">${i.is_pinned ? "📌" : "📎"}</button>
+         <button class="btn-icon" data-action="copyLink" data-args='["${escapeText(i.url)}"]' aria-label="انسخ الرابط" title="انسخ الرابط">⧉</button>
+         <button class="btn-icon" data-action="editNote" data-args='[${i.id}]' aria-label="${noteLabel}" title="${noteLabel}">${i.notes ? "📝" : "✎"}</button>
+         <button class="btn-icon" data-action="toggleArchive" data-args='[${i.id}, ${!i.is_archived}]' aria-label="${archLabel}" title="${archLabel}">${i.is_archived ? "↩" : "🗄"}</button>
+         <span class="action-sep" aria-hidden="true"></span>
+         <button class="btn-ghost btn-sm" data-action="showSimilar" data-args='["${escapeText(i.domain)}", "${i.category}"]' title="روابط أخرى من نفس النطاق والتصنيف">مشابهة</button>
+         <button class="btn-danger btn-sm push-end" data-action="removeLink" data-args='[${i.id}]' aria-label="احذف الرابط">حذف</button>
        </div>
      </div>`;
 }
 
 function noteLine(i) {
   if (!i.notes) return "";
-  return `<div class="muted gap-top-s">📝 ${escapeText(i.notes)}</div>`;
+  return `<div class="link-note">📝 ${escapeText(i.notes)}</div>`;
 }
 
 async function editNote(id) {
@@ -390,11 +422,20 @@ async function emptyStateHtml() {
   const res = await api("/links/stats");
   const data = await res.json();
   const populated = Object.entries(data.by_category).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  if (!data.total_links) return "<p class='muted'>لا روابط بعد في مساحة العمل هذه.</p>";
+  // A bare grey sentence is indistinguishable from a page that failed to
+  // load. Both states below say what happened *and* what to do next.
+  if (!data.total_links) {
+    return `<div class="empty"><span class="empty-icon">🔗</span>`
+         + `<span class="empty-title">لا روابط بعد</span>`
+         + `الصق أيّ رابط في «إضافة سريعة» أعلاه — يعمل فوراً بلا إعداد،`
+         + ` أو فعّل الجمع التلقائي من تبويب «الجمع».</div>`;
+  }
   const chips = populated
-    .map(([c, n]) => `<button data-action="jumpToCategory" data-args='["${c}"]'>${c} (${n})</button>`)
+    .map(([c, n]) => `<button class="btn-sm" data-action="jumpToCategory" data-args='["${c}"]'>${c} (${n})</button>`)
     .join(" ");
-  return `<p class='muted'>لا نتائج بهذه الفلاتر. تصنيفات فيها روابط:</p><div class="row">${chips}</div>`;
+  return `<div class="empty"><span class="empty-icon">🔍</span>`
+       + `<span class="empty-title">لا نتائج بهذه الفلاتر</span>`
+       + `جرّب تصنيفاً فيه روابط:<div class="chip-row">${chips}</div></div>`;
 }
 
 function jumpToCategory(category) {
@@ -631,7 +672,7 @@ function resetAccountLoginForm() {
   ACCT_LOGIN_TOKEN = null;
   document.getElementById("acctLoginStep1").hidden = false;
   document.getElementById("acctLoginStep2").hidden = true;
-  document.getElementById("acct2fa").hidden = true;
+  document.getElementById("acct2faField").hidden = true;
   document.getElementById("acctCode").value = "";
   document.getElementById("acct2fa").value = "";
   document.getElementById("acctCurPass").value = "";
@@ -665,7 +706,8 @@ async function startAccountLogin() {
 async function verifyAccountLogin() {
   const code = document.getElementById("acctCode").value.trim();
   const passwordField = document.getElementById("acct2fa");
-  const password = passwordField.hidden ? null : passwordField.value;
+  const passwordWrap = document.getElementById("acct2faField");
+  const password = passwordWrap.hidden ? null : passwordField.value;
   const msg = document.getElementById("acctLoginMsg");
   if (!ACCT_LOGIN_TOKEN) {
     msg.textContent = "ابدأ من جديد — اضغط «إرسال رمز التحقّق».";
@@ -682,7 +724,8 @@ async function verifyAccountLogin() {
   }
   const data = await res.json();
   if (data.status === "needs_password") {
-    passwordField.hidden = false;
+    passwordWrap.hidden = false;
+    passwordField.focus();
     msg.textContent = "هذا الحساب لديه تحقّق بخطوتين — أدخل كلمة مروره أعلاه ثم أكّد مجدداً.";
     return;
   }
@@ -1057,11 +1100,33 @@ function escapeText(value) {
   return div.innerHTML;
 }
 
+// "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)
+// Chrome/15" is what the raw header looks like on the panel, and it
+// answers none of the question a person is asking here — which of these
+// sessions is mine, and which do I end. A browser and a platform answer
+// it; the full string stays available as the element's title for anyone
+// who does want it.
+function describeDevice(ua) {
+  if (!ua) return "متصفّح غير معروف";
+  const browser =
+    /Edg\//.test(ua) ? "Edge" :
+    /OPR\/|Opera/.test(ua) ? "Opera" :
+    /Chrome\//.test(ua) ? "Chrome" :
+    /Firefox\//.test(ua) ? "Firefox" :
+    /Safari\//.test(ua) ? "Safari" : "متصفّح غير معروف";
+  const platform =
+    /Android/.test(ua) ? "أندرويد" :
+    /iPhone|iPad|iOS/.test(ua) ? "iOS" :
+    /Windows/.test(ua) ? "ويندوز" :
+    /Mac OS X|Macintosh/.test(ua) ? "ماك" :
+    /Linux/.test(ua) ? "لينكس" : "";
+  return platform ? `${browser} · ${platform}` : browser;
+}
+
 function describeOrigin(s) {
   if (!s.ip_address && !s.user_agent) return "الأصل غير مسجَّل (جلسة أقدم من هذه الميزة)";
   const ip = s.ip_address ? escapeText(s.ip_address) : "عنوان غير معروف";
-  const ua = s.user_agent ? escapeText(s.user_agent.slice(0, 80)) : "متصفح غير معروف";
-  return `${ip} · ${ua}`;
+  return `${escapeText(describeDevice(s.user_agent))} · ${ip}`;
 }
 
 async function loadSecurityActivity() {
@@ -1084,7 +1149,7 @@ async function loadSessions() {
     `<div class="card">
        ${s.is_current ? "<strong>هذا الجهاز</strong>" : "جهاز آخر"}
        <span class="muted">— بدأت ${new Date(s.created_at).toLocaleString("ar")}</span>
-       <div class="muted">${describeOrigin(s)}</div>
+       <div class="muted" title="${escapeText(s.user_agent || "")}">${describeOrigin(s)}</div>
        ${s.is_current ? "" : `<button data-action="revokeSession" data-args='[${s.id}]' class="indent-s">إنهاء</button>`}
      </div>`
   ).join("");

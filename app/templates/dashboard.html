@@ -2,16 +2,15 @@
 {% block title %}لوحة التحكم{% endblock %}
 {% block content %}
 <div id="appData" data-categories='{{ categories | tojson }}' hidden></div>
-<!-- Shown once to a workspace that has never collected anything. Dismissed
-     permanently on click, and never shown again once links exist. -->
+
 <div id="quickStart" class="card" hidden>
-  <h3>بداية سريعة</h3>
+  <h3>ثلاث خطوات للبداية</h3>
   <ol>
-    <li>الصق أي روابط في صندوق «إضافة يدوية» بالأسفل — يعمل فوراً بلا أي إعداد.</li>
-    <li>لجمع تلقائي من قنوات تيليجرام: أضف القناة في قسم «القنوات»، ثم اضبط أسرار المجمّع في GitHub Actions كما في README.</li>
-    <li>اربط بوت تيليجرام من قسم «البوت» إن أردت البحث من داخل تيليجرام.</li>
+    <li>الصق أيّ روابط في «إضافة سريعة» أدناه — تعمل فوراً، بلا أيّ إعداد.</li>
+    <li>للجمع التلقائي من تيليجرام: تبويب «الجمع» ← أضف حساب جمع، والباقي يكتشفه النظام بنفسه.</li>
+    <li>للبحث من داخل تيليجرام: تبويب «البوت» ← ولّد رمز ربط.</li>
   </ol>
-  <button data-action="dismissQuickStart">فهمت، أخفِ هذا</button>
+  <button class="btn-sm" data-action="dismissQuickStart">فهمت، أخفِ هذا</button>
 </div>
 
 <div class="tabs" role="tablist" aria-label="أقسام لوحة التحكم">
@@ -22,250 +21,396 @@
   <button role="tab" id="tab-account" class="tab" data-tab="account" data-action="selectTab" data-args='["account"]' aria-selected="false" aria-controls="panel-account" tabindex="-1">الحساب</button>
 </div>
 
+<!-- ═══ الروابط ═══════════════════════════════════════════════════════════ -->
 <section role="tabpanel" id="panel-links" class="panel" aria-labelledby="tab-links">
-<h2>البحث في الروابط</h2>
-<!-- role=alert, not aria-live=polite: an undo offer expires in five
-     seconds, so waiting for a pause would make it useless. -->
-<div id="undoBar" class="card undo-bar" role="alert" hidden>
-  <span id="undoText"></span>
-  <button data-action="undoDelete">تراجع</button>
-</div>
-<div class="row">
-  <label class="sr-only" for="q">ابحث في الروابط</label>
-  <input id="q" placeholder="ابحث... (اكتب / للانتقال هنا)" class="grow" aria-describedby="qHint">
-  <span id="qHint" class="sr-only">اكتب كلمة قبلها شرطة لاستبعادها، مثل: بايثون -مدفوع</span>
-  <label class="sr-only" for="category">التصنيف</label>
-  <select id="category">
-    <option value="">كل التصنيفات</option>
-    {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
-  </select>
-  <label class="sr-only" for="sort">ترتيب النتائج</label>
-  <select id="sort">
-    <option value="date">الأحدث أولاً</option>
-    <option value="domain">النطاق</option>
-    <option value="category">التصنيف</option>
-    <option value="confidence">الثقة</option>
-    <option value="checked">الأحدث فحصاً</option>
-  </select>
-  <label class="muted"><input type="checkbox" id="favoriteOnly" data-action="search"> المفضّلة فقط</label>
-  <label class="muted"><input type="checkbox" id="includeArchived" data-action="search"> إظهار المؤرشفة</label>
-  <label class="sr-only" for="aliveFilter">حالة الحيوية</label>
-  <select id="aliveFilter">
-    <option value="">كل الروابط (حيويّة أو لا)</option>
-    <option value="true">الحيّة فقط</option>
-    <option value="false">الميتة فقط</option>
-  </select>
-  <label class="sr-only" for="channelFilter">القناة</label>
-  <select id="channelFilter" data-action="search">
-    <option value="">كل القنوات</option>
-  </select>
-  <label class="sr-only" for="languageFilter">لغة الرسالة</label>
-  <select id="languageFilter" data-action="search">
-    <option value="">كل اللغات</option>
-    <option value="ar">عربي</option>
-    <option value="en">إنجليزي</option>
-    <option value="mixed">مختلط</option>
-  </select>
-  <button data-action="search">بحث</button>
-  <span id="liveCount" class="muted" aria-hidden="true"></span>
-  <button data-action="exportCsv">تصدير CSV</button>
-  <button data-action="exportJson">تصدير JSON</button>
-  <button data-action="exportMarkdown" title="نتائج البحث الحالية كملف Markdown قابل للقراءة والمشاركة">تصدير Markdown</button>
-</div>
-<p id="activeDomain" class="muted gap-y-xs"></p>
-<div class="row centred">
-  <span class="muted">عمليات بحث محفوظة:</span>
-  <span id="savedSearches" class="muted">—</span>
-  <button data-action="saveCurrentSearch">احفظ البحث الحالي</button>
-  <button data-action="copyPermalink" title="رابط يعيد فتح اللوحة بنفس الفلاتر">انسخ رابط الفلاتر</button>
-  <button data-action="toggleView" id="viewBtn">عرض شبكي</button>
-  <button data-action="discover" title="خمسة روابط عشوائية لإعادة اكتشاف ما جمعته">اكتشاف عشوائي</button>
-</div>
-<div class="row centred">
-  <button data-action="bulkRecategorize">نقل كل النتائج الحالية إلى تصنيف آخر</button>
-  <button data-action="bulkDelete">حذف كل النتائج الحالية</button>
-</div>
-<p id="collectorWarning" class="error" role="status" hidden></p>
-<div class="row centred">
-  <button data-action="toggleNotifications">🔔 التنبيهات <span id="unreadBadge" hidden></span></button>
-  <span id="recentActivity" class="muted small"></span>
-</div>
-<div id="notificationCentre" hidden>
-  <div class="row spread centred">
-    <strong>مركز التنبيهات</strong>
-    <button data-action="markAllRead">تعليم الكل كمقروء</button>
-  </div>
-  <div id="notificationList"></div>
-  <details class="gap-top">
-    <summary>إعدادات التنبيهات</summary>
-    <p class="muted small">كل نوع يُطفأ على حدة. لا شيء هنا يُرسَل نيابةً عنك إلى أحد — التنبيهات تصل إلى محادثتك المربوطة أنت.</p>
-    <div id="alertPrefs"></div>
-  </details>
-  <details class="gap-top">
-    <summary>إرسال التنبيهات إلى webhook خارجي</summary>
-    <p class="muted small">
-      عنوان <code>https</code> تملكه أنت — Slack أو Discord أو أي خدمة تقبل webhook وارداً.
-      يصله ما يصلك: التنبيهات التي فعّلتها أعلاه فقط، بلا بريدك ولا معرّفك.
-      لا تُقبل العناوين الداخلية، ولا يُتَّبع أي تحويل، ولا يُعرَض العنوان كاملاً بعد حفظه.
-    </p>
-    <div class="row gap-top-s">
-      <input type="url" id="webhookUrl" class="grow" placeholder="https://hooks.example.com/..."
-             autocomplete="off" spellcheck="false">
-      <button data-action="saveWebhook">حفظ</button>
-    </div>
-    <div class="row gap-top-s">
-      <span id="webhookState" class="muted small grow"></span>
-      <button data-action="testWebhook">إرسال اختبار</button>
-      <button data-action="clearWebhook">إزالة</button>
-    </div>
-  </details>
-</div>
-<p id="stats" class="muted"></p>
-<!-- Status changes are announced to a screen reader, not only shown.
-     aria-live="polite" waits for a pause rather than interrupting, which
-     is right for a result count that updates as the user types. -->
-<p id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-<!-- A proportion bar rather than a chart library: three divs sized by
-     percentage say the same thing as a pie, cost nothing, and cannot
-     break the strict no-external-asset rule this page runs under. -->
-<div id="vitalityBar" role="img" aria-label="نسبة الروابط الحيّة والميتة وغير المفحوصة" class="bar"></div>
-<div id="results" role="region" aria-label="نتائج البحث"></div>
-<div class="row centred">
-  <button id="prevBtn" data-action="changePage" data-args='[-1]' aria-label="الصفحة السابقة">السابق</button>
-  <span id="pageInfo" class="muted"></span>
-  <button id="nextBtn" data-action="changePage" data-args='[1]' aria-label="الصفحة التالية">التالي</button>
-</div>
 
-<h2>إضافة روابط يدوياً</h2>
-<p class="muted">الصق أي نص يحتوي روابط — رابط واحد أو رسالة كاملة أو قائمة. سيُستخرج كل رابط ويُصنَّف تلقائياً.</p>
-<div class="row stack">
-  <textarea id="pasteBox" rows="4" placeholder="الصق الروابط أو النص هنا..." class="note-input"></textarea>
-  <button data-action="addLinks">إضافة وتصنيف</button>
-  <span id="pasteCount" class="muted"></span>
-  <p id="addResult" class="muted"></p>
-</div>
+  <!-- The fastest path in, first. It used to sit below every result and
+       every filter, which put the one action that works with no setup at
+       all at the bottom of the longest panel. -->
+  <div class="card">
+    <div class="field">
+      <label for="pasteBox">إضافة سريعة</label>
+      <textarea id="pasteBox" rows="2" class="note-input" placeholder="الصق رابطاً أو رسالة كاملة أو قائمة — يُستخرج كل رابط ويُصنَّف تلقائياً"></textarea>
+    </div>
+    <div class="row gap-top centred">
+      <button class="btn-primary" data-action="addLinks">إضافة وتصنيف</button>
+      <span id="pasteCount" class="muted"></span>
+      <span id="addResult" class="muted"></span>
+    </div>
+  </div>
+
+  <div id="undoBar" class="card undo-bar" role="alert" hidden>
+    <span id="undoText"></span>
+    <button class="btn-sm" data-action="undoDelete">تراجع</button>
+  </div>
+
+  <div id="statsGrid" class="stat-grid"></div>
+  <div id="vitalityBar" role="img" aria-label="نسبة الروابط الحيّة والميتة وغير المفحوصة" class="bar"></div>
+  <p id="stats" class="muted"></p>
+  <p id="collectorWarning" class="error" role="status" hidden></p>
+
+  <!-- Two controls out, ten behind a disclosure. The old bar put twelve in
+       one wrapping row where the two anyone touches were indistinguishable
+       from the ten they do not. -->
+  <div class="toolbar">
+    <div class="search-line">
+      <div class="field">
+        <label for="q">ابحث في الروابط</label>
+        <input id="q" placeholder="كلمة، أو ‎-كلمة‎ لاستبعادها" aria-describedby="qHint">
+        <span id="qHint" class="hint">اكتب <code>/</code> للقفز إلى هنا. الشرطة قبل كلمة تستبعدها: <code>بايثون -مدفوع</code></span>
+      </div>
+      <button class="btn-primary" data-action="search">بحث</button>
+    </div>
+    <span id="liveCount" class="muted" aria-hidden="true"></span>
+
+    <div class="chip-row">
+      <label class="check"><input type="checkbox" id="favoriteOnly" data-action="search"> المفضّلة فقط</label>
+      <label class="check"><input type="checkbox" id="includeArchived" data-action="search"> إظهار المؤرشفة</label>
+      <button class="btn-sm" data-action="toggleView" id="viewBtn">عرض شبكي</button>
+      <button class="btn-sm" data-action="discover" title="خمسة روابط عشوائية لإعادة اكتشاف ما جمعته">اكتشاف عشوائي</button>
+    </div>
+
+    <details class="disclosure gap-top">
+      <summary>فلاتر وتصدير</summary>
+      <div class="disclosure-body">
+        <div class="filters">
+          <div class="field">
+            <label for="category">التصنيف</label>
+            <select id="category">
+              <option value="">كل التصنيفات</option>
+              {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="sort">الترتيب</label>
+            <select id="sort">
+              <option value="date">الأحدث أوّلاً</option>
+              <option value="domain">النطاق</option>
+              <option value="category">التصنيف</option>
+              <option value="confidence">الثقة</option>
+              <option value="checked">الأحدث فحصاً</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="aliveFilter">الحيوية</label>
+            <select id="aliveFilter">
+              <option value="">حيّة أو لا</option>
+              <option value="true">الحيّة فقط</option>
+              <option value="false">الميتة فقط</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="channelFilter">المحادثة</label>
+            <select id="channelFilter" data-action="search">
+              <option value="">كل المحادثات</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="languageFilter">لغة الرسالة</label>
+            <select id="languageFilter" data-action="search">
+              <option value="">كل اللغات</option>
+              <option value="ar">عربي</option>
+              <option value="en">إنجليزي</option>
+              <option value="mixed">مختلط</option>
+            </select>
+          </div>
+        </div>
+        <p id="activeDomain" class="muted gap-y-xs"></p>
+        <div class="chip-row">
+          <span class="muted">محفوظة:</span>
+          <span id="savedSearches" class="muted">—</span>
+          <button class="btn-sm" data-action="saveCurrentSearch">احفظ هذا البحث</button>
+          <button class="btn-sm" data-action="copyPermalink" title="رابط يعيد فتح اللوحة بنفس الفلاتر">انسخ رابط الفلاتر</button>
+        </div>
+        <div class="chip-row">
+          <span class="muted">تصدير النتائج الحالية:</span>
+          <button class="btn-sm" data-action="exportCsv">CSV</button>
+          <button class="btn-sm" data-action="exportJson">JSON</button>
+          <button class="btn-sm" data-action="exportMarkdown" title="مجمَّع حسب التصنيف، قابل للّصق في رسالة">Markdown</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- Two clicks from a full-collection delete used to be one. Both act
+         on *everything matching the current filter*, which is not what a
+         button sitting in the main flow implies. -->
+    <details class="disclosure danger-zone gap-top">
+      <summary>إجراءات على كل النتائج المطابقة</summary>
+      <div class="disclosure-body">
+        <p class="muted">تنطبق على <strong>كل</strong> ما يطابق الفلتر الحالي، لا على المعروض في هذه الصفحة وحده.</p>
+        <div class="row">
+          <button data-action="bulkRecategorize">نقلها إلى تصنيف آخر</button>
+          <button class="btn-danger" data-action="bulkDelete">حذفها كلّها</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="row centred">
+    <button class="btn-sm" data-action="toggleNotifications">🔔 التنبيهات <span id="unreadBadge" hidden></span></button>
+    <span id="recentActivity" class="muted smaller"></span>
+  </div>
+
+  <div id="notificationCentre" hidden>
+    <div class="row spread centred">
+      <strong>مركز التنبيهات</strong>
+      <button class="btn-sm" data-action="markAllRead">تعليم الكل كمقروء</button>
+    </div>
+    <div id="notificationList"></div>
+    <details class="disclosure gap-top">
+      <summary>إعدادات التنبيهات</summary>
+      <div class="disclosure-body">
+        <p class="muted">كل نوع يُطفأ على حدة. لا شيء يُرسَل نيابةً عنك إلى أحد — التنبيهات تصل إلى محادثتك المربوطة أنت.</p>
+        <div id="alertPrefs"></div>
+      </div>
+    </details>
+    <details class="disclosure gap-top">
+      <summary>إرسال التنبيهات إلى webhook خارجي</summary>
+      <div class="disclosure-body">
+        <p class="muted">
+          عنوان <code>https</code> تملكه أنت — Slack أو Discord أو أيّ خدمة تقبل webhook وارداً.
+          يصله ما يصلك: التنبيهات المفعَّلة فقط، بلا بريدك ولا معرّفك. العناوين الداخلية مرفوضة،
+          ولا يُتَّبع أيّ تحويل، ولا يُعرَض العنوان كاملاً بعد حفظه.
+        </p>
+        <div class="field-row">
+          <div class="field grow">
+            <label for="webhookUrl">عنوان الـwebhook</label>
+            <input type="url" id="webhookUrl" placeholder="https://hooks.example.com/..." autocomplete="off" spellcheck="false">
+          </div>
+          <button data-action="saveWebhook">حفظ</button>
+        </div>
+        <div class="chip-row">
+          <span id="webhookState" class="muted grow"></span>
+          <button class="btn-sm" data-action="testWebhook">إرسال اختبار</button>
+          <button class="btn-sm btn-danger" data-action="clearWebhook">إزالة</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <p id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div id="results" role="region" aria-label="نتائج البحث"></div>
+  <div class="row centred" id="pager">
+    <button class="btn-sm" id="prevBtn" data-action="changePage" data-args='[-1]' aria-label="الصفحة السابقة">السابق</button>
+    <span id="pageInfo" class="muted"></span>
+    <button class="btn-sm" id="nextBtn" data-action="changePage" data-args='[1]' aria-label="الصفحة التالية">التالي</button>
+  </div>
 </section>
 
+<!-- ═══ الجمع ═════════════════════════════════════════════════════════════ -->
 <section role="tabpanel" id="panel-collect" class="panel" aria-labelledby="tab-collect" hidden>
-<h2>حسابات الجمع</h2>
-<p class="muted">حساب الجمع ليس البوت: هو حساب تيليجرام عادي يقرأ القنوات. البوت واحد فقط وللبحث.</p>
-<div id="accountHealth"></div>
+  <section>
+    <div class="section-head">
+      <h2>حسابات الجمع</h2>
+      <p>حساب الجمع ليس البوت: هو حساب تيليجرام عاديّ يقرأ محادثاتك. البوت واحد، وللبحث فقط.</p>
+    </div>
+    <div id="accountHealth"></div>
 
-<h3>إضافة حساب جمع جديد</h3>
-<p class="muted">
-  هذا تسجيل دخول حقيقي بحساب تيليجرام — لا نطلب رمز التحقّق ولا كلمة جلستك إلا هنا،
-  ولا تُعرَض جلسة الحساب لك ولا لأي شخص بعد حفظها.
-</p>
-<div id="acctLoginStep1" class="row stack">
-  <input id="acctLabel" placeholder="تسمية للحساب (مثال: حساب ٢)">
-  <input id="acctPhone" placeholder="رقم الهاتف بصيغة دولية، مثل ‎+9665xxxxxxxx">
-  <input id="acctCurPass" type="password" placeholder="كلمة مرور لوحتك الحالية (للتأكيد)">
-  <button data-action="startAccountLogin">إرسال رمز التحقّق</button>
-</div>
-<div id="acctLoginStep2" class="row stack" hidden>
-  <input id="acctCode" placeholder="رمز التحقّق من تطبيق تيليجرام">
-  <input id="acct2fa" type="password" placeholder="كلمة مرور التحقّق بخطوتين (إن طُلبت)" hidden>
-  <button data-action="verifyAccountLogin">تأكيد وإضافة الحساب</button>
-  <button data-action="cancelAccountLogin">إلغاء</button>
-</div>
-<p id="acctLoginMsg" class="muted"></p>
+    <h3>إضافة حساب جمع</h3>
+    <p class="muted">تسجيل دخول حقيقي بحساب تيليجرام. رمز التحقّق وكلمة الجلسة لا يُطلبان إلا هنا، ولا تُعرَض الجلسة لك ولا لأحد بعد حفظها.</p>
+    <div id="acctLoginStep1" class="card">
+      <div class="field-row">
+        <div class="field">
+          <label for="acctLabel">تسمية الحساب</label>
+          <input id="acctLabel" placeholder="مثال: هاتفي الثاني">
+        </div>
+        <div class="field">
+          <label for="acctPhone">رقم الهاتف</label>
+          <input id="acctPhone" type="tel" inputmode="tel" dir="ltr" placeholder="+9665xxxxxxxx">
+        </div>
+        <div class="field">
+          <label for="acctCurPass">كلمة مرور لوحتك</label>
+          <input id="acctCurPass" type="password" autocomplete="current-password">
+          <span class="hint">للتأكيد أنّك أنت — لا علاقة لها بتيليجرام</span>
+        </div>
+        <button class="btn-primary" data-action="startAccountLogin">إرسال رمز التحقّق</button>
+      </div>
+    </div>
+    <div id="acctLoginStep2" class="card" hidden>
+      <div class="field-row">
+        <div class="field">
+          <label for="acctCode">رمز التحقّق</label>
+          <input id="acctCode" inputmode="numeric" dir="ltr" placeholder="الرمز الذي وصلك في تيليجرام">
+        </div>
+        <div class="field" id="acct2faField" hidden>
+          <label for="acct2fa">كلمة مرور التحقّق بخطوتين</label>
+          <input id="acct2fa" type="password">
+        </div>
+        <button class="btn-primary" data-action="verifyAccountLogin">تأكيد وإضافة</button>
+        <button data-action="cancelAccountLogin">إلغاء</button>
+      </div>
+    </div>
+    <p id="acctLoginMsg" class="muted"></p>
+  </section>
 
-<h2>القنوات</h2>
-<div class="row">
-  <input id="chId" placeholder="معرّف القناة (tg_channel_id)">
-  <input id="chUsername" placeholder="username (اختياري)">
-  <button data-action="addChannel">إضافة قناة</button>
-</div>
-<div id="channels"></div>
+  <section>
+    <div class="section-head">
+      <h2>المحادثات المتابَعة</h2>
+      <p>تُسجَّل تلقائياً من حساب الجمع — قنوات ومجموعات ومحادثات خاصّة. الإضافة اليدوية أدناه للحالات التي تريد فيها محادثة بعينها قبل أوّل تشغيلة.</p>
+    </div>
+    <div id="channels"></div>
+    <details class="disclosure gap-top">
+      <summary>إضافة محادثة يدوياً</summary>
+      <div class="disclosure-body">
+        <div class="field-row">
+          <div class="field">
+            <label for="chId">معرّف المحادثة</label>
+            <input id="chId" dir="ltr" placeholder="-1001234567890">
+          </div>
+          <div class="field">
+            <label for="chUsername">المعرّف العلني (اختياري)</label>
+            <input id="chUsername" dir="ltr" placeholder="channel_name">
+          </div>
+          <button data-action="addChannel">إضافة</button>
+        </div>
+      </div>
+    </details>
+  </section>
 </section>
 
+<!-- ═══ البوت ═════════════════════════════════════════════════════════════ -->
 <section role="tabpanel" id="panel-bot" class="panel" aria-labelledby="tab-bot" hidden>
-<h2>ربط البوت</h2>
-<button data-action="linkBot">توليد رمز ربط للبوت</button>
-<button data-action="botDiag">لماذا لا يردّ البوت؟</button>
-<div id="botDiagOut" class="muted"></div>
-<p id="botCode" class="muted"></p>
-</section>
-
-<section role="tabpanel" id="panel-security" class="panel" aria-labelledby="tab-security" hidden>
-<h3>التحقّق بخطوتين</h3>
-<p id="totpStatus" class="muted"></p>
-<div id="totpControls" class="row"></div>
-<div id="totpSetup" hidden>
-  <p class="muted">امسح هذا في تطبيق مُصادِق (Google Authenticator، Aegis، 1Password…)، أو أدخل السرّ يدوياً:</p>
-  <p><code id="totpSecret"></code></p>
-  <p class="muted" id="totpUri" class="break-anywhere smaller"></p>
-  <div class="row">
-    <input id="totpCode" placeholder="الرمز المكوّن من ٦ أرقام" inputmode="numeric" maxlength="10" class="grow">
-    <button data-action="enableTotp">تفعيل</button>
+  <div class="section-head">
+    <h2>البوت</h2>
+    <p>يتيح البحث في مجموعتك من داخل تيليجرام، ويوصل التنبيهات إليك. اختياريّ بالكامل — كل شيء آخر يعمل بدونه.</p>
   </div>
-</div>
-<div id="recoveryCodes" hidden>
-  <p><strong>احفظ رموز الاسترداد الآن — لن تُعرض مرّة أخرى.</strong>
-     كلٌّ منها يعمل مرّة واحدة، وهي طريقتك الوحيدة للدخول إن فقدت هاتفك.</p>
-  <pre id="recoveryList" class="prewrap"></pre>
-</div>
-
-<h3>سجل الأمان</h3>
-<p class="muted">
-  ما حدث لحسابك وحده — جلسات ومحاولات دخول وتغييرات حسّاسة، <strong>بلا أي روابط
-  أو محتوى مجموع</strong>. أضيق من تصدير البيانات الكامل، فيمكن مشاركته مع من
-  يساعدك في التحقيق.
-</p>
-<div class="row">
-  <button data-action="downloadSecurityLog">تنزيل سجل الأمان (JSON)</button>
-</div>
-
-<h3>مفاتيح API</h3>
-<p class="muted">
-  للاستخدام البرمجي بدل كوكي الجلسة: <code>Authorization: Bearer lipk_…</code>.
-  المفتاح <strong>يقرأ ويضيف الروابط فقط</strong> — لا يستطيع حذف مساحة العمل،
-  ولا تغيير كلمة المرور، ولا إنشاء مفتاح آخر.
-</p>
-<div class="row">
-  <input id="apiKeyName" placeholder="اسم يميّزه (مثلاً: سكربت المزامنة)" class="grow" maxlength="100">
-  <button data-action="createApiKey">إنشاء مفتاح</button>
-</div>
-<p id="apiKeyResult" class="muted"></p>
-<div id="apiKeys"></div>
-
-<h3>نشاط الأمان</h3>
-<p id="securityActivity" class="muted"></p>
-
-<h3>الجلسات النشطة</h3>
-<div id="sessions"></div>
+  <div class="card">
+    <h3>الربط في ثلاث خطوات</h3>
+    <ol class="muted">
+      <li>اضغط «توليد رمز ربط» أدناه.</li>
+      <li>افتح محادثة البوت في تيليجرام واضغط الرابط الظاهر، أو أرسل <code>/start الرمز</code>.</li>
+      <li>الرمز يعمل مرّة واحدة، وبعدها تصلك التنبيهات هنا.</li>
+    </ol>
+    <div class="row">
+      <button class="btn-primary" data-action="linkBot">توليد رمز ربط</button>
+      <button data-action="botDiag">لماذا لا يردّ البوت؟</button>
+    </div>
+    <p id="botCode" class="muted"></p>
+    <div id="botDiagOut" class="muted"></div>
+  </div>
+  <details class="disclosure">
+    <summary>ما الذي يفعله البوت بعد الربط؟</summary>
+    <div class="disclosure-body muted">
+      <p>ابحث بكتابة كلمة مجرّدة، أو احفظ رابطاً بلصقه مباشرة. والأوامر:</p>
+      <p><code>/search</code> · <code>/latest</code> · <code>/favorite</code> · <code>/details</code> · <code>/stats</code> · <code>/vitality</code> · <code>/channels</code> · <code>/unlink</code> · <code>/help</code></p>
+    </div>
+  </details>
 </section>
 
-<section role="tabpanel" id="panel-account" class="panel" aria-labelledby="tab-account" hidden>
-<h2>الحساب</h2>
-<div class="row stack">
-  <input id="curPass" type="password" placeholder="كلمة المرور الحالية">
-  <input id="newPass" type="password" placeholder="كلمة المرور الجديدة (٨ أحرف على الأقل)">
-  <button data-action="changePassword">تغيير كلمة المرور</button>
-  <p id="passResult" class="muted"></p>
-  <button data-action="logoutAll">تسجيل الخروج من كل الأجهزة</button>
-</div>
-<h3>مساحة العمل</h3>
-<div class="row">
-  <input id="wsName" placeholder="اسم مساحة العمل" class="grow">
-  <button data-action="renameWorkspace">إعادة التسمية</button>
-</div>
-<p id="wsResult" class="muted"></p>
-<p id="accountSummary" class="muted"></p>
+<!-- ═══ الأمان ════════════════════════════════════════════════════════════ -->
+<section role="tabpanel" id="panel-security" class="panel" aria-labelledby="tab-security" hidden>
+  <section>
+    <h3>التحقّق بخطوتين</h3>
+    <p id="totpStatus" class="muted"></p>
+    <div id="totpControls" class="row"></div>
+    <div id="totpSetup" class="card" hidden>
+      <p class="muted">امسح هذا في تطبيق مُصادِق (Google Authenticator، Aegis، 1Password…)، أو أدخل السرّ يدوياً:</p>
+      <p><code id="totpSecret"></code></p>
+      <p id="totpUri" class="muted break-anywhere smaller"></p>
+      <div class="field-row">
+        <div class="field">
+          <label for="totpCode">الرمز المكوّن من ٦ أرقام</label>
+          <input id="totpCode" inputmode="numeric" dir="ltr" maxlength="10">
+        </div>
+        <button class="btn-primary" data-action="enableTotp">تفعيل</button>
+      </div>
+    </div>
+    <div id="recoveryCodes" class="card" hidden>
+      <p><strong>احفظ رموز الاسترداد الآن — لن تُعرض مرّة أخرى.</strong>
+         كلٌّ منها يعمل مرّة واحدة، وهي طريقتك الوحيدة للدخول إن فقدت هاتفك.</p>
+      <pre id="recoveryList" class="prewrap"></pre>
+    </div>
+  </section>
 
-<h3>بياناتي</h3>
-<div class="row">
-  <button data-action="exportWorkspace">تنزيل كل بيانات مساحة العمل (JSON)</button>
-  <button data-action="deleteWorkspace" class="danger">حذف مساحة العمل نهائياً</button>
-</div>
-<p class="muted">الحذف يشمل كل الروابط والقنوات والمستخدمين ولا يمكن التراجع عنه.</p>
-<h3>حالة النظام</h3>
-<p class="muted small">
-  عدّادات هذه العملية منذ إقلاعها — الخطة المجانية تنام، فالأرقام تبدأ من جديد
-  مع كل استيقاظ. وتقارير التشغيل تصلها من GitHub Actions نفسها، لا العكس:
-  قراءة واجهة GitHub كانت ستتطلّب تخزين رمز وصول للمستودع هنا.
-</p>
-<div id="systemStatus"></div>
+  <section>
+    <h3>مفاتيح API</h3>
+    <p class="muted">
+      للاستخدام البرمجي بدل كوكي الجلسة: <code>Authorization: Bearer lipk_…</code>.
+      المفتاح <strong>يقرأ ويضيف الروابط فقط</strong> — لا يحذف مساحة العمل، ولا يغيّر كلمة المرور، ولا ينشئ مفتاحاً آخر.
+    </p>
+    <div class="field-row">
+      <div class="field grow">
+        <label for="apiKeyName">اسم يميّز المفتاح</label>
+        <input id="apiKeyName" placeholder="مثلاً: سكربت المزامنة" maxlength="100">
+      </div>
+      <button data-action="createApiKey">إنشاء مفتاح</button>
+    </div>
+    <p id="apiKeyResult" class="muted"></p>
+    <div id="apiKeys"></div>
+  </section>
+
+  <section>
+    <h3>سجلّ الأمان</h3>
+    <p class="muted">ما حدث لحسابك وحده — جلسات ومحاولات دخول وتغييرات حسّاسة، <strong>بلا أيّ روابط أو محتوى مجموع</strong>. أضيق من التصدير الكامل، فيمكن مشاركته مع من يساعدك في التحقيق.</p>
+    <div class="row">
+      <button data-action="downloadSecurityLog">تنزيل سجلّ الأمان (JSON)</button>
+    </div>
+    <p id="securityActivity" class="muted"></p>
+  </section>
+
+  <section>
+    <h3>الجلسات النشطة</h3>
+    <div id="sessions"></div>
+  </section>
+</section>
+
+<!-- ═══ الحساب ════════════════════════════════════════════════════════════ -->
+<section role="tabpanel" id="panel-account" class="panel" aria-labelledby="tab-account" hidden>
+  <section>
+    <h3>مساحة العمل</h3>
+    <p id="accountSummary" class="muted"></p>
+    <div class="field-row">
+      <div class="field grow">
+        <label for="wsName">اسم مساحة العمل</label>
+        <input id="wsName">
+      </div>
+      <button data-action="renameWorkspace">إعادة التسمية</button>
+    </div>
+    <p id="wsResult" class="muted"></p>
+  </section>
+
+  <section>
+    <h3>كلمة المرور</h3>
+    <div class="field-row">
+      <div class="field">
+        <label for="curPass">كلمة المرور الحالية</label>
+        <input id="curPass" type="password" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label for="newPass">كلمة المرور الجديدة</label>
+        <input id="newPass" type="password" autocomplete="new-password">
+        <span class="hint">٨ أحرف على الأقل</span>
+      </div>
+      <button class="btn-primary" data-action="changePassword">تغيير</button>
+    </div>
+    <p id="passResult" class="muted"></p>
+    <div class="row">
+      <button data-action="logoutAll">تسجيل الخروج من كل الأجهزة</button>
+    </div>
+  </section>
+
+  <section>
+    <h3>بياناتي</h3>
+    <div class="row">
+      <button data-action="exportWorkspace">تنزيل كل البيانات (JSON)</button>
+    </div>
+    <details class="disclosure danger-zone gap-top">
+      <summary>حذف مساحة العمل نهائياً</summary>
+      <div class="disclosure-body">
+        <p class="muted">يشمل كل الروابط والمحادثات والمستخدمين والمفاتيح. <strong>لا تراجع عنه.</strong> يتطلّب كلمة مرورك وكتابة <code>DELETE</code>.</p>
+        <button class="btn-danger" data-action="deleteWorkspace">حذف مساحة العمل نهائياً</button>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h3>حالة النظام</h3>
+    <p class="muted smaller">
+      عدّادات هذه العملية منذ إقلاعها — الخطة المجانية تنام، فالأرقام تبدأ من جديد مع كل استيقاظ.
+      وتقارير التشغيل تصلها من GitHub Actions نفسها، لا العكس: قراءة واجهة GitHub كانت ستتطلّب تخزين رمز وصول للمستودع هنا.
+    </p>
+    <div id="systemStatus"></div>
+  </section>
 </section>
 
 <script src="/static/dashboard.js"></script>
