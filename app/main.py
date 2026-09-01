@@ -38,7 +38,7 @@ from app.config import get_settings, production_secrets_check
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
 from app.errors import ErrorCode, coded_headers
-from app.routers import auth, bot_router, channels, links, notifications
+from app.routers import auth, bot_router, channels, leads, links, notifications
 from app.routers import status as status_router
 from app.security import resolve_session
 
@@ -325,6 +325,8 @@ app.include_router(links.router)
 app.include_router(notifications.router)
 app.include_router(status_router.router)
 app.include_router(bot_router.router)
+app.include_router(leads.router)
+app.include_router(leads.team_router)
 
 
 # Serving the page scripts as files is what makes a real CSP possible: with

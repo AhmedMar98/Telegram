@@ -20,6 +20,12 @@ extend-immutable-calls = [
     "fastapi.Header",
     "fastapi.Body",
     "fastapi.Path",
+    # Same reasoning as the FastAPI helpers above: `roles.require("x")`
+    # builds a fresh closure and touches nothing, so evaluating it once at
+    # import time — which is what a default argument does — is exactly the
+    # intent. B008 exists for defaults that are mutable or that do work,
+    # and this is neither.
+    "app.roles.require",
 ]
 
 [tool.ruff.format]

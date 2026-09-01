@@ -17,6 +17,7 @@
   <button role="tab" id="tab-links" class="tab" data-tab="links" data-action="selectTab" data-args='["links"]' aria-selected="true" aria-controls="panel-links" tabindex="0">الروابط</button>
   <button role="tab" id="tab-collect" class="tab" data-tab="collect" data-action="selectTab" data-args='["collect"]' aria-selected="false" aria-controls="panel-collect" tabindex="-1">الجمع</button>
   <button role="tab" id="tab-bot" class="tab" data-tab="bot" data-action="selectTab" data-args='["bot"]' aria-selected="false" aria-controls="panel-bot" tabindex="-1">البوت</button>
+  <button role="tab" id="tab-leads" class="tab" data-tab="leads" data-action="selectTab" data-args='["leads"]' aria-selected="false" aria-controls="panel-leads" tabindex="-1">الرصد</button>
   <button role="tab" id="tab-security" class="tab" data-tab="security" data-action="selectTab" data-args='["security"]' aria-selected="false" aria-controls="panel-security" tabindex="-1">الأمان</button>
   <button role="tab" id="tab-account" class="tab" data-tab="account" data-action="selectTab" data-args='["account"]' aria-selected="false" aria-controls="panel-account" tabindex="-1">الحساب</button>
 </div>
@@ -325,6 +326,97 @@
   </details>
 </section>
 
+
+<!-- ═══ الرصد ═════════════════════════════════════════════════════════════ -->
+<section role="tabpanel" id="panel-leads" class="panel" aria-labelledby="tab-leads" hidden>
+
+  <!-- The off-state is a first-class screen, not an empty list. An empty
+       table looks identical to "on, and nothing matched", and that
+       ambiguity is how a switched-off feature gets reported as broken. -->
+  <div id="leadsOff" class="empty" hidden>
+    <span class="empty-icon">🔕</span>
+    <span class="empty-title">رصد الطلبات مطفأ</span>
+    <p>
+      هذه الميزة تخزّن أشخاصاً — معرّف تيليجرام والاسم والمعرّف العلني ونصّ ما طلبوه — لا روابط فقط.
+      لذلك هي مطفأة افتراضياً وتحتاج قراراً صريحاً: اضبط <code>LEADS_ENABLED=true</code> في متغيّرات البيئة.
+    </p>
+    <p class="hint">
+      مدّة الاحتفاظ الافتراضية ٩٠ يوماً، بعدها تُحذف نصوص الطلبات تلقائياً ويبقى العدّاد فقط.
+      اضبطها بـ<code>LEADS_RETENTION_DAYS</code>، و<code>0</code> يوقف الحذف.
+    </p>
+  </div>
+
+  <div id="leadsOn" hidden>
+    <div class="stat-grid" id="leadsStats"></div>
+
+    <div class="section-head gap-top">
+      <h2>الطلبات الواردة</h2>
+      <p>مرتّبة بالجدّية أوّلاً لا بالتاريخ — وإلّا دُفن طلبٌ قويّ تحت صفحة من الطلبات الضعيفة.</p>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="leadStatus">الحالة</label>
+        <select id="leadStatus" data-action="loadLeads">
+          <option value="">الكل</option>
+          <option value="new" selected>جديد</option>
+          <option value="contacted">تم التواصل</option>
+          <option value="converted">تحوّل لعميل</option>
+          <option value="ignored">مُتجاهَل</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="leadMinScore">أقل درجة</label>
+        <input id="leadMinScore" type="number" min="0" value="0" data-action="loadLeads">
+      </div>
+    </div>
+    <div id="leadsList" class="gap-top"></div>
+
+    <div class="section-head gap-top">
+      <h2>الكلمات المفتاحية</h2>
+      <p>الوزن يفرّق بين إشارة قويّة وأخرى ضعيفة: «مشروع تخرج» ليس كـ«مساعدة». المطابقة تتجاهل التشكيل وأداة التعريف وصور الألف والتاء المربوطة.</p>
+    </div>
+    <div class="field-row">
+      <div class="field grow">
+        <label for="kwPhrase">العبارة</label>
+        <input id="kwPhrase" type="text" placeholder="مثال: مشروع تخرج">
+      </div>
+      <div class="field">
+        <label for="kwWeight">الوزن (١–١٠)</label>
+        <input id="kwWeight" type="number" min="1" max="10" value="3">
+      </div>
+      <button type="button" class="btn-primary" data-action="addKeyword">أضِف</button>
+    </div>
+    <div id="keywordList" class="gap-top"></div>
+
+    <details class="disclosure gap-top">
+      <summary>مختبر التجربة</summary>
+      <div class="disclosure-body">
+        <p class="hint">قاعدةٌ لا يستطيع أحد تجربتها هي قاعدة لا يضبطها أحد. جرّب نصّاً على القواعد الفعّالة الآن.</p>
+        <div class="field gap-top">
+          <label for="kwTest">نصّ تجريبي</label>
+          <textarea id="kwTest" rows="3" placeholder="أبغى مساعدة في مشروع التخرج"></textarea>
+        </div>
+        <button type="button" data-action="testKeywords">جرّب</button>
+        <p id="kwTestResult" class="muted" role="status"></p>
+      </div>
+    </details>
+
+    <div class="section-head gap-top">
+      <h2>المستفيدون</h2>
+      <p>أشخاص حقيقيون لم يوافقوا على تسجيلهم. «انسَ» يحذف الشخص <strong>ونصوص طلباته معه</strong> — لا نصفَ حذف.</p>
+    </div>
+    <div id="beneficiaryList"></div>
+
+    <details class="disclosure danger-zone gap-top">
+      <summary>حذف الطلبات المنتهية الآن</summary>
+      <div class="disclosure-body">
+        <p class="hint">يطبّق مدّة الاحتفاظ فوراً بدل انتظار الجدولة. المستفيدون وعدّاداتهم تبقى.</p>
+        <button type="button" class="btn-danger" data-action="purgeLeads">طبّق مدّة الاحتفاظ</button>
+      </div>
+    </details>
+  </div>
+</section>
+
 <!-- ═══ الأمان ════════════════════════════════════════════════════════════ -->
 <section role="tabpanel" id="panel-security" class="panel" aria-labelledby="tab-security" hidden>
   <section>
@@ -384,6 +476,16 @@
 
 <!-- ═══ الحساب ════════════════════════════════════════════════════════════ -->
 <section role="tabpanel" id="panel-account" class="panel" aria-labelledby="tab-account" hidden>
+  <section>
+    <h3>الفريق والصلاحيات</h3>
+    <p class="muted">
+      كان عمود الدور موجوداً منذ أوّل هجرة ولا يُفحَص في أي مكان — فكل عضو يملك كل صلاحية،
+      بما فيها حذف مساحة العمل وتصدير بياناتها كاملة. الآن يُفحَص.
+    </p>
+    <div id="teamList"></div>
+    <p id="teamMsg" class="muted" role="status"></p>
+  </section>
+
   <section>
     <h3>مساحة العمل</h3>
     <p id="accountSummary" class="muted"></p>

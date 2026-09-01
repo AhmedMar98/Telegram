@@ -36,8 +36,8 @@ def test_the_dispatcher_actually_has_the_routers():
     vacuously true, which is how a check like this stops checking."""
     names = _router_names()
 
-    assert len(names) == 3, f"expected three routers, found {names}"
-    assert set(names) == {"onboarding", "status", "search"}
+    assert len(names) == 4, f"expected four routers, found {names}"
+    assert set(names) == {"onboarding", "status", "onboard_account", "search"}
 
 
 def test_the_catch_all_router_is_registered_last():
@@ -103,3 +103,16 @@ def test_the_module_still_exposes_its_handlers_by_name():
         "handle_vitality",
     ):
         assert callable(getattr(bot, name, None)), f"{name} is no longer reachable on app.bot.telegram_bot"
+
+
+def test_the_account_flow_router_comes_before_the_catch_all():
+    """Both register an F.text handler, and the ordering decides which one
+    sees a phone number typed mid-flow.
+
+    Registered the other way round, /addaccount would ask for a phone
+    number and the search router would answer it with "no results" — a
+    failure that looks like a broken search rather than a broken ordering.
+    """
+    names = _router_names()
+
+    assert names.index("onboard_account") < names.index("search")

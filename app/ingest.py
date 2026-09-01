@@ -25,6 +25,7 @@ from app.classifier import (
     link_platform,
     split_context,
 )
+from app.leads import detect as detect_lead
 from app.models import Channel, Link
 
 # Synthetic channel identifiers for links that did not arrive from a real
@@ -159,6 +160,10 @@ def ingest_text(
     extra_urls: list[str] | None = None,
     button_urls: list[str] | None = None,
     forwarded_from: str | None = None,
+    sender_id: str | None = None,
+    sender_username: str | None = None,
+    sender_name: str | None = None,
+    keyword_rules: list | None = None,
     summary: IngestSummary | None = None,
 ) -> IngestSummary:
     """Pull every URL out of a blob of text and store each one.
@@ -172,6 +177,27 @@ def ingest_text(
     """
     summary = summary or IngestSummary()
     summary.scanned += 1
+
+    # Lead detection hangs here rather than in the collector and the live
+    # listener separately, for the reason that decides most placement
+    # questions in this codebase: both of them already call this function
+    # for *every* message — including the ones with no links at all, which
+    # is most help requests — so one hook covers both and a third entry
+    # point cannot forget it.
+    #
+    # Before the URL work below, so a message that matches the keywords is
+    # recorded even if extracting its links then fails.
+    detect_lead(
+        db,
+        workspace_id=workspace_id,
+        channel_id=channel_id,
+        text=text,
+        message_id=message_id,
+        sender_id=sender_id,
+        sender_username=sender_username,
+        sender_name=sender_name,
+        rules=keyword_rules,
+    )
 
     spans = extract_url_spans(text)
     contexts = split_context(text, spans)

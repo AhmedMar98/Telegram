@@ -172,6 +172,32 @@ def lookup(index: dict[str, int], chat_id: object, username: object) -> int | No
 # --- storing what arrived ---------------------------------------------------
 
 
+def _sender_id(event: Any, message: Any) -> str | None:
+    """Who wrote this. None for a channel post, which has no author.
+
+    Read off the event rather than fetched: ``get_sender()`` is a round
+    trip to Telegram, and paying one per message to attribute a lead that
+    may never match would multiply the live path's traffic by the number of
+    messages it sees.
+    """
+    raw = getattr(event, "sender_id", None) or getattr(message, "sender_id", None)
+    return str(raw) if raw else None
+
+
+def _sender_username(event: Any) -> str | None:
+    sender = getattr(event, "sender", None)
+    return getattr(sender, "username", None) if sender is not None else None
+
+
+def _sender_name(event: Any) -> str | None:
+    sender = getattr(event, "sender", None)
+    if sender is None:
+        return None
+    parts = [getattr(sender, "first_name", None), getattr(sender, "last_name", None)]
+    name = " ".join(p for p in parts if p).strip()
+    return name or getattr(sender, "title", None)
+
+
 def store_message(
     workspace_id: int,
     channel_id: int,
@@ -181,6 +207,9 @@ def store_message(
     posted_at: datetime | None,
     button_urls: list[str],
     forwarded_from: str | None,
+    sender_id: str | None = None,
+    sender_username: str | None = None,
+    sender_name: str | None = None,
 ) -> IngestSummary:
     """Ingest one live message. Synchronous, and called in a thread.
 
@@ -210,6 +239,9 @@ def store_message(
             posted_at=posted_at,
             button_urls=button_urls,
             forwarded_from=forwarded_from,
+            sender_id=sender_id,
+            sender_username=sender_username,
+            sender_name=sender_name,
         )
         db.commit()
         return summary
@@ -434,6 +466,9 @@ async def handle_event(event: Any, index: _Index) -> int:
             posted_at=posted.replace(tzinfo=None) if isinstance(posted, datetime) else None,
             button_urls=_button_urls(message),
             forwarded_from=_forward_origin(message),
+            sender_id=_sender_id(event, message),
+            sender_username=_sender_username(event),
+            sender_name=_sender_name(event),
         )
         _state.links_stored += summary.stored
         if summary.stored:

@@ -209,6 +209,35 @@ class Settings(BaseSettings):
     # stranger being able to interact with the bot at all.
     bot_allowed_chat_ids: str = ""
 
+    # Whether the bot may onboard a collection account (phone + OTP).
+    #
+    # Off by default, and the reason is what actually travels through a
+    # chat when it is on. NOT the api_hash or the session string — those
+    # never leave the server. But the one-time code does, and so does the
+    # two-factor password if the account has one, and Telegram keeps both
+    # in the chat history until something deletes them. The flow deletes
+    # each message the moment it is read and refuses to run anywhere but a
+    # one-to-one chat, but an operator should still choose to enable it.
+    bot_account_onboarding: bool = False
+
+    # --- lead detection (the second product) -----------------------------
+    #
+    # Off by default, and this one is not a convenience flag either.
+    # Everything stored until now was a link. With this on, the system also
+    # stores identifiable third parties who never opted in — their Telegram
+    # id, handle, display name and the text of what they asked for. That is
+    # a decision a deployment makes, not a default it discovers.
+    leads_enabled: bool = False
+
+    # How long a matched message is kept, in days. 0 disables the purge.
+    #
+    # This table holds other people's words. Keeping them forever by
+    # default is what turns a lead pipeline into an archive nobody agreed
+    # to, so there is a window and it is short. The beneficiary row and its
+    # counter survive the purge, so "this person has asked four times"
+    # outlives the texts.
+    leads_retention_days: int = 90
+
     bot_token: str | None = None
     bot_webhook_secret: str | None = None
     public_base_url: str | None = None  # e.g. https://link-intel-web.onrender.com

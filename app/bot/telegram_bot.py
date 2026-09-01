@@ -35,6 +35,7 @@ from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.types import TelegramObject
 from sqlalchemy.orm import Session
 
+from app.bot.routers.onboard_account import router as onboard_router
 from app.bot.routers.onboarding import handle_help, handle_start, handle_unlink
 from app.bot.routers.onboarding import router as onboarding_router
 from app.bot.routers.search import (
@@ -156,6 +157,10 @@ dispatcher.update.middleware(DbSessionMiddleware())
 # tests/test_bot_routers.py pins this rather than trusting the comment.
 dispatcher.include_router(onboarding_router)
 dispatcher.include_router(status_router)
+# Before the search router. Both register an F.text handler, and this one
+# only answers while a chat has an account-onboarding flow open — so a
+# phone number typed mid-flow must reach it rather than being searched for.
+dispatcher.include_router(onboard_router)
 dispatcher.include_router(search_router)
 
 
@@ -285,6 +290,7 @@ __all__ = [
     "handle_stats",
     "handle_unlink",
     "handle_vitality",
+    "onboard_router",
     "onboarding_router",
     "search_router",
     "status_router",

@@ -63,7 +63,8 @@ from app.dialogs import (
     parse_scope,
     register_dialog,
 )
-from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
+from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text
+from app.leads import active_rules as active_keyword_rules  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 from app.notify import raise_alert, report_adult_links  # noqa: E402
 from app.rls import scope_session_to_workspace  # noqa: E402
@@ -143,7 +144,11 @@ def _forward_origin(message: object) -> str | None:
 
 
 async def _collect_channel(
-    client: TelegramClient, db: Session, channel: Channel, run: IngestSummary | None = None
+    client: TelegramClient,
+    db: Session,
+    channel: Channel,
+    run: IngestSummary | None = None,
+    keyword_rules: list | None = None,
 ) -> int:
     label = channel.username or channel.tg_channel_id
     try:
@@ -173,6 +178,14 @@ async def _collect_channel(
                 posted_at=message.date.replace(tzinfo=None) if message.date else None,
                 button_urls=_button_urls(message),
                 forwarded_from=_forward_origin(message),
+                # Read off the message, never fetched. get_sender() is a
+                # round trip per message, and paying one to attribute a
+                # lead that may never match would multiply this run's
+                # Telegram traffic by the number of messages it reads —
+                # which is exactly what the pacing budget exists to hold
+                # down.
+                sender_id=str(message.sender_id) if getattr(message, "sender_id", None) else None,
+                keyword_rules=keyword_rules,
                 summary=summary,
             )
             new_watermark = max(new_watermark, message.id)
@@ -529,6 +542,11 @@ async def _collect_with_account(
         if await _discover_dialogs(client, db, account.workspace_id, account):
             channels = _channels_for(db, account.workspace_id, account, is_default=is_default)
 
+        # Read once per account, not once per message. The rule set is
+        # small and never changes mid-run, and reading it per message would
+        # put a SELECT between every stored link and the next.
+        keyword_rules = active_keyword_rules(db, account.workspace_id)
+
         total = 0
         for index, channel in enumerate(channels):
             # Before each dialog except the first: the pause belongs
@@ -536,7 +554,7 @@ async def _collect_with_account(
             # would be pure latency with nothing to hide.
             if index:
                 await pacer.wait()
-            total += await _collect_channel(client, db, channel, run)
+            total += await _collect_channel(client, db, channel, run, keyword_rules)
         logger.info(
             "account %s (%s): %d new link(s) across %d channel(s)",
             account.id,

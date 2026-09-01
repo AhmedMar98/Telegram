@@ -100,6 +100,10 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/links/{link_id}/open",
         "/links/saved/{saved_id}",
         "/channels/accounts/{account_id}/reactivate",
+        "/leads/{lead_id}",
+        "/leads/keywords/{rule_id}",
+        "/leads/beneficiaries/{beneficiary_id}",
+        "/team/{user_id}",
     }
     assert discovered == expected, (
         f"Tenant-scoped paths changed. New ones must be probed below or "
@@ -146,6 +150,35 @@ def victim_ids(client: TestClient) -> dict[str, int]:
         db.close()
     notification_id = client.get("/notifications").json()["items"][0]["id"]
 
+    # Lead-detection rows. Created directly rather than through the API,
+    # because the whole feature is inert unless LEADS_ENABLED is set — and
+    # the sweep must probe these paths whether the flag is on or off. An
+    # endpoint that leaks another workspace's data while its feature is
+    # "disabled" leaks it just the same.
+    db = SessionLocal()
+    try:
+        from app.models import Beneficiary, KeywordRule, Lead
+
+        rule = KeywordRule(workspace_id=workspace_id, phrase="سرّي", weight=3)
+        person = Beneficiary(workspace_id=workspace_id, tg_user_id="victim-user", username="victim_person")
+        db.add_all([rule, person])
+        db.flush()
+        lead = Lead(
+            workspace_id=workspace_id,
+            beneficiary_id=person.id,
+            channel_id=channel["id"],
+            message_id=1,
+            text="طلب الضحية السرّي",
+            matched="سرّي",
+            score=3,
+        )
+        db.add(lead)
+        db.commit()
+        rule_id, beneficiary_id, lead_id = rule.id, person.id, lead.id
+        victim_user_id = db.query(User).filter(User.email == "victim@example.com").one().id
+    finally:
+        db.close()
+
     client.post("/auth/logout")
     return {
         "notification_id": notification_id,
@@ -155,6 +188,10 @@ def victim_ids(client: TestClient) -> dict[str, int]:
         "saved_id": saved["id"],
         "key_id": api_key["id"],
         "account_id": account_id,
+        "lead_id": lead_id,
+        "rule_id": rule_id,
+        "beneficiary_id": beneficiary_id,
+        "user_id": victim_user_id,
     }
 
 
@@ -171,6 +208,9 @@ _VALID_PATCH_BODIES = {
     "/links/{link_id}": {"category": "games"},
     "/links/{link_id}/notes": {"notes": "probe"},
     "/channels/{channel_id}": {"account_id": None},
+    "/leads/{lead_id}": {"status": "contacted"},
+    "/leads/keywords/{rule_id}": {"weight": 2},
+    "/team/{user_id}": {"role": "agent"},
 }
 
 
@@ -213,6 +253,24 @@ def test_foreign_resource_survives_the_probe(attacker, victim_ids, path: str, me
     assert len(attacker.get("/channels").json()) == 2  # manual bucket + the added one
     assert len(attacker.get("/links/saved").json()) == 1, f"{method} {path} destroyed the victim's saved search"
     assert len(attacker.get("/auth/api-keys").json()) == 1, f"{method} {path} revoked the victim's API key"
+
+    # The lead rows too. A "forget this person" that another workspace can
+    # reach is the worst possible version of this endpoint: it destroys
+    # data silently and the owner has no way to know who did it.
+    db = SessionLocal()
+    try:
+        from app.models import Beneficiary as _B
+        from app.models import Lead as _L
+
+        ws = db.query(User).filter(User.email == "victim@example.com").one().workspace_id
+        assert db.query(_L).filter(_L.workspace_id == ws).count() == 1, (
+            f"{method} {path} destroyed the victim's lead"
+        )
+        assert db.query(_B).filter(_B.workspace_id == ws).count() == 1, (
+            f"{method} {path} erased the victim's beneficiary"
+        )
+    finally:
+        db.close()
     assert attacker.get("/notifications").json()["unread"] == 1, (
         f"{method} {path} marked the victim's notification read"
     )

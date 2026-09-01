@@ -26,10 +26,13 @@ from app.models import (
     ApiKey,
     AuditLog,
     AuthSession,
+    Beneficiary,
     BotLink,
     BotLinkCode,
     Channel,
     ClassificationFeedback,
+    KeywordRule,
+    Lead,
     Link,
     LoginAttempt,
     Notification,
@@ -49,6 +52,12 @@ from app.models import (
 WORKSPACE_TABLES = (
     ApiKey,
     WorkflowRun,
+    # Leads before beneficiaries, and beneficiaries before channels: a lead
+    # points at both, so deleting either first leaves a dangling reference
+    # on any engine that enforces the foreign key.
+    Lead,
+    Beneficiary,
+    KeywordRule,
     Notification,
     NotificationPreference,
     ClassificationFeedback,
