@@ -80,6 +80,7 @@ def search_links(
     channel_id: int | None = Query(default=None),
     language: str | None = Query(default=None, max_length=10),
     domain: str | None = Query(default=None, max_length=300),
+    platform: str | None = Query(default=None, max_length=200),
     include_archived: bool = Query(default=False),
     sort: str = Query(default="date"),
     page: int = Query(default=1, ge=1),
@@ -100,6 +101,7 @@ def search_links(
         channel_id=channel_id,
         language=language,
         domain=domain,
+        platform=platform,
         include_archived=include_archived,
     )
     total = query.count()
@@ -219,6 +221,17 @@ def stats(
         .limit(10)
     ).all()
 
+    # The platform split — the second axis, counted the same way the
+    # category one is. Not limited to a top N: there are eleven platforms
+    # by construction, and "which services do my links live on" is a
+    # question whose answer is the whole list or nothing.
+    platform_rows = db.execute(
+        select(Link.platform, func.count())
+        .where(Link.workspace_id == ws_id, Link.is_archived.is_(False))
+        .group_by(Link.platform)
+        .order_by(func.count().desc())
+    ).all()
+
     # One grouped query for the vitality split rather than three counts:
     # is_alive has exactly three states (True / False / NULL = never
     # checked), so grouping on it answers all three at once.
@@ -274,6 +287,7 @@ def stats(
         total_channels=total_channels,
         by_category=by_category,
         top_domains=[(row[0], row[1]) for row in domain_rows],
+        platforms=[(row[0], row[1]) for row in platform_rows],
         added_this_week=added_this_week,
         added_this_month=added_this_month,
         vitality=VitalityStats(

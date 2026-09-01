@@ -21,7 +21,7 @@ import pytest
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "app/templates/dashboard.html"
 
-EXPECTED_TABS = ["links", "collect", "bot", "security", "account"]
+EXPECTED_TABS = ["links", "collect", "bot", "leads", "security", "account"]
 
 
 @pytest.fixture(scope="module")

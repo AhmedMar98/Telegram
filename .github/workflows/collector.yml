@@ -58,6 +58,12 @@ jobs:
           # (discovery on, every kind in scope) when unset.
           COLLECTOR_AUTO_DISCOVER: ${{ vars.COLLECTOR_AUTO_DISCOVER }}
           COLLECTOR_SCOPE: ${{ vars.COLLECTOR_SCOPE }}
+          # Proactive pacing. Budgeted, not per-dialog: see Pacer in
+          # scripts/collect.py for why an unbudgeted pause turns the
+          # anti-ban shield into the timeout it exists to prevent.
+          COLLECTOR_PACE_MIN_SECONDS: ${{ vars.COLLECTOR_PACE_MIN_SECONDS }}
+          COLLECTOR_PACE_MAX_SECONDS: ${{ vars.COLLECTOR_PACE_MAX_SECONDS }}
+          COLLECTOR_PACE_BUDGET_SECONDS: ${{ vars.COLLECTOR_PACE_BUDGET_SECONDS }}
         run: python scripts/collect.py
 
   # Reports the outcome to the app's status board (ideas 181/183). Runs

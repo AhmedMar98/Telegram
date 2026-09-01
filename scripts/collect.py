@@ -35,7 +35,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -52,7 +54,8 @@ from app.classifier.llm import lowest_quota  # noqa: E402
 from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import InvalidToken, decrypt_field, encrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.dialogs import (  # noqa: E402
+from app.dialogs import (
+    SOURCE_USERBOT,
     dialog_identity,
     dialog_kind,
     index_channels,
@@ -60,7 +63,8 @@ from app.dialogs import (  # noqa: E402
     parse_scope,
     register_dialog,
 )
-from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text  # noqa: E402
+from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text
+from app.leads import active_rules as active_keyword_rules  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 from app.notify import raise_alert, report_adult_links  # noqa: E402
 from app.rls import scope_session_to_workspace  # noqa: E402
@@ -140,7 +144,11 @@ def _forward_origin(message: object) -> str | None:
 
 
 async def _collect_channel(
-    client: TelegramClient, db: Session, channel: Channel, run: IngestSummary | None = None
+    client: TelegramClient,
+    db: Session,
+    channel: Channel,
+    run: IngestSummary | None = None,
+    keyword_rules: list | None = None,
 ) -> int:
     label = channel.username or channel.tg_channel_id
     try:
@@ -170,6 +178,14 @@ async def _collect_channel(
                 posted_at=message.date.replace(tzinfo=None) if message.date else None,
                 button_urls=_button_urls(message),
                 forwarded_from=_forward_origin(message),
+                # Read off the message, never fetched. get_sender() is a
+                # round trip per message, and paying one to attribute a
+                # lead that may never match would multiply this run's
+                # Telegram traffic by the number of messages it reads —
+                # which is exactly what the pacing budget exists to hold
+                # down.
+                sender_id=str(message.sender_id) if getattr(message, "sender_id", None) else None,
+                keyword_rules=keyword_rules,
                 summary=summary,
             )
             new_watermark = max(new_watermark, message.id)
@@ -258,6 +274,68 @@ def _max_channels_per_account() -> int:
         return DEFAULT_MAX_CHANNELS_PER_ACCOUNT
 
 
+class Pacer:
+    """Randomised pauses between dialogs, spent from a fixed budget.
+
+    Two independent jobs, and separating them is the whole design:
+
+    * **Look less mechanical.** A constant gap between requests is as much
+      a signature as no gap at all, so each pause is drawn from a range.
+    * **Never cause the outage it prevents.** Up to 4s x 20 dialogs x 10
+      accounts is 800 seconds added to an hourly job on runners that are
+      already late under load. So the pauses are drawn from a budget, and
+      when the budget is gone the collector stops pausing and finishes its
+      work. Slowing down is a defence; timing out is not.
+
+    ``sleep`` and ``random`` are injected so a test can prove the budget is
+    honoured without spending real seconds proving it.
+    """
+
+    def __init__(
+        self,
+        *,
+        minimum: float,
+        maximum: float,
+        budget: float,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+    ) -> None:
+        self._min = max(0.0, minimum)
+        self._max = max(self._min, maximum)
+        self._remaining = max(0.0, budget)
+        self._sleep = sleep
+        self._jitter = jitter
+        self.spent = 0.0
+        self.paused = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self._remaining <= 0
+
+    async def wait(self) -> None:
+        """Pause once, if there is budget for it. Never raises."""
+        if self._max <= 0 or self.exhausted:
+            return
+        # Clamped to what is left, so the budget is a real ceiling rather
+        # than one it can overshoot by a final full-length pause.
+        delay = min(self._jitter(self._min, self._max), self._remaining)
+        if delay <= 0:
+            return
+        self._remaining -= delay
+        self.spent += delay
+        self.paused += 1
+        await self._sleep(delay)
+
+
+def _pacer() -> Pacer:
+    settings = get_settings()
+    return Pacer(
+        minimum=settings.collector_pace_min_seconds,
+        maximum=settings.collector_pace_max_seconds,
+        budget=settings.collector_pace_budget_seconds,
+    )
+
+
 def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, is_default: bool) -> list[Channel]:
     """Which channels this account is responsible for.
 
@@ -266,7 +344,16 @@ def _channels_for(db: Session, workspace_id: int, account: TelegramAccount, *, i
     workspace keeps working exactly as before without anyone having to
     assign anything.
     """
-    query = db.query(Channel).filter(Channel.workspace_id == workspace_id, Channel.is_active.is_(True))
+    query = db.query(Channel).filter(
+        Channel.workspace_id == workspace_id,
+        Channel.is_active.is_(True),
+        # Rows the public scraper owns are excluded here and only here.
+        # They carry their own watermark and the scraper advances it; a
+        # userbot reading the same row would move that watermark past
+        # messages the scraper has not fetched, and they would never be
+        # collected by either reader.
+        Channel.source == SOURCE_USERBOT,
+    )
     limit = _max_channels_per_account()
     if is_default:
         query = query.filter((Channel.account_id == account.id) | (Channel.account_id.is_(None)))
@@ -400,6 +487,7 @@ async def _collect_with_account(
     db: Session,
     account: TelegramAccount,
     channels: list[Channel],
+    pacer: Pacer,
     api_id: int,
     api_hash: str,
     run: IngestSummary | None = None,
@@ -454,9 +542,19 @@ async def _collect_with_account(
         if await _discover_dialogs(client, db, account.workspace_id, account):
             channels = _channels_for(db, account.workspace_id, account, is_default=is_default)
 
+        # Read once per account, not once per message. The rule set is
+        # small and never changes mid-run, and reading it per message would
+        # put a SELECT between every stored link and the next.
+        keyword_rules = active_keyword_rules(db, account.workspace_id)
+
         total = 0
-        for channel in channels:
-            total += await _collect_channel(client, db, channel, run)
+        for index, channel in enumerate(channels):
+            # Before each dialog except the first: the pause belongs
+            # *between* reads, and pausing before the only read in a run
+            # would be pure latency with nothing to hide.
+            if index:
+                await pacer.wait()
+            total += await _collect_channel(client, db, channel, run, keyword_rules)
         logger.info(
             "account %s (%s): %d new link(s) across %d channel(s)",
             account.id,
@@ -545,6 +643,11 @@ async def collect() -> None:
         # Run-level, not per-channel: a workspace following twenty channels
         # would otherwise get twenty separate messages from one run.
         run = IngestSummary()
+        # One pacer for the whole run, not one per account. The budget is a
+        # property of the *job's* wall clock — ten accounts each with their
+        # own 240-second allowance is 2,400 seconds, which is the timeout
+        # this exists to avoid.
+        pacer = _pacer()
         for account in accounts:
             is_default = account.id == default_account_id
             channels = _channels_for(db, workspace_id, account, is_default=is_default)
@@ -557,7 +660,7 @@ async def collect() -> None:
                 continue
             before = account.consecutive_failures
             links, read = await _collect_with_account(
-                db, account, channels, api_id, api_hash, run, is_default=is_default
+                db, account, channels, pacer, api_id, api_hash, run, is_default=is_default
             )
             total += links
             collected_channels += read

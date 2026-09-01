@@ -41,6 +41,7 @@ _CHANNEL_EXAMPLE: dict[str, Any] = {
     "username": "python_weekly",
     "title": "Python Weekly",
     "kind": "channel",
+    "source": "userbot",
     "is_active": True,
     "account_id": 3,
     "last_collected_at": "2026-03-01T10:00:00",
@@ -66,6 +67,7 @@ _LINK_EXAMPLE: dict[str, Any] = {
     "channel_id": 12,
     "url": "https://peps.python.org/pep-0703/",
     "domain": "peps.python.org",
+    "platform": "web",
     "category": "programming",
     "confidence": 0.92,
     "classified_by": "rules",
@@ -173,16 +175,36 @@ class ChannelUpdate(BaseModel):
     model_config = _config({"account_id": 3}, {"account_id": None})
 
 
+class PublicSourceCreate(BaseModel):
+    """A link or @username the operator wants read without a userbot.
+
+    One free-text field rather than separate "username" and "link" fields:
+    the operator has one thing in their clipboard and does not know, and
+    should not have to know, which of the two shapes it is. The router in
+    app/publicsource.py decides, and refuses what it cannot place.
+    """
+
+    ref: str = Field(min_length=1, max_length=300)
+
+    model_config = _config({"ref": "@python_weekly"})
+
+
 class ChannelOut(BaseModel):
     id: int
     tg_channel_id: str
     username: str | None
     title: str | None
-    # "channel", "group" or "private". A dialog discovered automatically
-    # is not distinguishable from a hand-added one anywhere else in the
-    # API, and it should not be — but which *sort* of dialog a link came
-    # from is context a reader wants and the row already carries.
+    # "channel", "group", "private" or "bot". A dialog discovered
+    # automatically is not distinguishable from a hand-added one anywhere
+    # else in the API, and it should not be — but which *sort* of dialog a
+    # link came from is context a reader wants and the row already carries.
     kind: str
+    # "userbot" or "public": which reader owns this row. Exposed because
+    # the two have visibly different behaviour — a public source needs no
+    # account and reads only what the channel published — and an operator
+    # comparing two rows that produce different amounts deserves to see
+    # why without reading the code.
+    source: str
     is_active: bool
     account_id: int | None
     # When the scheduled collector last read this dialog; None until it
@@ -273,6 +295,10 @@ class LinkOut(BaseModel):
     channel_id: int
     url: str
     domain: str
+    # Which service the link is on. Beside ``category``, never instead of
+    # it: "a Telegram link" and "a course link" are different facts about
+    # the same row and the interface shows both.
+    platform: str
     category: str
     confidence: float
     classified_by: str
@@ -401,6 +427,11 @@ class StatsResponse(BaseModel):
     total_channels: int
     by_category: dict[str, int]
     top_domains: list[tuple[str, int]]
+    # How many links live on each service — Telegram, WhatsApp, YouTube, a
+    # plain web page. The whole list, not a top N: there are eleven
+    # platforms by construction and a truncated answer to "where do my
+    # links live" is not an answer.
+    platforms: list[tuple[str, int]]
     added_this_week: int
     added_this_month: int
     vitality: VitalityStats
@@ -413,6 +444,7 @@ class StatsResponse(BaseModel):
             "total_channels": 6,
             "by_category": {"programming": 3120, "news": 2044, "other": 3640},
             "top_domains": [["github.com", 812], ["youtube.com", 401]],
+            "platforms": [["web", 1400], ["telegram", 520], ["youtube", 401]],
             "added_this_week": 137,
             "added_this_month": 611,
             "vitality": _VITALITY_EXAMPLE,
@@ -978,3 +1010,154 @@ class WorkspaceOut(BaseModel):
     model_config = _config(
         {"id": 1, "name": "Research links", "created_at": "2026-02-14T07:55:00"}, from_attributes=True
     )
+
+
+# --- lead detection --------------------------------------------------------
+
+
+class LeadsStatusOut(BaseModel):
+    # False when LEADS_ENABLED is unset. Reported rather than 404'd so the
+    # interface can say "switched off" instead of rendering an empty panel,
+    # which looks identical to "on, and found nothing".
+    enabled: bool
+    total: int
+    new: int
+    beneficiaries: int
+    rules: int
+
+    model_config = _config({"enabled": True, "total": 42, "new": 7, "beneficiaries": 31, "rules": 9})
+
+
+class LeadOut(BaseModel):
+    id: int
+    beneficiary_id: int | None
+    channel_id: int
+    message_id: int
+    text: str
+    # Which phrases fired. A score with no explanation is a number nobody
+    # can argue with, and the first question about any false positive is
+    # "why was this flagged".
+    matched: str
+    score: int
+    status: str
+    created_at: datetime
+
+    model_config = _config(
+        {
+            "id": 300,
+            "beneficiary_id": 12,
+            "channel_id": 4,
+            "message_id": 9981,
+            "text": "أبغى مساعدة في مشروع التخرج",
+            "matched": "مشروع تخرج, مساعدة",
+            "score": 6,
+            "status": "new",
+            "created_at": "2026-09-01T10:00:00",
+        },
+        from_attributes=True,
+    )
+
+
+class LeadStatusUpdate(BaseModel):
+    status: str = Field(min_length=1, max_length=20)
+
+    model_config = _config({"status": "contacted"})
+
+
+class KeywordRuleCreate(BaseModel):
+    phrase: str = Field(min_length=2, max_length=200)
+    # Weighted rather than flat: "مشروع تخرج" is a far stronger signal than
+    # "مساعدة", and treating them alike means drowning in noise or missing
+    # the real requests.
+    weight: int = Field(default=1, ge=1, le=10)
+
+    model_config = _config({"phrase": "مشروع تخرج", "weight": 5})
+
+
+class KeywordRuleUpdate(BaseModel):
+    weight: int | None = Field(default=None, ge=1, le=10)
+    is_active: bool | None = None
+
+    model_config = _config({"weight": 3, "is_active": False})
+
+
+class KeywordRuleOut(BaseModel):
+    id: int
+    phrase: str
+    weight: int
+    is_active: bool
+    created_at: datetime
+
+    model_config = _config(
+        {"id": 5, "phrase": "مشروع تخرج", "weight": 5, "is_active": True, "created_at": "2026-09-01T09:00:00"},
+        from_attributes=True,
+    )
+
+
+class LeadTestIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+    model_config = _config({"text": "أبغى مساعدة في مشروع التخرج"})
+
+
+class LeadTestOut(BaseModel):
+    score: int
+    matched: list[str]
+    would_record: bool
+
+    model_config = _config({"score": 6, "matched": ["مشروع تخرج", "مساعدة"], "would_record": True})
+
+
+class BeneficiaryOut(BaseModel):
+    id: int
+    tg_user_id: str
+    username: str | None
+    display_name: str | None
+    # No phone and no email, and their absence is the design: Telegram
+    # exposes a phone on some peers, and storing it would turn a lead list
+    # into a contact database nobody consented to.
+    request_count: int
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+    model_config = _config(
+        {
+            "id": 12,
+            "tg_user_id": "584112233",
+            "username": "student_x",
+            "display_name": "طالب",
+            "request_count": 3,
+            "first_seen_at": "2026-08-01T12:00:00",
+            "last_seen_at": "2026-09-01T10:00:00",
+        },
+        from_attributes=True,
+    )
+
+
+# --- team and roles --------------------------------------------------------
+
+
+class TeamMemberOut(BaseModel):
+    id: int
+    email: EmailStr
+    role: str
+    role_label: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = _config(
+        {
+            "id": 2,
+            "email": "agent@example.com",
+            "role": "agent",
+            "role_label": "مقدّم خدمة — الطلبات والأرشيف، بلا حسابات جمع",
+            "is_active": True,
+            "created_at": "2026-08-01T12:00:00",
+        }
+    )
+
+
+class TeamRoleUpdate(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+
+    model_config = _config({"role": "agent"})

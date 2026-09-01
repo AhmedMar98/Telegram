@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import roles
 from app.account_data import delete_workspace, export_workspace
 from app.alerts import NEW_DEVICE
 from app.apikeys import MAX_KEYS_PER_USER, create_api_key, list_api_keys, revoke_api_key
@@ -468,7 +469,11 @@ def revoke_session_endpoint(
 def export_my_data(
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # workspace.manage, not merely "logged in". This hands back every
+    # link, every channel and every collected message context in one
+    # file — which is the whole workspace, not the caller's own data, and
+    # it was reachable by any member.
+    current_user: User = Depends(roles.require(roles.WORKSPACE_MANAGE)),
 ) -> JSONResponse:
     """Download everything this workspace holds, as one JSON document.
 
@@ -505,6 +510,7 @@ def delete_my_workspace(
     payload: DeleteAccountRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_session_user),
+    _guard: User = Depends(roles.require(roles.WORKSPACE_MANAGE)),
 ) -> DeleteAccountResponse:
     """Erase this workspace and everything in it. There is no undo.
 

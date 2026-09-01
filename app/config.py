@@ -166,7 +166,78 @@ class Settings(BaseSettings):
     # and never re-registers what it already knows.
     collector_max_dialogs: int = 200
 
+    # --- proactive pacing (anti-ban) ------------------------------------
+    #
+    # Until now the only defence against a ban was reactive: catch
+    # FloodWaitError after Telegram has already decided you were reading
+    # too fast. This adds the missing half — a randomised pause between
+    # dialogs so the request pattern does not look mechanical in the first
+    # place.
+    #
+    # Randomised rather than fixed on purpose: a constant 3-second gap is
+    # itself a signature, and the thing being avoided is *looking like a
+    # program*.
+    collector_pace_min_seconds: float = 1.5
+    collector_pace_max_seconds: float = 4.0
+
+    # The pacing budget, and the reason this is not simply "sleep between
+    # every dialog".
+    #
+    # Naively: 4s x 20 dialogs x 10 accounts = up to 800 seconds added to a
+    # job that runs hourly, on GitHub Actions runners that are already
+    # late under load. The shield would cause the outage it exists to
+    # prevent, and a timed-out run looks exactly like a broken collector.
+    #
+    # So pacing is spent from a budget. While there is budget the collector
+    # paces; when it runs out the collector stops pacing and finishes the
+    # dialogs it has left — the run completes either way, and the rotation
+    # picks up the rest next hour.
+    collector_pace_budget_seconds: float = 240.0
+
     # --- Telegram bot (webhook mode; no polling worker required) --------
+    # Which chats may talk to the bot at all. Comma-separated chat ids.
+    #
+    # Empty means "any chat may talk to it", which is what it has always
+    # done and what every existing deployment depends on — so an empty
+    # value cannot become a lockout on upgrade. Setting it turns the bot
+    # private in the strong sense: an unlisted chat gets no reply, not
+    # even the help text, so the bot's existence is not confirmed to
+    # someone who found it by guessing.
+    #
+    # Note what this is *not*: the link code already prevents an unlisted
+    # chat from reading anyone's data. This closes the smaller gap of a
+    # stranger being able to interact with the bot at all.
+    bot_allowed_chat_ids: str = ""
+
+    # Whether the bot may onboard a collection account (phone + OTP).
+    #
+    # Off by default, and the reason is what actually travels through a
+    # chat when it is on. NOT the api_hash or the session string — those
+    # never leave the server. But the one-time code does, and so does the
+    # two-factor password if the account has one, and Telegram keeps both
+    # in the chat history until something deletes them. The flow deletes
+    # each message the moment it is read and refuses to run anywhere but a
+    # one-to-one chat, but an operator should still choose to enable it.
+    bot_account_onboarding: bool = False
+
+    # --- lead detection (the second product) -----------------------------
+    #
+    # Off by default, and this one is not a convenience flag either.
+    # Everything stored until now was a link. With this on, the system also
+    # stores identifiable third parties who never opted in — their Telegram
+    # id, handle, display name and the text of what they asked for. That is
+    # a decision a deployment makes, not a default it discovers.
+    leads_enabled: bool = False
+
+    # How long a matched message is kept, in days. 0 disables the purge.
+    #
+    # This table holds other people's words. Keeping them forever by
+    # default is what turns a lead pipeline into an archive nobody agreed
+    # to, so there is a window and it is short. The beneficiary row and its
+    # counter survive the purge, so "this person has asked four times"
+    # outlives the texts.
+    leads_retention_days: int = 90
+
     bot_token: str | None = None
     bot_webhook_secret: str | None = None
     public_base_url: str | None = None  # e.g. https://link-intel-web.onrender.com

@@ -35,12 +35,28 @@ from app.models import Channel
 
 logger = logging.getLogger(__name__)
 
-# The three kinds a row can stand for. "channel" is a broadcast channel,
+# The four kinds a row can stand for. "channel" is a broadcast channel,
 # "group" covers megagroups and basic groups alike (they differ in the API
 # and not at all in what collection does with them), "private" is a
-# one-to-one conversation, including with a bot.
-KINDS = ("channel", "group", "private")
+# one-to-one conversation with a person, and "bot" is one with a bot.
+#
+# "bot" was said to be impossible to separate, on the grounds that Telegram
+# models a bot chat as a User like any other. That is true of the *type*
+# and false of the *entity*: a Telethon ``User`` carries a ``bot`` boolean,
+# and the fallback below was already testing for the attribute's existence
+# before throwing the answer away. Separating them matters because a bot
+# chat is usually a feed — links arrive from it by the hundred — while a
+# private chat is a conversation with a person, and lumping the two makes
+# the privacy-sensitive setting and the high-volume one the same switch.
+KINDS = ("channel", "group", "private", "bot")
 DEFAULT_KIND = "channel"
+
+# Who reads a row. Named here rather than spelled as string literals at
+# the four call sites, because a typo in one of them does not fail — it
+# silently produces a row nobody ever reads.
+SOURCE_USERBOT = "userbot"
+SOURCE_PUBLIC = "public"
+SOURCES = (SOURCE_USERBOT, SOURCE_PUBLIC)
 
 
 def parse_scope(raw: str | None) -> frozenset[str]:
@@ -67,6 +83,17 @@ def parse_scope(raw: str | None) -> frozenset[str]:
     return kinds
 
 
+def _user_kind(entity: Any) -> str:
+    """A user dialog is a bot chat or a person's chat — never "a user".
+
+    Split out so both paths through ``dialog_kind`` answer it identically.
+    Defaults to "private" when the flag is absent, because a peer we cannot
+    prove is a bot must be treated with the more cautious of the two
+    settings, not the more permissive one.
+    """
+    return "bot" if getattr(entity, "bot", False) else "private"
+
+
 def dialog_kind(obj: Any) -> str | None:
     """Classify a Telethon dialog (or a bare entity) into one of KINDS.
 
@@ -86,7 +113,7 @@ def dialog_kind(obj: Any) -> str | None:
         return None
 
     if getattr(obj, "is_user", False):
-        return "private"
+        return _user_kind(getattr(obj, "entity", None) or obj)
     if getattr(obj, "is_group", False):
         return "group"
     if getattr(obj, "is_channel", False):
@@ -99,7 +126,7 @@ def dialog_kind(obj: Any) -> str | None:
             return "group"
         return "channel"
     if hasattr(entity, "first_name") or hasattr(entity, "bot") or hasattr(entity, "phone"):
-        return "private"
+        return _user_kind(entity)
     if hasattr(entity, "title"):
         return "group"
     return None
@@ -221,6 +248,31 @@ def existing_channel(db: Session, workspace_id: int, *, tg_id: object, username:
     return lookup_channel(index_channels(rows), tg_id, username)
 
 
+# Which stored kinds a freshly observed kind is allowed to overwrite.
+#
+# The rule used to be "only overwrite the default", which was right while
+# there were three kinds and wrong the moment a fourth arrived: every bot
+# chat already on disk is stored as "private", so a new "bot" classifier
+# would have applied to new rows only and left the entire existing archive
+# misfiled — a feature that looks like it works precisely because you
+# check it on something you just added.
+#
+# Narrow on purpose. "private" may become "bot" because that is strictly
+# more specific about the same peer; nothing may become "private", because
+# losing the distinction is not a refinement.
+_KIND_UPGRADES: dict[str, frozenset[str]] = {
+    DEFAULT_KIND: frozenset({"group", "private", "bot"}),
+    "": frozenset({"group", "private", "bot"}),
+    "private": frozenset({"bot"}),
+}
+
+
+def _may_upgrade_kind(stored: str | None, observed: str) -> bool:
+    if stored == observed:
+        return False
+    return observed in _KIND_UPGRADES.get(stored or "", frozenset())
+
+
 def register_dialog(
     db: Session,
     *,
@@ -248,7 +300,7 @@ def register_dialog(
             row.title = title
         if username and row.username != username:
             row.username = username
-        if row.kind != kind and row.kind in (None, "", DEFAULT_KIND):
+        if _may_upgrade_kind(row.kind, kind):
             row.kind = kind
         return row, False
 

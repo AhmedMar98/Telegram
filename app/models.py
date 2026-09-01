@@ -175,6 +175,14 @@ class Channel(Base):
     # a reader, and collection scope is configured per kind, so it is
     # stored rather than inferred from the id's sign at read time.
     kind: Mapped[str] = mapped_column(String(16), default="channel", server_default="channel")
+    # Which reader owns this row: "userbot" (MTProto) or "public" (the
+    # t.me web preview, which needs no account at all).
+    #
+    # Not descriptive — protective. ``last_message_id`` below is a single
+    # watermark. Two readers on one row means whichever finishes last moves
+    # it past messages the other never read, and those are skipped
+    # permanently with nothing raised. One row, one reader.
+    source: Mapped[str] = mapped_column(String(20), default="userbot", server_default="userbot")
     last_message_id: Mapped[int] = mapped_column(Integer, default=0)
     # When the scheduled collector last read this dialog. Ordering by it
     # (never-collected first) is what keeps the per-run channel cap a
@@ -222,6 +230,17 @@ class Link(Base):
     url: Mapped[str] = mapped_column(Text)
     url_hash: Mapped[str] = mapped_column(String(64), index=True)
     domain: Mapped[str] = mapped_column(String(300), index=True)
+    # Which service the link points at — Telegram, WhatsApp, YouTube, a
+    # plain web page. Deliberately a second axis beside ``category``, not a
+    # replacement for it: a t.me link can be a film or a course, and a
+    # course can live on Telegram or on a university's own site. One column
+    # would force a choice between "how many Telegram links" and "how many
+    # course links", and both are questions people actually ask.
+    #
+    # Stored rather than computed per query because it is filtered and
+    # grouped on; derived deterministically from ``url`` by
+    # ``app.classifier.platform.link_platform``.
+    platform: Mapped[str] = mapped_column(String(20), index=True, default="web", server_default="web")
     category: Mapped[str] = mapped_column(String(50), index=True, default="other")
     confidence: Mapped[float] = mapped_column(default=0.0)
     classified_by: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm
@@ -560,4 +579,93 @@ class ClassificationFeedback(Base):
     new_category: Mapped[str] = mapped_column(String(50))
     previous_confidence: Mapped[float] = mapped_column(default=0.0)
     previous_matched_rule: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- lead detection (idea 2: watching for people who need help) ------------
+#
+# This is the point where a link archive becomes a database about *people*,
+# and that is a decision rather than a default. Everything below is inert
+# until LEADS_ENABLED is set: no rows are written, nothing is matched, and
+# the interface says so.
+
+
+class Beneficiary(Base):
+    """A person seen asking for something in a monitored dialog.
+
+    The field list is short on purpose, and what is *absent* is the design:
+    no phone number, no email, no message archive per person. Telegram
+    exposes a phone on some peers and storing it would turn a lead list
+    into a contact database nobody consented to.
+
+    ``tg_user_id`` is the identity. A username can be changed or dropped
+    and a display name is not unique, so keying on either would either
+    split one person across rows or merge two people into one.
+    """
+
+    __tablename__ = "beneficiaries"
+    __table_args__ = (UniqueConstraint("workspace_id", "tg_user_id", name="uq_beneficiary_per_workspace"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    tg_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    username: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # How many requests this person has been matched on. Kept as a counter
+    # rather than derived, because the leads it counts are purged on a
+    # retention schedule and the count of "how often has this person asked"
+    # is worth keeping after the texts themselves are gone.
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KeywordRule(Base):
+    """One phrase the workspace watches for, and what it is worth.
+
+    Weights rather than a flat list: "مشروع تخرج" is a far stronger signal
+    than "مساعدة", and treating them the same means either drowning in
+    noise or missing the real requests. The sum of matched weights is the
+    seriousness score.
+    """
+
+    __tablename__ = "keyword_rules"
+    __table_args__ = (UniqueConstraint("workspace_id", "phrase", name="uq_keyword_per_workspace"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    phrase: Mapped[str] = mapped_column(String(200))
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Lead(Base):
+    """One message that matched the workspace's keywords.
+
+    ``(workspace_id, channel_id, message_id)`` is unique because the same
+    message is seen twice in normal operation — the live listener catches
+    it as it arrives and the hourly collector reads it again from history.
+    Without the constraint every restart would duplicate the pipeline.
+    """
+
+    __tablename__ = "leads"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "channel_id", "message_id", name="uq_lead_per_message"),
+        Index("ix_leads_workspace_created", "workspace_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    beneficiary_id: Mapped[int | None] = mapped_column(ForeignKey("beneficiaries.id"), nullable=True, index=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    message_id: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    # Which phrases fired, comma separated. Without this a score is a number
+    # with no explanation, and "why was this flagged" is the first question
+    # anyone asks about a false positive.
+    matched: Mapped[str] = mapped_column(String(300), default="")
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    # new | contacted | converted | ignored
+    status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

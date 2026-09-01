@@ -271,12 +271,14 @@ function currentParams() {
   const params = new URLSearchParams();
   const q = document.getElementById("q").value;
   const category = document.getElementById("category").value;
+  const platform = document.getElementById("platform").value;
   const sort = document.getElementById("sort").value;
   const alive = document.getElementById("aliveFilter").value;
   const channelId = document.getElementById("channelFilter").value;
   const language = document.getElementById("languageFilter").value;
   if (q) params.set("q", q);
   if (category) params.set("category", category);
+  if (platform) params.set("platform", platform);
   if (sort && sort !== "date") params.set("sort", sort);
   if (document.getElementById("favoriteOnly").checked) params.set("favorite", "true");
   if (alive) params.set("alive", alive);
@@ -356,6 +358,7 @@ function linkCard(i, terms) {
   return `<div class="link-card${compact ? " compact" : ""}">
        <a class="link-title" href="/links/${i.id}/open" target="_blank" rel="noopener" title="${escapeText(i.url)}">${highlighted(i.url, terms)}</a>
        <div class="link-meta">
+         <span class="pill" title="المنصّة التي يشير إليها الرابط">${escapeText(i.platform || "web")}</span>
          <span title="${classifierTitle(i)}">${i.classified_by} · ${(i.confidence*100).toFixed(0)}%</span>
          ${compact ? "" : originBadge(i)}
          <span title="${vitalityTitle(i)}">${vitalityBadge(i)}</span>
@@ -756,8 +759,17 @@ function dialogBadge(kind) {
   // Which sort of dialog a link came from is context the reader wants:
   // a link from a private conversation and one from a public channel are
   // not the same thing, even though collection treats them identically.
-  const labels = { channel: "📢 قناة", group: "👥 مجموعة", private: "💬 خاصة" };
+  const labels = { channel: "📢 قناة", group: "👥 مجموعة", private: "💬 خاصة", bot: "🤖 بوت" };
   return `<span class="muted">${labels[kind] || labels.channel}</span>`;
+}
+
+function sourceBadge(source) {
+  // Shown only for public sources. A badge on every row would be noise —
+  // "userbot" is what every row was until this existed and still is by
+  // default — while the public ones behave visibly differently: no
+  // account, no ban risk, and only what the channel chose to publish.
+  if (source !== "public") return "";
+  return `<span class="pill" title="تُقرأ من معاينة الويب العامّة — بلا حساب وبلا خطر حظر">🌐 عامّ</span>`;
 }
 
 function lastCollected(value) {
@@ -786,7 +798,7 @@ async function loadChannels() {
   fillChannelFilter(data);
   document.getElementById("channels").innerHTML = data.map(c =>
     `<div class="card">
-       ${dialogBadge(c.kind)} ${c.title || c.username || c.tg_channel_id}
+       ${dialogBadge(c.kind)} ${sourceBadge(c.source)} ${c.title || c.username || c.tg_channel_id}
        <span class="muted">${c.is_active ? "نشطة" : "متوقفة"}${lastCollected(c.last_collected_at)}</span>
        ${ACCOUNTS.length > 1 ? `<select data-action="reassignChannel" data-args='[${c.id}]' data-pass-value class="indent-s">${accountOptions(c.account_id)}</select>` : ""}
      </div>`
@@ -1470,7 +1482,7 @@ function liveLine(live) {
 // Grouped into five, with Links open by default because search and manual
 // add are the daily use and everything else is occasional.
 
-var TAB_KEYS = ["links", "collect", "bot", "security", "account"];
+var TAB_KEYS = ["links", "collect", "bot", "leads", "security", "account"];
 var TAB_STORAGE_KEY = "dashboard-tab";
 
 function selectTab(key, opts) {
@@ -1528,3 +1540,241 @@ function restoreTab() {
   }
   if (saved) selectTab(saved, { focus: false });
 }
+
+
+// --- public sources: reading a channel with no account at all -------------
+//
+// The refusal messages matter more than the success path here. The server
+// distinguishes "this is an invite link", "this is a numeric id" and "I
+// could not place this at all", and each one names what would work
+// instead — so the message is shown verbatim rather than flattened into a
+// generic failure, which is what made the same question keep coming back.
+async function addPublicSource() {
+  const input = document.getElementById("publicRef");
+  const note = document.getElementById("publicMsg");
+  const ref = input.value.trim();
+
+  if (!ref) {
+    note.textContent = "أدخل رابط القناة أو معرّفها أوّلاً.";
+    return;
+  }
+
+  const res = await api("/channels/public", { method: "POST", body: JSON.stringify({ ref }) });
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    note.textContent = data.detail || "تعذّرت الإضافة.";
+    return;
+  }
+
+  input.value = "";
+  note.textContent = `أُضيفت «${data.username}» كمصدر عامّ. ستُقرأ في التشغيلة القادمة بلا استهلاك أيّ حساب.`;
+  announce("أُضيف المصدر العامّ.");
+  loadChannels();
+}
+
+
+// --- lead detection: requests, keywords, people ---------------------------
+
+const LEAD_STATUS_LABELS = {
+  new: "جديد", contacted: "تم التواصل", converted: "تحوّل لعميل", ignored: "مُتجاهَل",
+};
+
+async function loadLeadsPanel() {
+  const res = await api("/leads/status");
+  if (!res.ok) {
+    // 403 rather than an error: an operator-role account has no access to
+    // this panel by design, and saying so beats an empty screen.
+    document.getElementById("leadsOff").hidden = false;
+    document.getElementById("leadsOff").querySelector(".empty-title").textContent =
+      res.status === 403 ? "دورك لا يملك صلاحية الاطّلاع على الطلبات" : "تعذّر تحميل الرصد";
+    return;
+  }
+  const s = await res.json();
+
+  document.getElementById("leadsOff").hidden = s.enabled;
+  document.getElementById("leadsOn").hidden = !s.enabled;
+  if (!s.enabled) return;
+
+  document.getElementById("leadsStats").innerHTML =
+    tile(s.new, "طلب جديد", s.new ? "warn" : "") +
+    tile(s.total, "إجمالي الطلبات") +
+    tile(s.beneficiaries, "مستفيد") +
+    tile(s.rules, "قاعدة كلمات");
+
+  await Promise.all([loadLeads(), loadKeywords(), loadBeneficiaries()]);
+}
+
+async function loadLeads() {
+  const params = new URLSearchParams();
+  const status = document.getElementById("leadStatus").value;
+  const min = document.getElementById("leadMinScore").value;
+  if (status) params.set("status", status);
+  if (min && min !== "0") params.set("min_score", min);
+
+  const res = await api("/leads?" + params.toString());
+  if (!res.ok) return;
+  const items = await res.json();
+
+  document.getElementById("leadsList").innerHTML = items.map(l => `
+    <div class="card">
+      <div class="link-meta">
+        <span class="pill" title="مجموع أوزان العبارات المطابِقة">درجة ${l.score}</span>
+        <span class="pill">${escapeText(LEAD_STATUS_LABELS[l.status] || l.status)}</span>
+        <span title="العبارات التي أطلقت هذا الرصد">${escapeText(l.matched)}</span>
+      </div>
+      <p>${escapeText(l.text)}</p>
+      <div class="link-actions">
+        <label class="sr-only" for="lead-${l.id}">حالة الطلب</label>
+        <select id="lead-${l.id}" data-action="setLeadStatus" data-args='[${l.id}]' data-pass-value>
+          ${Object.entries(LEAD_STATUS_LABELS).map(([v, t]) =>
+            `<option value="${v}" ${v === l.status ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+      </div>
+    </div>`).join("") ||
+    `<div class="empty"><span class="empty-icon">🔎</span><span class="empty-title">لا طلبات مطابِقة</span>
+     <p>إمّا أنّ القواعد ضيّقة، أو لم يصل شيء بعد. جرّب القواعد في المختبر أدناه.</p></div>`;
+}
+
+async function setLeadStatus(id, status) {
+  await api(`/leads/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+  announce("حُدّثت حالة الطلب.");
+  loadLeadsPanel();
+}
+
+async function loadKeywords() {
+  const res = await api("/leads/keywords");
+  if (!res.ok) return;
+  const rules = await res.json();
+
+  document.getElementById("keywordList").innerHTML = rules.map(r => `
+    <div class="card">
+      <span class="pill">وزن ${r.weight}</span>
+      <strong>${escapeText(r.phrase)}</strong>
+      <span class="muted">${r.is_active ? "فعّالة" : "موقوفة"}</span>
+      <div class="link-actions">
+        <button class="btn-ghost btn-sm" data-action="toggleKeyword" data-args='[${r.id}, ${!r.is_active}]'>
+          ${r.is_active ? "أوقفها" : "فعّلها"}
+        </button>
+        <button class="btn-danger btn-sm push-end" data-action="deleteKeyword" data-args='[${r.id}]'
+                aria-label="احذف العبارة ${escapeText(r.phrase)}">حذف</button>
+      </div>
+    </div>`).join("") ||
+    `<div class="empty"><span class="empty-icon">🔤</span><span class="empty-title">لا قواعد بعد</span>
+     <p>بلا قاعدة واحدة لن يُرصَد شيء أبداً. أضِف عبارة أعلاه.</p></div>`;
+}
+
+async function addKeyword() {
+  const phrase = document.getElementById("kwPhrase").value.trim();
+  const weight = parseInt(document.getElementById("kwWeight").value, 10) || 1;
+  if (!phrase) return;
+
+  const res = await api("/leads/keywords", { method: "POST", body: JSON.stringify({ phrase, weight }) });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    announce(data.detail || "تعذّرت الإضافة.");
+    return;
+  }
+  document.getElementById("kwPhrase").value = "";
+  loadLeadsPanel();
+}
+
+async function toggleKeyword(id, active) {
+  await api(`/leads/keywords/${id}`, { method: "PATCH", body: JSON.stringify({ is_active: active }) });
+  loadKeywords();
+}
+
+async function deleteKeyword(id) {
+  await api(`/leads/keywords/${id}`, { method: "DELETE" });
+  loadLeadsPanel();
+}
+
+async function testKeywords() {
+  const text = document.getElementById("kwTest").value;
+  const out = document.getElementById("kwTestResult");
+  if (!text.trim()) { out.textContent = "اكتب نصاً أولاً."; return; }
+
+  const res = await api("/leads/test", { method: "POST", body: JSON.stringify({ text }) });
+  const r = await res.json();
+  out.textContent = r.would_record
+    ? `سيُرصَد — درجة ${r.score} · طابق: ${r.matched.join("، ")}`
+    : "لن يُرصَد — لا عبارة مطابِقة.";
+}
+
+async function loadBeneficiaries() {
+  const res = await api("/leads/beneficiaries");
+  if (!res.ok) return;
+  const people = await res.json();
+
+  document.getElementById("beneficiaryList").innerHTML = people.map(b => `
+    <div class="card">
+      <strong>${escapeText(b.display_name || b.username || b.tg_user_id)}</strong>
+      ${b.username ? `<span class="muted" dir="ltr">@${escapeText(b.username)}</span>` : ""}
+      <span class="pill">${b.request_count} طلب</span>
+      <div class="link-actions">
+        <button class="btn-danger btn-sm push-end" data-action="forgetBeneficiary" data-args='[${b.id}]'
+                aria-label="انسَ هذا الشخص وكل طلباته">انسَ هذا الشخص</button>
+      </div>
+    </div>`).join("") ||
+    `<div class="empty"><span class="empty-icon">👤</span><span class="empty-title">لا مستفيدين بعد</span></div>`;
+}
+
+async function forgetBeneficiary(id) {
+  if (!confirm("سيُحذف هذا الشخص ونصوص كل طلباته معه. لا يمكن التراجع. متابعة؟")) return;
+  await api(`/leads/beneficiaries/${id}`, { method: "DELETE" });
+  announce("حُذف الشخص وكل ما سُجّل عنه.");
+  loadLeadsPanel();
+}
+
+async function purgeLeads() {
+  if (!confirm("سيُحذف كل طلب تجاوز مدّة الاحتفاظ. المستفيدون وعدّاداتهم تبقى. متابعة؟")) return;
+  const res = await api("/leads/purge", { method: "POST" });
+  const r = await res.json();
+  announce(`حُذف ${r.removed} طلباً.`);
+  loadLeadsPanel();
+}
+
+
+// --- team and roles -------------------------------------------------------
+
+async function loadTeam() {
+  const res = await api("/team");
+  if (!res.ok) {
+    // Only workspace.manage may see this. A member landing here gets an
+    // explanation rather than a blank box.
+    document.getElementById("teamList").innerHTML =
+      `<p class="muted">${res.status === 403 ? "دورك لا يملك صلاحية إدارة الفريق." : "تعذّر التحميل."}</p>`;
+    return;
+  }
+  const members = await res.json();
+  const roles = (await (await api("/team/roles")).json()).roles;
+
+  document.getElementById("teamList").innerHTML = members.map(m => `
+    <div class="card">
+      <strong dir="ltr">${escapeText(m.email)}</strong>
+      <span class="muted">${escapeText(m.role_label)}</span>
+      <div class="link-actions">
+        <label class="sr-only" for="role-${m.id}">دور ${escapeText(m.email)}</label>
+        <select id="role-${m.id}" data-action="setRole" data-args='[${m.id}]' data-pass-value>
+          ${roles.map(r => `<option value="${r.value}" ${r.value === m.role ? "selected" : ""}>${escapeText(r.label)}</option>`).join("")}
+        </select>
+      </div>
+    </div>`).join("");
+}
+
+async function setRole(userId, role) {
+  const res = await api(`/team/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) });
+  const data = await res.json().catch(() => ({}));
+  document.getElementById("teamMsg").textContent = res.ok
+    ? "حُدّث الدور."
+    : (data.detail || "تعذّر التحديث.");
+  loadTeam();
+}
+
+
+// Loaded at start-up alongside the other panels rather than on first tab
+// click: the lead panel's headline number is "how many new requests are
+// waiting", and a count nobody sees until they open the tab is a count
+// that does not do its job.
+loadLeadsPanel();
+loadTeam();

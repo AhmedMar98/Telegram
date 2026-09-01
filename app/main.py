@@ -32,13 +32,13 @@ from sqlalchemy.orm import Session
 from starlette.middleware.gzip import GZipMiddleware
 
 from app import live, metrics
-from app.classifier import CATEGORIES
+from app.classifier import CATEGORIES, PLATFORMS
 from app.classifier.llm import probe as groq_probe
 from app.config import get_settings, production_secrets_check
 from app.database import Base, engine, get_db
 from app.deps import COOKIE_NAME
 from app.errors import ErrorCode, coded_headers
-from app.routers import auth, bot_router, channels, links, notifications
+from app.routers import auth, bot_router, channels, leads, links, notifications
 from app.routers import status as status_router
 from app.security import resolve_session
 
@@ -325,6 +325,8 @@ app.include_router(links.router)
 app.include_router(notifications.router)
 app.include_router(status_router.router)
 app.include_router(bot_router.router)
+app.include_router(leads.router)
+app.include_router(leads.team_router)
 
 
 # Serving the page scripts as files is what makes a real CSP possible: with
@@ -419,4 +421,8 @@ def dashboard_page(
     # The header needs to know. Without it every page rendered the signed-out
     # navigation — "دخول" and "تسجيل" offered to somebody already signed in,
     # and no way out except clearing a cookie by hand.
-    return templates.TemplateResponse(request, "dashboard.html", {"categories": CATEGORIES, "authenticated": True})
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {"categories": CATEGORIES, "platforms": PLATFORMS, "authenticated": True},
+    )
