@@ -416,4 +416,7 @@ def dashboard_page(
     user = resolve_session(db, session)
     if user is None:
         return RedirectResponse(url="/login")
-    return templates.TemplateResponse(request, "dashboard.html", {"categories": CATEGORIES})
+    # The header needs to know. Without it every page rendered the signed-out
+    # navigation — "دخول" and "تسجيل" offered to somebody already signed in,
+    # and no way out except clearing a cookie by hand.
+    return templates.TemplateResponse(request, "dashboard.html", {"categories": CATEGORIES, "authenticated": True})

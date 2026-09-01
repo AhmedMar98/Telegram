@@ -17,6 +17,11 @@ from app.models import Channel, Link
 
 router = Router(name="status")
 
+# Telegram caps a message at 4096 characters. Thirty lines of channel names
+# is comfortably inside that, and the count below tells the reader when the
+# list was cut rather than letting it look complete.
+CHANNEL_LIMIT = 30
+
 
 @router.message(Command("stats"))
 async def handle_stats(message: Message, db: Session) -> None:
@@ -46,13 +51,29 @@ async def handle_channels(message: Message, db: Session) -> None:
         await message.answer(NOT_LINKED)
         return
 
-    channels = db.query(Channel).filter(Channel.workspace_id == workspace_id).order_by(Channel.id).limit(30).all()
-    if not channels:
+    total = db.query(Channel).filter(Channel.workspace_id == workspace_id).count()
+    if not total:
         await message.answer("لا قنوات مضافة بعد.")
         return
 
+    channels = (
+        db.query(Channel)
+        .filter(Channel.workspace_id == workspace_id)
+        .order_by(Channel.id)
+        .limit(CHANNEL_LIMIT)
+        .all()
+    )
     lines = [f"• {c.username or c.tg_channel_id}{'' if c.is_active else ' (معطّلة)'}" for c in channels]
-    await message.answer("القنوات:\n" + "\n".join(lines))
+    body = "القنوات:\n" + "\n".join(lines)
+
+    # Automatic discovery turned this cap from theoretical into routine: an
+    # account with three hundred dialogs registers three hundred rows, and
+    # the reply used to show thirty of them under a heading that read as the
+    # complete list. Saying how many were left out is the difference between
+    # a truncated answer and a wrong one.
+    if total > len(channels):
+        body += f"\n\n… و{total - len(channels)} أخرى. القائمة الكاملة في اللوحة."
+    await message.answer(body)
 
 
 @router.message(Command("vitality"))

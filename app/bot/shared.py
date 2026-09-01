@@ -153,20 +153,72 @@ def result_actions(link_id: int, is_favorite: bool) -> InlineKeyboardMarkup:
 def pager(q: str | None, page: int, total: int, favorite: bool | None, category: str | None):
     """Previous/next buttons, omitted entirely when there is one page.
 
-    The callback payload carries the whole filter, because a Telegram
-    callback arrives with no memory of what produced it and the bot keeps
-    no per-chat state — state on a free web service that sleeps would be
-    lost between messages anyway.
+    The payload carries the page number and nothing else. It used to carry
+    the whole filter, because a Telegram callback arrives with no memory of
+    what produced it — but ``callback_data`` is capped at 64 BYTES, so the
+    search term was truncated to 30 characters to fit. Page 2 of a longer
+    search was a page of a *different* search, and it failed silently.
+
+    The filter now lives on the chat's ``bot_links`` row, where its length
+    is not a wire-format problem. The filter arguments stay in the
+    signature because they still decide whether a next page exists.
     """
     buttons = []
-    token = encode_filter(q, favorite, category)
     if page > 0:
-        buttons.append(InlineKeyboardButton(text="« السابق", callback_data=f"{CB_PAGE}:{page - 1}:{token}"))
+        buttons.append(InlineKeyboardButton(text="« السابق", callback_data=f"{CB_PAGE}:{page - 1}"))
     if (page + 1) * PAGE_SIZE < total:
-        buttons.append(InlineKeyboardButton(text="التالي »", callback_data=f"{CB_PAGE}:{page + 1}:{token}"))
+        buttons.append(InlineKeyboardButton(text="التالي »", callback_data=f"{CB_PAGE}:{page + 1}"))
     if not buttons:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def remember_results(db: Session, chat_id: str, *, q: str | None, favorite, category) -> None:
+    """Record what this chat is currently looking at.
+
+    Called from one place — ``answer_results`` — so a new entry point into
+    the result list cannot forget to update the context and leave
+    ``/details`` answering about the previous search.
+    """
+    link = db.get(BotLink, str(chat_id))
+    if link is None:
+        return
+    # Truncated to the column, not to a wire format: a 255-character search
+    # term is already far past what anyone types, and unlike the old
+    # 30-byte callback limit this cannot cut a realistic query in half.
+    link.last_query = (q or None) and q[:255]
+    link.last_category = category
+    link.last_favorite = favorite
+    db.commit()
+
+
+def recall_results(db: Session, chat_id: str) -> tuple[str | None, bool | None, str | None]:
+    """The filter this chat was last shown: query, favourite flag, category.
+
+    Not the page. The number printed beside a result is absolute within the
+    filter — page 2 prints 6 to 10 — so the position needs no page to
+    resolve, and storing one would be a second source of truth for the same
+    thing.
+
+    A chat that has not searched yet gets the unfiltered list, which is
+    what ``/latest`` shows, so ``/details 1`` right after linking still
+    means "the newest link".
+    """
+    link = db.get(BotLink, str(chat_id))
+    if link is None:
+        return None, None, None
+    return link.last_query, link.last_favorite, link.last_category
+
+
+def ordered(query):
+    """Newest first, with ``id`` breaking ties.
+
+    Without the tiebreaker two links stored in the same microsecond have no
+    defined order between them, and the database is free to return them
+    differently for the page-1 query and the page-2 query — which shows up
+    as a result that appears twice, or never.
+    """
+    return query.order_by(Link.created_at.desc(), Link.id.desc())
 
 
 async def answer_results(
@@ -187,11 +239,18 @@ async def answer_results(
     """
     query, _ = filtered_links(db, workspace_id, q=q, category=category, favorite=favorite)
     total = query.count()
+
+    # Recorded even when there are no results, and before the early return.
+    # Otherwise a search that matches nothing leaves the previous search's
+    # context in place, and the next /details answers about a list the user
+    # is no longer looking at.
+    remember_results(db, str(message.chat.id), q=q, favorite=favorite, category=category)
+
     if not total:
         await message.answer("لا نتائج.")
         return
 
-    rows = query.order_by(Link.created_at.desc()).offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
+    rows = ordered(query).offset(page * PAGE_SIZE).limit(PAGE_SIZE).all()
     start = page * PAGE_SIZE
 
     # One message per result rather than one block of numbered lines.

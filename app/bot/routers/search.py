@@ -33,6 +33,8 @@ from app.bot.shared import (
     answer_results,
     decode_filter,
     help_text,
+    ordered,
+    recall_results,
     resolve_workspace,
     result_actions,
 )
@@ -95,8 +97,17 @@ async def handle_details(message: Message, command: CommandObject, db: Session) 
     # Positional, not a database id: the number the user sees in a result
     # list is its position. Exposing raw ids would also let one chat probe
     # for another workspace's rows by counting.
-    query, _ = filtered_links(db, workspace_id, q=None, category=None)
-    link = query.order_by(Link.created_at.desc()).offset(int(raw) - 1).limit(1).first()
+    #
+    # Resolved against the SAME filter the number was printed under. It used
+    # to re-query with no filter at all, so after any search "3." on screen
+    # and "/details 3" were two different links, and nothing said so.
+    #
+    # No page arithmetic: the printed number is already absolute within the
+    # filter (page 2 prints 6–10), so the offset is the number minus one on
+    # every page.
+    q, favorite, category = recall_results(db, str(message.chat.id))
+    query, _ = filtered_links(db, workspace_id, q=q, category=category, favorite=favorite)
+    link = ordered(query).offset(int(raw) - 1).limit(1).first()
     if link is None:
         await message.answer("لا يوجد رابط بهذا الرقم.")
         return
@@ -137,9 +148,24 @@ async def handle_page(callback: CallbackQuery, db: Session) -> None:
         await callback.answer(NOT_LINKED, show_alert=True)
         return
 
-    _, page_text, token = callback.data.split(":", 2)
-    q, favorite, category = decode_filter(token)
-    await answer_results(origin, db, workspace_id, q=q, page=int(page_text), favorite=favorite, category=category)
+    # split(":", 2) then unpack into three names used to raise ValueError on
+    # a two-part payload — which is exactly what this handler now sends, and
+    # what an older client replaying a button could send either way.
+    parts = callback.data.split(":")
+    if len(parts) < 2 or not parts[1].isdigit():
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+
+    page = int(parts[1])
+    if len(parts) > 2:
+        # A button from before the filter moved into bot_links. Its token is
+        # still the best available description of what the user is looking
+        # at, so honour it rather than silently paging a different search.
+        q, favorite, category = decode_filter(parts[2])
+    else:
+        q, favorite, category = recall_results(db, str(origin.chat.id))
+
+    await answer_results(origin, db, workspace_id, q=q, page=page, favorite=favorite, category=category)
     # Telegram shows a loading spinner on the button until this is called.
     await callback.answer()
 
@@ -176,7 +202,17 @@ async def handle_details_button(callback: CallbackQuery, db: Session) -> None:
         await callback.answer(NOT_LINKED, show_alert=True)
         return
 
-    link_id = int(callback.data.split(":", 1)[1])
+    id_text = callback.data.split(":", 1)[1]
+    if not id_text.isdigit():
+        # int() on client-supplied text raised ValueError out of the handler,
+        # which aiogram turns into a 500 on the webhook and a delivery
+        # Telegram then retries. The payload is client-supplied — the same
+        # reason the query below is workspace-scoped — so it gets parsed as
+        # untrusted input, not assumed well-formed.
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+
+    link_id = int(id_text)
     # Scoped to the workspace, not just fetched by id: a callback payload is
     # client-supplied, and a link id from one workspace must not resolve in
     # another just because someone edited a button's data.
@@ -206,7 +242,14 @@ async def handle_favourite_button(callback: CallbackQuery, db: Session) -> None:
         await callback.answer(NOT_LINKED, show_alert=True)
         return
 
-    _, id_text, want = callback.data.split(":", 2)
+    # Same reasoning as the details button: a short payload used to raise
+    # ValueError on the unpack, and a non-numeric id on the int().
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3 or not parts[1].isdigit():
+        await callback.answer(TOO_OLD, show_alert=True)
+        return
+    _, id_text, want = parts
+
     link = db.query(Link).filter(Link.id == int(id_text), Link.workspace_id == workspace_id).first()
     if link is None:
         await callback.answer("لم يعد هذا الرابط موجوداً.", show_alert=True)

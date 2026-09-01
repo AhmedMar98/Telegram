@@ -1,199 +1,523 @@
-/* Light palette on bare :root, so every token always has a definition.
-     Dark is applied twice — once for the OS preference (guarded so an
-     explicit light choice still wins) and once for the explicit choice —
-     which is what lets the toggle override the system in both directions. */
-  :root {
-    color-scheme: light;
-    --bg: #ffffff;
-    --fg: #1a1a1a;
-    --muted: #5a5a5a;
-    /* #919191, not the original #d0d0d0: measured against WCAG 2.1 AA
-       non-text contrast (1.4.11), the old value scored 1.54 against the
-       page and 1.51 against a card, where the minimum is 3.0 — form field
-       boundaries were effectively invisible to low-vision users. This value
-       is the lightest grey that clears 3.0 against both surfaces (3.15 and
-       3.02), so the visual weight changes as little as the standard allows. */
-    --border: #919191;
-    --card-bg: #fafafa;
-    --tag-bg: #ececec;
-    --accent: #0b57d0;
-    --danger: #c1121f;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --bg: #14171c;
-      --fg: #e6e6e6;
-      --muted: #a0a6b0;
-      /* Same 1.4.11 fix as the light palette: #333a44 measured 1.56/1.51. */
-      --border: #636a74;
-      --card-bg: #1b1f26;
-      --tag-bg: #2a3038;
-      --accent: #7ca9f5;
-      --danger: #ff6b6b;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #14171c;
-    --fg: #e6e6e6;
-    --muted: #a0a6b0;
-    --border: #636a74;
-    --card-bg: #1b1f26;
-    --tag-bg: #2a3038;
-    --accent: #7ca9f5;
-    --danger: #ff6b6b;
-  }
+/* ============================================================================
+   Design system — tokens first, components second, utilities last.
 
-  body {
-    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
-    max-width: 900px; margin: 0 auto; padding: 1rem; line-height: 1.6;
-    background: var(--bg); color: var(--fg);
-  }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: .5rem; flex-wrap: wrap; }
-  nav a { margin-inline-start: 1rem; text-decoration: none; color: var(--accent); }
-  a { color: var(--accent); }
-  input, select, button, textarea {
-    font-size: 1rem; padding: .5rem; border-radius: .4rem;
-    border: 1px solid var(--border); background: var(--bg); color: var(--fg);
-    /* Touch targets: WCAG 2.5.8 asks for 24x24 CSS px minimum, and the
-       icon buttons (★, 🗄, ×) were under that on a phone once their text
-       was a single character. min-height/min-width rather than padding so
-       the change cannot be undone by a more specific padding rule. */
-    min-height: 2.25rem; min-width: 2.25rem;
-  }
-  button { cursor: pointer; }
+   Rewritten from a stylesheet that had grown one rule at a time: every
+   control was the same weight, every surface the same flat grey, and the
+   filter bar was twelve unlabelled boxes wrapping into each other. The
+   problem was never the individual rules — it was that there was no scale
+   for anything, so each new element invented its own spacing and its own
+   size, and the page read as a form dump rather than as a product.
 
-  /* Keyboard focus must be visible on every interactive element. The
-     browser default outline is removed by some resets and is invisible
-     against the dark palette anyway; this is defined once, in terms of the
-     accent token, so it works in both themes. :focus-visible rather than
-     :focus keeps it off mouse clicks, where it reads as a bug. */
-  :focus-visible {
-    outline: 3px solid var(--accent);
-    outline-offset: 2px;
-    border-radius: .3rem;
-  }
+   Three rules govern what follows:
 
-  /* A URL is Latin text inside an RTL document. Without an explicit
-     direction the bidi algorithm reorders its trailing punctuation and
-     path segments, so "example.com/a-b.pdf?x=1" can render with pieces in
-     the wrong places — the link looks wrong even though it is stored
-     correctly. unicode-bidi isolates it from the surrounding Arabic. */
-  .ltr, a[href^="http"] { direction: ltr; unicode-bidi: isolate; display: inline-block; }
+   1. **Nothing hard-codes a value that a token can name.** A spacing step,
+      a radius, a font size and a colour all come from the scale, so a
+      later change is one edit rather than forty.
+   2. **Every colour is defined on bare :root first.** Dark is then
+      redefined twice — once under prefers-color-scheme (guarded so an
+      explicit light choice still wins) and once for the explicit dark
+      choice — which is what lets the toggle override the system in *both*
+      directions. A colour whose only definition lives inside a media
+      query is a colour that disappears when the query does not match.
+   3. **Contrast is measured, not eyeballed.** Every text/background pair
+      below clears WCAG 2.1 AA (4.5:1 for body text, 3:1 for large text
+      and for non-text boundaries), and tests/test_accessibility.py
+      computes the ratios rather than trusting this comment.
+   ========================================================================== */
 
-  /* Screen-reader-only text: present in the accessibility tree, invisible
-     on screen. Used to give icon-only buttons a real name and to announce
-     status changes. */
-  .sr-only {
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-  }
+:root {
+  color-scheme: light;
 
-  /* Respect a system-level request to reduce motion. Nothing here animates
-     heavily today, but the rule is the cheap half of honouring it and it
-     also disables smooth scrolling introduced by the keyboard shortcuts. */
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: .01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: .01ms !important;
-      scroll-behavior: auto !important;
-    }
-  }
-  .card { border: 1px solid var(--border); background: var(--card-bg); border-radius: .6rem; padding: 1rem; margin-bottom: .75rem; }
-  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  .muted { color: var(--muted); font-size: .9rem; }
-  .tag { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; background: var(--tag-bg); font-size: .8rem; }
-  .error { color: var(--danger); }
-  /* Grid view. auto-fill with a minimum column width rather than a fixed
-     column count, so the same rule works from a phone (one column) to a
-     wide screen without a media query per breakpoint. */
-  .grid-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .75rem; }
-  .grid-results .card { margin-bottom: 0; overflow-wrap: anywhere; }
-  /* Compact density: one link per row for scanning a long result set.
-     Padding and margin shrink; nothing is hidden by CSS — the card itself
-     omits the context line and origin badges in this mode, so a screen
-     reader is not told about content that is only visually absent. */
-  .card.compact { padding: .4rem .6rem; margin-bottom: .3rem; }
-  /* The undo bar's layout lives here, not in a style attribute. An inline
-     display:flex outranks the user-agent's [hidden] { display: none }, so
-     the bar stayed in the layout and its "undo" button stayed in the tab
-     order while invisible — a keyboard user could focus and press a button
-     they could not see. [hidden] is restated first so the guarantee does
-     not depend on rule order. */
-  [hidden] { display: none !important; }
-  .undo-bar { display: flex; gap: .5rem; align-items: center; }
-  /* Search-term highlight. Defined against the theme tokens so it stays
-     readable in dark mode, where a browser's default yellow-on-white
-     <mark> becomes unreadable. */
-  mark { background: var(--tag-bg); color: var(--fg); font-weight: 600; padding: 0 .15rem; border-radius: .2rem; }
-  #themeToggle { padding: .35rem .6rem; font-size: .9rem; }
+  /* Surfaces, from the page backwards. Three layers rather than two: a
+     card sitting on the page and a control sitting inside that card need
+     to be distinguishable without a border doing all the work. */
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-hover: #e9ecf1;
 
+  /* Text. --fg for body, --fg-soft for secondary information, --muted for
+     the third tier that must still clear 4.5:1 — "muted" has to stay
+     readable, which is exactly what most muted greys fail to do. */
+  --fg: #14181f;
+  --fg-soft: #3d4654;
+  --muted: #5b6472;
 
-/* --- Utility classes ------------------------------------------------
-   These replace the style="" attributes the templates and dashboard.js
-   used to emit. They exist because the Content-Security-Policy dropped
-   'unsafe-inline' from style-src as well as script-src (idea 85): a
-   style attribute is inline CSS, and exempting it would have left half
-   the header decorative. Named for what they do, not what they look
-   like, so a later palette change does not make the names lie. */
-.stack { flex-direction: column; }
-.grow { flex: 1; }
-.centred { align-items: center; }
-.spread { justify-content: space-between; }
-.push-end { margin-inline-start: auto; }
-.indent-s { margin-inline-start: .5rem; }
-.gap-top { margin-top: .5rem; }
-.gap-top-s { margin-top: .35rem; }
-.gap-y-xs { margin: .25rem 0; }
-.small { font-size: .9em; }
-.smaller { font-size: .85em; }
-.danger { color: #c00; }
-.break-anywhere { word-break: break-all; }
-.prewrap { white-space: pre-wrap; }
-.wrap-row { margin-top: .5rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.note-input {
-  width: 100%;
-  font-family: inherit;
-  font-size: 1rem;
-  padding: .5rem;
-  border-radius: .4rem;
-  border: 1px solid var(--border);
+  /* Lines. --border for real boundaries (form controls, dividers) at 3:1
+     against both surfaces; --border-soft for grouping that should be felt
+     more than seen. */
+  --border: #79828f;
+  --border-soft: #e2e6ec;
+
+  --accent: #1a56d6;
+  --accent-fg: #ffffff;
+  --accent-soft: #e8effc;
+  --danger: #b3261e;
+  --danger-soft: #fdecea;
+  --success: #1a7f4b;
+  --warn: #9a6400;
+
+  /* Spacing: a 4px rhythm. Every margin and gap in this file is one of
+     these, which is what makes unrelated sections line up without anyone
+     measuring them. */
+  --s-1: .25rem;
+  --s-2: .5rem;
+  --s-3: .75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+
+  --r-sm: .375rem;
+  --r-md: .625rem;
+  --r-lg: 1rem;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  --shadow-2: 0 4px 12px rgba(16, 24, 40, .10);
+
+  --font: system-ui, -apple-system, "Segoe UI", Tahoma, "Noto Sans Arabic", sans-serif;
+  --text-xs: .78rem;
+  --text-sm: .875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
 }
-/* The category bar's segments get their width from JS via element.style,
-   which the CSSOM allows and CSP does not govern — unlike a style
-   attribute baked into an HTML string. */
-.bar { display: flex; height: .5rem; border-radius: .25rem; overflow: hidden; margin-bottom: .75rem; }
 
-/* --- transient messages (idea 164) ----------------------------------
-   Fixed to a corner rather than shifting the layout: a result message
-   that reflows the page moves the thing you were about to click. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #1e242c;
+    --surface-hover: #252c36;
+    --fg: #e8ebf0;
+    --fg-soft: #b9c1cd;
+    --muted: #98a1ae;
+    --border: #6e7885;
+    --border-soft: #262d36;
+    --accent: #7aa5f7;
+    --accent-fg: #0f1216;
+    --accent-soft: #1b2740;
+    --danger: #ff8078;
+    --danger-soft: #2e1a19;
+    --success: #5cc98d;
+    --warn: #e0a94a;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-2: 0 4px 14px rgba(0, 0, 0, .5);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #1e242c;
+  --surface-hover: #252c36;
+  --fg: #e8ebf0;
+  --fg-soft: #b9c1cd;
+  --muted: #98a1ae;
+  --border: #6e7885;
+  --border-soft: #262d36;
+  --accent: #7aa5f7;
+  --accent-fg: #0f1216;
+  --accent-soft: #1b2740;
+  --danger: #ff8078;
+  --danger-soft: #2e1a19;
+  --success: #5cc98d;
+  --warn: #e0a94a;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, .5);
+}
+
+/* --- base ---------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  margin: 0;
+  padding: 0 var(--s-4) var(--s-7);
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-text-size-adjust: 100%;
+}
+
+main, header, footer { max-width: 68rem; margin-inline: auto; }
+
+h1, h2, h3 { line-height: 1.3; font-weight: 650; margin: 0 0 var(--s-2); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-lg); }
+p { margin: 0 0 var(--s-3); }
+a { color: var(--accent); text-underline-offset: .2em; }
+
+/* --- header -------------------------------------------------------------- */
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding: var(--s-4) 0;
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+.brand { font-size: var(--text-lg); font-weight: 700; letter-spacing: -.01em; }
+header nav { display: flex; align-items: center; gap: var(--s-2); }
+header nav a {
+  text-decoration: none;
+  color: var(--fg-soft);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+}
+header nav a:hover { background: var(--surface-2); color: var(--fg); }
+
+/* --- controls ------------------------------------------------------------ */
+
+input, select, textarea, button {
+  font-family: inherit;
+  font-size: var(--text-sm);
+  /* 2.25rem was the old floor and it is the WCAG 2.5.8 minimum, not a
+     comfortable target. 2.5rem is what a thumb actually hits. */
+  min-height: 2.5rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  padding: var(--s-2) var(--s-3);
+}
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input:hover, select:hover, textarea:hover { border-color: var(--fg-soft); }
+select { cursor: pointer; }
+textarea { line-height: 1.6; resize: vertical; }
+
+button {
+  cursor: pointer;
+  font-weight: 550;
+  min-width: 2.5rem;
+  background: var(--surface);
+  transition: background-color .12s ease, border-color .12s ease;
+}
+button:hover { background: var(--surface-hover); }
+button:active { transform: translateY(1px); }
+button[disabled] { opacity: .55; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.btn-ghost { background: none; border-color: transparent; color: var(--fg-soft); }
+.btn-ghost:hover { background: var(--surface-2); color: var(--fg); }
+.btn-icon {
+  padding: var(--s-2);
+  background: none;
+  border-color: transparent;
+  color: var(--fg-soft);
+  line-height: 1;
+}
+.btn-icon:hover { background: var(--surface-2); color: var(--fg); }
+.btn-danger { color: var(--danger); border-color: var(--border); background: var(--surface); }
+.btn-danger:hover { background: var(--danger-soft); border-color: var(--danger); }
+.btn-sm { min-height: 2.25rem; padding: var(--s-1) var(--s-2); font-size: var(--text-xs); }
+
+/* Keyboard focus, defined once against the accent so it reads in both
+   themes. :focus-visible rather than :focus keeps it off mouse clicks,
+   where a permanent ring reads as a bug. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* --- form fields --------------------------------------------------------- */
+/* A visible label above the control, not a placeholder pretending to be
+   one. A placeholder disappears the moment typing starts, which is the
+   moment a person most needs to know what the field was — and it is not a
+   label to a screen reader at all (WCAG 3.3.2). */
+
+.field { display: flex; flex-direction: column; gap: var(--s-1); min-width: 0; }
+.field > label { font-size: var(--text-sm); font-weight: 550; color: var(--fg-soft); }
+.field > .hint { font-size: var(--text-xs); color: var(--muted); }
+.field-row { display: flex; gap: var(--s-3); flex-wrap: wrap; align-items: flex-end; }
+.field-row > .field { flex: 1 1 12rem; }
+.field-row > button { flex: 0 0 auto; }
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--text-sm);
+  color: var(--fg-soft);
+  cursor: pointer;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  min-height: 2.5rem;
+}
+.check:hover { border-color: var(--border); }
+.check input { min-height: auto; min-width: auto; width: 1rem; height: 1rem; margin: 0; accent-color: var(--accent); }
+.check:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+
+/* --- surfaces ------------------------------------------------------------ */
+
+.card {
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: var(--s-4);
+  margin-bottom: var(--s-3);
+  box-shadow: var(--shadow-1);
+}
+.panel > section, .subsection {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--s-5);
+  margin-top: var(--s-5);
+}
+.panel > section:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+.section-head { margin-bottom: var(--s-3); }
+.section-head p { color: var(--muted); font-size: var(--text-sm); margin: 0; }
+
+.row { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-3); }
+.muted { color: var(--muted); font-size: var(--text-sm); }
+.tag {
+  display: inline-block;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--fg-soft);
+  font-size: var(--text-xs);
+  line-height: 1.7;
+}
+.error { color: var(--danger); }
+
+/* --- tabs ---------------------------------------------------------------- */
+/* Pills on a track rather than an underline: on a phone the underline
+   variant wrapped to two lines and the active marker landed under the
+   wrong row. */
+
+.tabs {
+  display: flex;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+  background: var(--surface-2);
+  padding: var(--s-1);
+  border-radius: var(--r-md);
+  margin-bottom: var(--s-5);
+}
+.tabs .tab {
+  flex: 1 1 auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: var(--s-2) var(--s-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  min-height: 2.5rem;
+}
+.tabs .tab:hover { color: var(--fg); background: var(--surface); }
+.tabs .tab[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-1);
+}
+.panel > h2:first-child, .panel > h3:first-child { margin-top: 0; }
+
+/* --- toolbar (search + filters) ------------------------------------------ */
+
+.toolbar { margin-bottom: var(--s-4); }
+.toolbar .search-line { display: flex; gap: var(--s-2); align-items: stretch; }
+.toolbar .search-line .field { flex: 1; }
+.toolbar .search-line button { align-self: flex-end; }
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+.chip-row { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-3); }
+
+/* <details> as progressive disclosure. Twelve controls in one row is not
+   a filter bar, it is a wall; the four anyone uses stay out, the rest are
+   one click away and stay out once opened. */
+details.disclosure { border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--surface); }
+details.disclosure > summary {
+  cursor: pointer;
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  color: var(--fg-soft);
+  border-radius: var(--r-md);
+  list-style-position: inside;
+}
+details.disclosure > summary:hover { background: var(--surface-2); }
+details.disclosure[open] > summary { border-bottom: 1px solid var(--border-soft); border-radius: var(--r-md) var(--r-md) 0 0; }
+details.disclosure > .disclosure-body { padding: var(--s-4); }
+details.disclosure.danger-zone > summary { color: var(--danger); }
+
+/* --- stat tiles ---------------------------------------------------------- */
+/* Replaces a run-on line — "إجمالي: 16 | القنوات: 4 | هذا الأسبوع: 16 |
+   ..." — which put every number at the same weight and made none of them
+   findable. */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+}
+.stat .stat-value { font-size: var(--text-xl); font-weight: 680; line-height: 1.2; }
+.stat .stat-label { font-size: var(--text-xs); color: var(--muted); }
+.stat .stat-value.ok { color: var(--success); }
+.stat .stat-value.bad { color: var(--danger); }
+
+/* --- result cards -------------------------------------------------------- */
+
+.link-card {
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-2);
+  box-shadow: var(--shadow-1);
+}
+.link-card:hover { border-color: var(--border); }
+.link-card .link-title {
+  font-weight: 600;
+  font-size: var(--text-md);
+  display: block;
+  margin-bottom: var(--s-1);
+  overflow-wrap: anywhere;
+}
+.link-card .link-meta {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-bottom: var(--s-2);
+}
+.link-card .link-context { color: var(--fg-soft); font-size: var(--text-sm); margin-bottom: var(--s-2); }
+.link-card .link-note {
+  color: var(--fg-soft);
+  font-size: var(--text-sm);
+  margin-bottom: var(--s-2);
+  padding-inline-start: var(--s-2);
+  border-inline-start: 2px solid var(--border-soft);
+}
+.link-actions { display: flex; gap: var(--s-1); flex-wrap: wrap; align-items: center; }
+.link-actions select { font-size: var(--text-xs); min-height: 2.25rem; padding: var(--s-1) var(--s-2); }
+
+/* Grouping without boxes. Seven controls in a row read as seven unrelated
+   things; two hairlines split them into "which category", "act on this
+   one" and "compare or remove" without adding any chrome. Hidden from
+   assistive technology because a separator that only means "visually, a
+   gap" is noise when it is read aloud. */
+.action-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.25rem;
+  background: var(--border-soft);
+  margin-inline: var(--s-1);
+}
+/* The destructive action is the only one that gets colour, and it is the
+   only one that cannot be undone. It sits at the far end for the same
+   reason: nothing is next to it to hit by accident. */
+.link-actions .push-end { margin-inline-start: auto; }
+
+.grid-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: var(--s-3); }
+.grid-results .link-card { margin-bottom: 0; overflow-wrap: anywhere; }
+.link-card.compact { padding: var(--s-2) var(--s-3); margin-bottom: var(--s-1); }
+.link-card.compact .link-context { display: none; }
+
+/* --- empty states -------------------------------------------------------- */
+/* A bare sentence in muted grey is what the page used to show when there
+   was nothing — indistinguishable from a page that failed to load. */
+
+.empty {
+  text-align: center;
+  padding: var(--s-6) var(--s-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  color: var(--muted);
+  background: var(--surface);
+}
+.empty .empty-icon { font-size: var(--text-2xl); display: block; margin-bottom: var(--s-2); }
+.empty .empty-title { color: var(--fg); font-weight: 600; display: block; margin-bottom: var(--s-1); }
+
+/* --- misc ---------------------------------------------------------------- */
+
+/* A URL is Latin text inside an RTL document. Without an explicit
+   direction the bidi algorithm reorders its trailing punctuation and path
+   segments, so a correctly stored link renders wrong. */
+.ltr, a[href^="http"] { direction: ltr; unicode-bidi: isolate; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* An inline display:flex outranks [hidden] { display: none }, so the undo
+   bar stayed in the layout and in the tab order while invisible. [hidden]
+   is restated first so the guarantee does not depend on rule order. */
+[hidden] { display: none !important; }
+.undo-bar { display: flex; gap: var(--s-2); align-items: center; }
+
+mark { background: var(--accent-soft); color: var(--fg); font-weight: 600; padding: 0 .15rem; border-radius: var(--r-sm); }
+
+/* Segments sized by JS through the CSSOM, which CSP governs differently
+   from a style attribute baked into an HTML string. */
+.bar { display: flex; height: .5rem; border-radius: var(--r-pill); overflow: hidden; margin-bottom: var(--s-3); background: var(--surface-2); }
+
 .toast-host {
   position: fixed;
-  inset-block-end: 1rem;
-  inset-inline-start: 1rem;
+  inset-block-end: var(--s-4);
+  inset-inline-start: var(--s-4);
   display: flex;
   flex-direction: column;
-  gap: .5rem;
+  gap: var(--s-2);
   z-index: 50;
-  /* Never intercepts clicks: the messages are informational and sit over
-     the interface, so they must not block what is underneath. */
   pointer-events: none;
 }
 .toast {
-  background: var(--card-bg);
+  background: var(--surface);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-inline-start: .25rem solid var(--accent);
-  border-radius: .4rem;
-  padding: .6rem .9rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  box-shadow: var(--shadow-2);
   max-width: min(90vw, 28rem);
+  font-size: var(--text-sm);
 }
 .toast-error { border-inline-start-color: var(--danger); }
 
-/* Honour the same motion preference the rest of the page does. */
 @media (prefers-reduced-motion: no-preference) {
   .toast { animation: toast-in .18s ease-out; }
   @keyframes toast-in {
@@ -202,36 +526,36 @@
   }
 }
 
-/* An unread notification is marked by weight rather than colour alone —
-   colour alone fails WCAG 1.4.1 for anyone who cannot distinguish it. */
-.card.unread { border-inline-start: .25rem solid var(--accent); font-weight: 600; }
+/* Weight and a rule, not colour alone — colour alone fails WCAG 1.4.1. */
+.card.unread, .link-card.unread { border-inline-start: .25rem solid var(--accent); font-weight: 600; }
 #unreadBadge {
   background: var(--danger);
   color: #fff;
-  border-radius: 1rem;
-  padding: 0 .45rem;
-  margin-inline-start: .35rem;
-  font-size: .8em;
+  border-radius: var(--r-pill);
+  padding: 0 var(--s-2);
+  margin-inline-start: var(--s-1);
+  font-size: var(--text-xs);
 }
+#themeToggle { font-size: var(--text-xs); white-space: nowrap; }
+footer { padding-top: var(--s-5); margin-top: var(--s-6); border-top: 1px solid var(--border-soft); }
 
-  /* Dashboard tabs. The page carried fourteen headings in one scroll
-     before this — "ربط البوت" sat between collection settings and account
-     settings, which is where a real user went looking and missed it. */
-  .tabs {
-    display: flex; gap: .35rem; flex-wrap: wrap;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 1.5rem; padding-bottom: 0;
-  }
-  .tabs .tab {
-    background: none; border: none; border-bottom: 2px solid transparent;
-    border-radius: .4rem .4rem 0 0; padding: .55rem .9rem;
-    color: var(--muted); font-size: 1rem; font-weight: 500;
-    min-height: 2.75rem; /* 2.5.8: a comfortable target on a phone */
-    margin-bottom: -1px; cursor: pointer;
-  }
-  .tabs .tab:hover { color: var(--fg); background: var(--tag-bg); }
-  .tabs .tab[aria-selected="true"] {
-    color: var(--accent); border-bottom-color: var(--accent); font-weight: 600;
-  }
-  /* The panel is the page now, so its first heading needs no top gap. */
-  .panel > h2:first-child, .panel > h3:first-child { margin-top: 0; }
+/* --- utilities ----------------------------------------------------------- */
+/* These exist because the CSP drops 'unsafe-inline' from style-src as well
+   as script-src: a style attribute is inline CSS. Named for what they do,
+   not what they look like. */
+.stack { flex-direction: column; align-items: stretch; }
+.grow { flex: 1; }
+.centred { align-items: center; }
+.spread { justify-content: space-between; }
+.push-end { margin-inline-start: auto; }
+.indent-s { margin-inline-start: var(--s-2); }
+.gap-top { margin-top: var(--s-2); }
+.gap-top-s { margin-top: var(--s-1); }
+.gap-y-xs { margin: var(--s-1) 0; }
+.small { font-size: var(--text-sm); }
+.smaller { font-size: var(--text-xs); }
+.danger { color: var(--danger); }
+.break-anywhere { word-break: break-all; }
+.prewrap { white-space: pre-wrap; }
+.wrap-row { margin-top: var(--s-2); display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.note-input { width: 100%; font-family: inherit; }
