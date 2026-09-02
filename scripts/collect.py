@@ -144,12 +144,38 @@ def _forward_origin(message: object) -> str | None:
     return None
 
 
+def _still_owned_by(db: Session, channel: Channel, account_id: int | None, *, is_default: bool) -> bool:
+    """Whether this account still owns the channel it has just finished reading.
+
+    Ownership can change *under* a run: ``apply_assignments`` commits from
+    another process every time an operator presses rebalance in the
+    dashboard. Writing a watermark for a channel this account no longer
+    owns advances it past messages the **new** owner has not read — and
+    since the new owner starts from ``min_id=last_message_id``, those
+    messages are never collected by anyone. A permanent gap, invisible in
+    every counter, which is exactly what §44.7 defines collection success
+    against.
+
+    Read fresh rather than trusting the in-session row: the whole point is
+    to see a change another process committed. ``None`` still passes when
+    this is the default account, because an unassigned channel legitimately
+    falls to it (see ``_channels_for``).
+    """
+    owner = db.query(Channel.account_id).filter(Channel.id == channel.id).scalar()
+    if owner is None:
+        return is_default
+    return owner == account_id
+
+
 async def _collect_channel(
     client: TelegramClient,
     db: Session,
     channel: Channel,
     run: IngestSummary | None = None,
     keyword_rules: list | None = None,
+    *,
+    account_id: int | None = None,
+    is_default: bool = True,
 ) -> int:
     label = channel.username or channel.tg_channel_id
     try:
@@ -198,6 +224,19 @@ async def _collect_channel(
         # Keep whatever was collected before the rate limit and resume from
         # the contiguous watermark on the next scheduled run.
         logger.warning("flood wait on channel %s (%s): %s", channel.id, label, exc)
+
+    if account_id is not None and not _still_owned_by(db, channel, account_id, is_default=is_default):
+        # Reassigned mid-run. Everything already stored stays stored — the
+        # links are committed per message and are not the new owner's to
+        # collect again — but the watermark is the new owner's to move.
+        db.commit()
+        logger.warning(
+            "channel %s (%s) changed owner during the run; leaving the watermark at %d for the new owner",
+            channel.id,
+            label,
+            channel.last_message_id,
+        )
+        return summary.stored
 
     channel.last_message_id = new_watermark
     # Stamped even when the run found nothing: the question this answers is
@@ -565,7 +604,9 @@ async def _collect_with_account(
             # would be pure latency with nothing to hide.
             if index:
                 await pacer.wait()
-            total += await _collect_channel(client, db, channel, run, keyword_rules)
+            total += await _collect_channel(
+                client, db, channel, run, keyword_rules, account_id=account.id, is_default=is_default
+            )
         logger.info(
             "account %s (%s): %d new link(s) across %d channel(s)",
             account.id,

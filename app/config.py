@@ -221,17 +221,6 @@ class Settings(BaseSettings):
     # stranger being able to interact with the bot at all.
     bot_allowed_chat_ids: str = ""
 
-    # Whether the bot may onboard a collection account (phone + OTP).
-    #
-    # Off by default, and the reason is what actually travels through a
-    # chat when it is on. NOT the api_hash or the session string — those
-    # never leave the server. But the one-time code does, and so does the
-    # two-factor password if the account has one, and Telegram keeps both
-    # in the chat history until something deletes them. The flow deletes
-    # each message the moment it is read and refuses to run anywhere but a
-    # one-to-one chat, but an operator should still choose to enable it.
-    bot_account_onboarding: bool = False
-
     # --- lead detection (the second product) -----------------------------
     #
     # Off by default, and this one is not a convenience flag either.
