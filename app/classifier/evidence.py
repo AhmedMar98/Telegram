@@ -72,9 +72,17 @@ DEFAULT_CATEGORY = "other"
 W_EXTENSION = 4.0  # the URL literally ends in .apk — nearly a fact
 W_DOMAIN = 3.0  # a known service, but a service is not its content
 W_PATH = 2.0  # the site itself named the section: /course/, /movie/
-W_CHANNEL = 1.5  # a channel called "أفلام" posts films — real, not decisive
 W_KEYWORD = 1.0  # one word in the message
 W_SIBLING = 1.0  # another link in the same message, confidently classified
+# Below W_KEYWORD, deliberately. A channel is a *prior* on what it usually
+# posts, not a description of this particular link — the message is. Set
+# at or above a keyword's weight, one contested case makes the point:
+# "كتاب رائع" posted in a channel titled "قناة الأفلام" classified as a
+# film, because the title alone (one category match) already outweighed
+# the one word actually written about this link. Weaker than a keyword
+# means a channel breaks a tie or fills a blank, and never overrides what
+# the message itself says.
+W_CHANNEL = 0.75
 
 # A repeated word is one voice, not five. Without this cap a message that
 # says "فيلم" six times outweighs the file extension of the link itself.

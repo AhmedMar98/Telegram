@@ -86,6 +86,18 @@ def test_harakat_and_alef_spellings_do_not_break_a_match():
     assert classify_link("https://x.example/a", "الافلام").category == "movies_series"
 
 
+def test_the_channel_title_never_overrides_an_explicit_message_word():
+    """Message content outranks source metadata. Found by review, not
+    written in first: a channel titled "قناة الأفلام" was overriding a
+    message that explicitly said "كتاب" (book), because the title's
+    weight (1.5) exceeded a single keyword's (0.75 now, was equal at 1.5).
+    Sabotage: set W_CHANNEL >= W_KEYWORD and this flips to movies_series.
+    """
+    result = classify_link("https://unknown.example/x", "كتاب رائع", channel_title="قناة الأفلام")
+    assert result.category == "books_courses"
+    assert result.matched_rule == "keyword:كتاب"
+
+
 def test_the_channel_title_is_evidence_for_a_bare_url():
     bare = classify_link("https://unknown.example/xyz")
     assert bare.category == "other"
