@@ -108,7 +108,7 @@ def test_collects_and_classifies_links(workspace_and_channel):
         link = db.query(Link).filter(Link.workspace_id == workspace_id).one()
         assert link.url == "https://example.com/app.apk"
         assert link.category == "software_apps"
-        assert link.classified_by == "rules"
+        assert link.classified_by == "rules-v2"  # the classifier version, since §43
         assert link.domain == "example.com"
         assert link.message_id == 5
     finally:

@@ -21,7 +21,7 @@ Three constraints drove almost every architectural decision:
 | Constraint | Consequence |
 |---|---|
 | **No Docker, no Oracle Cloud** | Render's native Python runtime, described by `render.yaml` |
-| **Zero cost, unconditionally** | No paid plan anywhere; the LLM classification tier is optional by construction |
+| **Zero cost, unconditionally** | No paid plan anywhere, and no external API in any code path: classification is rules-only, in-process |
 | **No free background-worker plan exists** | Everything periodic is a scheduled GitHub Actions job. One exception: an optional near-instant listener that runs as a task *inside* the web process itself |
 
 Collection, link-health checking, pruning, backups and digests are all
@@ -34,8 +34,10 @@ polling for the same reason.
   message, manual paste, or importing browser bookmarks / Pocket /
   Telegram Desktop archives — none of them branches the classification or
   storage logic.
-- **Two-tier classification.** Rules always, offline and free. An optional
-  free-tier LLM is consulted only when rule confidence is low.
+- **Evidence-based classification.** Every signal a link carries —
+  extension, domain, path segment, source channel's title, words in the
+  message, sibling links in the same message — is weighed together rather
+  than the first match winning. Offline, free, deterministic.
 - **Link vitality.** Scheduled checks with backoff, distinguishing "never
   checked" from "confirmed dead."
 - **Search.** Postgres full-text with relevance ranking in production;

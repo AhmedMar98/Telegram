@@ -210,6 +210,7 @@ def store_message(
     sender_id: str | None = None,
     sender_username: str | None = None,
     sender_name: str | None = None,
+    channel_title: str | None = None,
 ) -> IngestSummary:
     """Ingest one live message. Synchronous, and called in a thread.
 
@@ -242,6 +243,7 @@ def store_message(
             sender_id=sender_id,
             sender_username=sender_username,
             sender_name=sender_name,
+            channel_title=channel_title,
         )
         db.commit()
         return summary
@@ -469,6 +471,11 @@ async def handle_event(event: Any, index: _Index) -> int:
             sender_id=_sender_id(event, message),
             sender_username=_sender_username(event),
             sender_name=_sender_name(event),
+            # Off the entity already in hand, never a fetch: the title of
+            # the channel a link was posted in is evidence for its
+            # category (app/classifier/evidence.py), and paying a Telegram
+            # round trip per message to learn it would not be worth it.
+            channel_title=getattr(chat, "title", None),
         )
         _state.links_stored += summary.stored
         if summary.stored:

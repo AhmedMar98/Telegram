@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.classifier import (
     ADULT_CATEGORY,
+    CLASSIFIER_VERSION,
     ClassificationResult,
     classify_link,
     detect_language,
@@ -25,16 +26,17 @@ from app.classifier import (
     link_platform,
     split_context,
 )
+from app.classifier.evidence import SIBLING_ASKER_MAX, SIBLING_DONOR_MIN
+from app.dialogs import IMPORT_CHANNEL_PREFIX, MANUAL_CHANNEL_ID
 from app.leads import detect as detect_lead
-from app.models import Channel, Link
+from app.models import Channel, Link, Message
 
-# Synthetic channel identifiers for links that did not arrive from a real
-# Telegram channel. They are ordinary channel rows so that the
-# (channel_id, url_hash) uniqueness constraint keeps working unchanged;
-# making channel_id nullable instead would silently break dedup, because
-# SQL treats NULLs as distinct from each other.
-MANUAL_CHANNEL_ID = "manual"
-IMPORT_CHANNEL_PREFIX = "import:"
+# Re-exported from app.dialogs, which owns the definition and the
+# ``is_synthetic`` test the assignment engine needs. Kept importable from
+# here because both importers already say ``from app.ingest import
+# IMPORT_CHANNEL_PREFIX``, and one definition with two names beats two
+# definitions that can drift.
+__all__ = ["IMPORT_CHANNEL_PREFIX", "MANUAL_CHANNEL_ID", "IngestSummary", "ingest_text", "store_link"]
 
 # A single message carrying more than this many links is a dump, not a post.
 # The first links in such a message are the ones a person actually wrote
@@ -49,6 +51,10 @@ class IngestSummary:
     stored: int = 0
     duplicates: int = 0
     scanned: int = 0
+    # Messages skipped because a ``messages`` row said they were already
+    # processed. Counted, not silent: "collected nothing" and "had already
+    # collected everything" are the same picture without this number.
+    already_processed: int = 0
     # Messages that hit MAX_LINKS_PER_MESSAGE, and how many links that cost.
     # Counted rather than logged so a caller can report the loss instead of
     # discovering it only by noticing links that never arrived.
@@ -96,6 +102,64 @@ def manual_channel(db: Session, workspace_id: int) -> Channel:
     )
 
 
+def message_seen(db: Session, *, channel_id: int, message_id: int) -> bool:
+    """Whether this exact Telegram message has already been fully processed.
+
+    **Only real Telegram messages have identity here.** Manual entry and
+    every importer use ``message_id = 0`` for every row they create, so
+    treating 0 as an identity would make the second link a person adds by
+    hand "a message already processed" and drop it without a word. The
+    guard is the whole reason this is a function rather than a query
+    inlined at the call site.
+    """
+    if message_id <= 0:
+        return False
+    return (
+        db.query(Message.id).filter(Message.channel_id == channel_id, Message.tg_message_id == message_id).first()
+        is not None
+    )
+
+
+def record_message(
+    db: Session,
+    *,
+    workspace_id: int,
+    channel_id: int,
+    message_id: int,
+    posted_at: datetime | None = None,
+    sender_id: str | None = None,
+    sender_username: str | None = None,
+    sender_name: str | None = None,
+) -> Message | None:
+    """Mark a real Telegram message as processed. Returns None for id 0.
+
+    Inside a SAVEPOINT for the same reason ``store_link`` is: two readers
+    (the live listener and the scheduled collector) can reach the same
+    message concurrently, and the loser of that race must lose one row, not
+    the whole batch its transaction was carrying.
+    """
+    if message_id <= 0:
+        return None
+    row = Message(
+        workspace_id=workspace_id,
+        channel_id=channel_id,
+        tg_message_id=message_id,
+        sender_id=sender_id[:64] if sender_id else None,
+        sender_username=sender_username[:200] if sender_username else None,
+        sender_name=sender_name[:300] if sender_name else None,
+        posted_at=posted_at,
+    )
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        return (
+            db.query(Message).filter(Message.channel_id == channel_id, Message.tg_message_id == message_id).first()
+        )
+    return row
+
+
 def store_link(
     db: Session,
     *,
@@ -107,6 +171,9 @@ def store_link(
     posted_at: datetime | None = None,
     source_type: str = "text",
     forwarded_from: str | None = None,
+    channel_title: str | None = None,
+    siblings: tuple[str, ...] = (),
+    message_ref_id: int | None = None,
 ) -> ClassificationResult | None:
     """Classify and insert one link. Returns the classification, or None if
     the link was already present.
@@ -121,18 +188,19 @@ def store_link(
     alongside it, turning a routine repeat into silent data loss.
     """
     text = raw_text or ""
-    result = classify_link(url, text)
+    result = classify_link(url, text, channel_title=channel_title, siblings=siblings)
     row = Link(
         workspace_id=workspace_id,
         channel_id=channel_id,
         message_id=message_id,
+        message_ref_id=message_ref_id,
         url=url,
         url_hash=hash_url(url),
         domain=domain_of(url),
         platform=link_platform(url),
         category=result.category,
         confidence=result.confidence,
-        classified_by="llm" if result.matched_rule.startswith("llm") else "rules",
+        classified_by=CLASSIFIER_VERSION,
         matched_rule=result.matched_rule[:100],
         source_type=source_type,
         forwarded_from=forwarded_from[:300] if forwarded_from else None,
@@ -163,6 +231,7 @@ def ingest_text(
     sender_id: str | None = None,
     sender_username: str | None = None,
     sender_name: str | None = None,
+    channel_title: str | None = None,
     keyword_rules: list | None = None,
     summary: IngestSummary | None = None,
 ) -> IngestSummary:
@@ -177,6 +246,16 @@ def ingest_text(
     """
     summary = summary or IngestSummary()
     summary.scanned += 1
+
+    # Message identity, before any work. Two readers exist — the hourly
+    # collector and the live listener — and they overlap by design: the
+    # listener catches a message the moment it arrives, and the collector
+    # sweeps from the watermark to catch what the listener missed while the
+    # free instance was asleep. Without this check the overlap re-ran lead
+    # detection and re-classified every link on every pass.
+    if message_seen(db, channel_id=channel_id, message_id=message_id):
+        summary.already_processed += 1
+        return summary
 
     # Lead detection hangs here rather than in the collector and the live
     # listener separately, for the reason that decides most placement
@@ -218,6 +297,27 @@ def ingest_text(
         summary.dropped_links += len(pairs) - MAX_LINKS_PER_MESSAGE
         pairs = pairs[:MAX_LINKS_PER_MESSAGE]
 
+    if not pairs:
+        # Nothing durable came out of this message, so no ``messages`` row
+        # is written: see the model's docstring for why a row means
+        # "produced something", not "was looked at". Lead detection above
+        # has already had its turn, and a message with neither a link nor a
+        # match is cheap to re-read.
+        return summary
+
+    first_pass = {url: classify_link(url, context, channel_title=channel_title) for url, context, _ in pairs}
+    siblings = _sibling_categories(first_pass)
+    message = record_message(
+        db,
+        workspace_id=workspace_id,
+        channel_id=channel_id,
+        message_id=message_id,
+        posted_at=posted_at,
+        sender_id=sender_id,
+        sender_username=sender_username,
+        sender_name=sender_name,
+    )
+
     for url, context, kind in pairs:
         stored = store_link(
             db,
@@ -229,6 +329,13 @@ def ingest_text(
             posted_at=posted_at,
             source_type=kind,
             forwarded_from=forwarded_from,
+            channel_title=channel_title,
+            # Only a link that could not decide for itself asks its
+            # siblings. A link with its own strong evidence keeps it, so
+            # sibling evidence can never overturn a confident answer — it
+            # only fills in a blank one.
+            siblings=siblings if first_pass[url].confidence <= SIBLING_ASKER_MAX else (),
+            message_ref_id=message.id if message is not None else None,
         )
         if stored is None:
             summary.duplicates += 1
@@ -237,3 +344,27 @@ def ingest_text(
         if stored.category == ADULT_CATEGORY:
             summary.adult_urls.append(url)
     return summary
+
+
+def _sibling_categories(first_pass: dict[str, ClassificationResult]) -> tuple[str, ...]:
+    """The category the *confident* links in one message agree on, if any.
+
+    A message that lists five films labels some of them and leaves the rest
+    as bare URLs. The labelled ones are evidence about the bare ones — and
+    that is the only way a link with nothing written around it gets a
+    category at all.
+
+    Three guards keep this from becoming a rumour mill:
+
+    - Only links confident on their **own** evidence may lend
+      (``SIBLING_DONOR_MIN``), and ``first_pass`` is computed with no
+      sibling evidence at all, so nothing can lend a category it was lent.
+    - Only **unanimity** counts. A message mixing films and books would
+      otherwise hand both categories to every undecided link in it, which
+      is evidence for nothing.
+    - A single-link message has no siblings by definition.
+    """
+    if len(first_pass) < 2:
+        return ()
+    donors = {result.category for result in first_pass.values() if result.confidence >= SIBLING_DONOR_MIN}
+    return (donors.pop(),) if len(donors) == 1 else ()

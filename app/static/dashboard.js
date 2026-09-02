@@ -328,8 +328,9 @@ function standoutBadge(i) {
 // Every automatic tier explained once, where the value is shown, rather
 // than in documentation nobody opens.
 const CLASSIFIER_EXPLANATION = {
-  rules: "قواعد محلية: امتداد الملف أو كلمة مفتاحية في نص الرسالة. بلا شبكة وبلا تكلفة.",
-  llm: "نموذج لغوي على الطبقة المجانية، يُستدعى فقط حين تكون ثقة القواعد منخفضة.",
+  "rules-v1": "قواعد محلية، أول قاعدة تطابق تفوز. النسخة السابقة.",
+  "rules-v2": "قواعد محلية تجمع كل الأدلة ثم ترجّح بينها: الامتداد والنطاق والمسار وعنوان القناة وكلمات النص. بلا شبكة وبلا تكلفة.",
+  "llm-v1": "نموذج لغوي خارجي. طبقة أُزيلت من المشروع — يبقى الوسم على الصفوف التي صنّفتها قبل إزالتها.",
   manual: "تصحيح بشري. لا تعيد أي طبقة تلقائية الكتابة فوقه.",
 };
 
@@ -623,6 +624,7 @@ async function loadAccounts() {
   const res = await api("/channels/accounts");
   ACCOUNTS = await res.json();
   renderAccountHealth();
+  loadAssignments();
 }
 
 // A silently failing collecting account is the same class of problem as a
@@ -655,6 +657,62 @@ function renderAccountHealth() {
       ${a.is_active ? "" : `<button data-action="reactivateAccount" data-args='[${a.id}]' class="gap-top">أعد التفعيل بعد إصلاح السبب</button>`}
     </div>`;
   }).join("");
+}
+
+// Which account reads which source. Rendered from a dry run — opening a
+// panel must not rewrite four hundred rows — and refreshed after an
+// explicit rebalance.
+async function loadAssignments() {
+  const el = document.getElementById("assignmentSummary");
+  if (!el) return;
+  const res = await api("/channels/assignments");
+  if (!res.ok) {
+    // 403 for a role without collection rights: say so rather than
+    // leaving an empty box that looks like "nothing configured".
+    el.innerHTML = "<p class='muted'>لا صلاحية لك على إدارة الجمع.</p>";
+    return;
+  }
+  renderAssignments(await res.json());
+}
+
+function renderAssignments(report) {
+  const el = document.getElementById("assignmentSummary");
+  const rows = report.accounts.map(a => {
+    const state = a.is_active ? "🟢" : "🔴";
+    const share = a.capacity ? Math.round((a.assigned / a.capacity) * 100) : 0;
+    return `<div class="pill">${state} ${escapeText(a.label)}: ${a.assigned} / ${a.capacity} (${share}%)</div>`;
+  }).join("");
+
+  // Stranded sources are named, not counted. "٣ معلَّقة" sends an operator
+  // hunting through the channel list; the names say where to look.
+  const stranded = report.stranded.length
+    ? `<div class="error gap-top">
+         <strong>معلَّقة (${report.stranded.length}):</strong>
+         ${escapeText(report.stranded.slice(0, 10).join("، "))}
+         ${report.stranded.length > 10 ? ` و${report.stranded.length - 10} غيرها` : ""}
+         <div class="muted gap-top-s">لا حساب نشط يستطيع فتحها. أعِد تفعيل حسابها، أو أضِف حساباً منضمّاً إليها.</div>
+       </div>`
+    : "";
+  const overflow = report.overflow.length
+    ? `<div class="muted gap-top">تجاوزت السعة: ${report.overflow.length} مصدر — ارفع السعة أو أضِف حساباً.</div>`
+    : "";
+
+  el.innerHTML = (rows || "<p class='muted'>لا حسابات جمع بعد.</p>") + stranded + overflow;
+}
+
+async function rebalanceAssignments() {
+  const res = await api("/channels/assignments/rebalance", { method: "POST" });
+  const msg = document.getElementById("assignmentMsg");
+  if (!res.ok) {
+    msg.textContent = "تعذّرت إعادة التوزيع.";
+    return;
+  }
+  const report = await res.json();
+  renderAssignments(report);
+  msg.textContent = report.moved
+    ? `نُقل ${report.moved} مصدر، وبقي ${report.kept} في مكانه.`
+    : "لا شيء يحتاج نقلاً — التوزيع الحالي هو الصحيح.";
+  loadAccounts();
 }
 
 async function reactivateAccount(id) {

@@ -70,18 +70,6 @@ BACKUP_RESULT = AlertType(
     description="تأكيد أسبوعي بنجاح النسخة الاحتياطية — تأكيد لا صمت",
     default_on=True,
 )
-# Operational despite describing an *optional* tier. Running out does not
-# break anything — classification falls back to the rules tier, which is
-# the designed behaviour — but it is a limit being approached, exactly like
-# STORAGE_HIGH, and there is no other way to find out short of noticing
-# that ``classified_by`` stopped saying "llm".
-GROQ_QUOTA = AlertType(
-    key="groq_quota",
-    label="اقتراب نفاد حصة Groq",
-    description="الحصّة المجانية للمصنّف الاختياري قاربت النفاد حسب رؤوس استجابته",
-    default_on=True,
-)
-
 # --- digests and content: proactive, so off until asked for ----------------
 
 WEEKLY_DIGEST = AlertType(
@@ -114,7 +102,6 @@ ALERT_TYPES: tuple[AlertType, ...] = (
     STORAGE_HIGH,
     NEW_DEVICE,
     BACKUP_RESULT,
-    GROQ_QUOTA,
     WEEKLY_DIGEST,
     MONTHLY_DOMAINS,
     ADULT_CONTENT,

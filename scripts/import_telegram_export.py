@@ -156,7 +156,12 @@ def main() -> int:
 
     logger.info("scanned %d message(s)", summary.scanned)
     logger.info("found   %d link(s)", summary.total_found)
-    logger.info("stored  %d new, skipped %d already present", summary.stored, summary.duplicates)
+    logger.info(
+        "stored  %d new, skipped %d already-present link(s), %d already-processed message(s)",
+        summary.stored,
+        summary.duplicates,
+        summary.already_processed,
+    )
     return 0
 
 

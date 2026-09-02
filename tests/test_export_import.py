@@ -113,7 +113,12 @@ def test_reimporting_the_same_export_adds_nothing(tmp_path, workspace_id):
     second = run(path, workspace_id, dry_run=False)
 
     assert (first.stored, first.duplicates) == (1, 0)
-    assert (second.stored, second.duplicates) == (0, 1)
+    # Stopped by message identity (§43.5), not by link dedupe: the export
+    # carries the real Telegram message id, so the second pass recognises
+    # the *message* and never reaches the URL. Both counters read zero and
+    # the third one carries the truth — which is why it exists.
+    assert (second.stored, second.duplicates) == (0, 0)
+    assert second.already_processed == 1
 
     db = SessionLocal()
     try:

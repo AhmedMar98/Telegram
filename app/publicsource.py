@@ -276,6 +276,7 @@ async def collect_public_channel(db, channel, *, fetch=fetch_preview) -> int:
                 channel_id=channel.id,
                 text=post.text,
                 message_id=post.message_id,
+                channel_title=channel.title,
             )
             stored += summary.stored
             highest = max(highest, post.message_id)

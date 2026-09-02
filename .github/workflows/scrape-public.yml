@@ -45,7 +45,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SECRET_KEY: "scraper-process-does-not-serve-http"
           SCRAPER_MAX_SOURCES: ${{ vars.SCRAPER_MAX_SOURCES }}
         run: python -m scripts.scrape_public

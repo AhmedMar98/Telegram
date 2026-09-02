@@ -35,6 +35,7 @@ from app.models import (
     Lead,
     Link,
     LoginAttempt,
+    Message,
     Notification,
     NotificationPreference,
     SavedSearch,
@@ -63,6 +64,10 @@ WORKSPACE_TABLES = (
     ClassificationFeedback,
     SavedSearch,
     Link,
+    # After Link and before Channel: a link points at its message, and a
+    # message points at its channel, so this is the only order in which no
+    # step leaves a dangling reference on an engine that enforces them.
+    Message,
     AuditLog,
     BotLink,
     BotLinkCode,

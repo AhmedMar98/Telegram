@@ -58,19 +58,49 @@ SOURCE_USERBOT = "userbot"
 SOURCE_PUBLIC = "public"
 SOURCES = (SOURCE_USERBOT, SOURCE_PUBLIC)
 
+# Channel rows that stand for something other than a Telegram dialog: the
+# bucket for hand-added links, and one per import file. They are ordinary
+# rows carrying real links — which is why they exist at all, so the
+# (channel_id, url_hash) dedupe key keeps working for links with no
+# channel — and they are collectable by nobody. Asking Telegram to resolve
+# "manual" fails every time, which the collector had been logging as a
+# warning on every run, for every such row, forever.
+MANUAL_CHANNEL_ID = "manual"
+IMPORT_CHANNEL_PREFIX = "import:"
+
+
+def is_synthetic(tg_channel_id: str) -> bool:
+    """Whether this row stands for a real Telegram dialog at all."""
+    return tg_channel_id == MANUAL_CHANNEL_ID or tg_channel_id.startswith(IMPORT_CHANNEL_PREFIX)
+
+
+# What "nothing said" means. Channels and groups are what a link-collection
+# tool is for; private conversations and bot feeds are separate decisions
+# with separate consequences (privacy, and volume) and have to be asked for.
+DEFAULT_SCOPE = frozenset({"channel", "group"})
+
 
 def parse_scope(raw: str | None) -> frozenset[str]:
     """Which kinds discovery may register.
 
-    Accepts ``all``, or any comma-separated subset of the three kinds.
+    Accepts ``all``, or any comma-separated subset of the four kinds.
     Unknown words are ignored rather than fatal: a typo in one entry of a
     list should narrow the scope, not stop the collector from running at
     all — and the run logs what it actually used.
+
+    **Absent or empty means the default scope, not everything.** It used to
+    mean everything, so ``COLLECTOR_SCOPE=`` — an env var present but
+    blank, which is what an unset repository variable expands to in GitHub
+    Actions — silently turned on collection of private conversations. A
+    setting that widens itself when nobody has set it is the wrong
+    direction to fail in.
     """
     if raw is None:
-        return frozenset(KINDS)
+        return DEFAULT_SCOPE
     text = raw.strip().lower()
-    if not text or text == "all":
+    if not text:
+        return DEFAULT_SCOPE
+    if text == "all":
         return frozenset(KINDS)
     chosen = {word.strip() for word in text.split(",")}
     kinds = frozenset(word for word in chosen if word in KINDS)

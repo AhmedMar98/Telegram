@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import pathlib
 
-import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -22,11 +21,9 @@ from app.alerts import (
     ADULT_CONTENT,
     ALERT_TYPES,
     BACKUP_RESULT,
-    GROQ_QUOTA,
     UNSTABLE_CATEGORY,
     WEEKLY_DIGEST,
 )
-from app.classifier import llm
 from app.database import SessionLocal
 from app.models import Channel, ClassificationFeedback, Link, Notification
 from tests.conftest import register_workspace
@@ -200,96 +197,6 @@ def test_the_collector_accumulates_adult_links_across_channels(client: TestClien
     raised = _alerts(workspace_id, ADULT_CONTENT.key)
     assert len(raised) == 1, "one run, one message — not one per channel"
     assert "2 رابط جديد" in raised[0].body
-
-
-# --- idea 160: what is left of the optional tier's quota -------------------
-
-
-@pytest.fixture(autouse=True)
-def _forget_quota():
-    llm.reset_quota()
-    yield
-    llm.reset_quota()
-
-
-def test_quota_is_read_from_whatever_dimensions_the_response_names():
-    """No hardcoded list of dimensions: the pairing rule is the contract."""
-    llm.record_quota_headers(
-        {
-            "x-ratelimit-remaining-requests": "50",
-            "x-ratelimit-limit-requests": "1000",
-            "x-ratelimit-remaining-tokens": "9000",
-            "x-ratelimit-limit-tokens": "10000",
-        }
-    )
-
-    assert [r.dimension for r in llm.quota_readings()] == ["requests", "tokens"]
-    assert llm.lowest_quota().fraction_left == pytest.approx(0.05)
-
-
-def test_a_remaining_header_with_no_limit_is_ignored():
-    """A number with no denominator says nothing: "8000 left" of what?"""
-    llm.record_quota_headers({"x-ratelimit-remaining-requests": "8000"})
-
-    assert llm.quota_readings() == []
-
-
-def test_reset_headers_are_not_mistaken_for_quota():
-    """They sit in the same x-ratelimit-* family and carry durations."""
-    llm.record_quota_headers(
-        {
-            "x-ratelimit-reset-requests": "7.66s",
-            "x-ratelimit-limit-requests": "1000",
-        }
-    )
-
-    assert llm.quota_readings() == []
-
-
-def test_no_rate_limit_headers_at_all_means_no_reading():
-    """The idea is conditional on these headers existing. If Groq sends
-    none, or sends them under other names, this is the outcome: silence,
-    never a fabricated warning."""
-    llm.record_quota_headers({"content-type": "application/json"})
-
-    assert llm.lowest_quota() is None
-
-
-def test_header_names_are_matched_case_insensitively():
-    llm.record_quota_headers({"X-RateLimit-Remaining-Requests": "1", "X-RateLimit-Limit-Requests": "100"})
-
-    assert llm.lowest_quota().dimension == "requests"
-
-
-def test_the_collector_warns_only_below_the_configured_fraction(client: TestClient):
-    from scripts.collect import _warn_on_groq_quota
-
-    register_workspace(client, email="q1@example.com", workspace_name="Q1")
-    workspace_id = _workspace(client)
-
-    llm.record_quota_headers({"x-ratelimit-remaining-requests": "500", "x-ratelimit-limit-requests": "1000"})
-    with SessionLocal() as db:
-        asyncio.run(_warn_on_groq_quota(db, workspace_id))
-    assert _alerts(workspace_id, GROQ_QUOTA.key) == []
-
-    llm.record_quota_headers({"x-ratelimit-remaining-requests": "50", "x-ratelimit-limit-requests": "1000"})
-    with SessionLocal() as db:
-        asyncio.run(_warn_on_groq_quota(db, workspace_id))
-    raised = _alerts(workspace_id, GROQ_QUOTA.key)
-    assert len(raised) == 1
-    assert "5٪" in raised[0].body
-
-
-def test_an_unconfigured_or_silent_groq_never_warns(client: TestClient):
-    from scripts.collect import _warn_on_groq_quota
-
-    register_workspace(client, email="q2@example.com", workspace_name="Q2")
-    workspace_id = _workspace(client)
-
-    with SessionLocal() as db:
-        asyncio.run(_warn_on_groq_quota(db, workspace_id))
-
-    assert _alerts(workspace_id, GROQ_QUOTA.key) == []
 
 
 # --- idea 158: the backup says so, either way ------------------------------

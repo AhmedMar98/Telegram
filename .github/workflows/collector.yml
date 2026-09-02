@@ -8,7 +8,6 @@ name: Collector
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   TG_API_ID, TG_API_HASH, TG_SESSION_STRING, DATABASE_URL,
 #   COLLECTOR_WORKSPACE_ID, FIELD_ENCRYPTION_KEY
-# Optional: GROQ_API_KEY
 #
 # Each run also *discovers*: it asks the account which dialogs it has —
 # channels, groups and private chats — and registers the ones this
@@ -21,6 +20,18 @@ on:
   schedule:
     - cron: "0 * * * *" # hourly
   workflow_dispatch: {}
+
+# A run that overlaps another is not a cosmetic problem: two live Telethon
+# sessions on the same account, or a run mid-flight while the assignment
+# engine reassigns the channels it is reading, is the concurrency the
+# assignment engine's own comment (app/assignment.py) explicitly does not
+# guard against at the database level — it relies on there being exactly
+# one runner. This is that guarantee, enforced at the only layer that can
+# make it true for free: a slow hourly run and a manual workflow_dispatch
+# queue behind each other rather than run together.
+concurrency:
+  group: collector-${{ github.repository }}
+  cancel-in-progress: false
 
 # Checks out the code to run scripts/collect.py. Everything it writes
 # goes to the database over DATABASE_URL, never through the token.
@@ -49,7 +60,6 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           COLLECTOR_WORKSPACE_ID: ${{ secrets.COLLECTOR_WORKSPACE_ID }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SECRET_KEY: "collector-process-does-not-serve-http"
           # Repository *variables*, not secrets: neither is a credential,
           # and a variable can be read back in the Actions UI, which is

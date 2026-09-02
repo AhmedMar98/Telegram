@@ -29,7 +29,7 @@ DESCRIPTIONS: dict[str, str] = {
     "url": "الرابط كما استُخرج، بعد تجريد الترقيم اللاحق. `http`/`https` فقط",
     "category": "التصنيف النهائي. القيم المعروفة في `/config/categories`",
     "confidence": "ثقة التصنيف، ٠٫٠٠–١٫٠٠، مقرّبة لخانتين",
-    "classified_by": "`rules` أو `llm:groq` أو `manual` (تصحيح بشري)",
+    "classified_by": "نسخة المصنّف مثل `rules-v2`، أو `manual` (تصحيح بشري)",
     "matched_rule": "القاعدة التي طابقت، مثل `domain:github.com`. فارغ للصفوف الأقدم من العمود",
     "source_type": "**أين** وُجد الرابط داخل الرسالة: `text` (نصّ ظاهر) أو `hyperlink` (رابط خلف تسمية) أو `button` (زرّ لوحة مضمَّنة). ليس مصدر الرابط — المصدر هو القناة",
     "forwarded_from": "مصدر إعادة التوجيه إن وُجد",

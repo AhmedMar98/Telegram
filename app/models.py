@@ -196,6 +196,57 @@ class Channel(Base):
     links: Mapped[list[Link]] = relationship(back_populates="channel")
 
 
+class Message(Base):
+    """One Telegram message this system has finished processing.
+
+    The identity that ``links`` never had. A link is unique per
+    ``(channel_id, url_hash)``, which answers "have I stored this URL from
+    this channel?" — and cannot answer "have I already read this message?"
+    A message carrying no links at all had no answer of any kind: it left
+    no trace, so the live listener and the scheduled collector each did its
+    work from scratch every time they overlapped on one.
+
+    **There is deliberately no ``text`` column.** The claim that prompted
+    this table — that a message with twenty links stores its text twenty
+    times — does not survive reading ``split_context``: each link gets its
+    own *slice* of the message, and only a single-link message keeps the
+    whole body. Adding ``text`` here would therefore not remove a
+    duplication; it would create one, and it would turn a 1 GiB free-tier
+    database into a full Telegram archive within weeks. The text stays
+    where it is already used: the per-link context on ``Link.raw_text``,
+    which search indexes, and the request text on ``Lead``.
+
+    **Rows are written lazily** — only once a message has produced
+    something durable (a link, or a matched lead) and that work has
+    committed. So the presence of a row means "fully processed", which is
+    what makes the early return in ``ingest_text`` correct rather than
+    approximate: an interrupted run leaves no row, and the message is
+    reprocessed rather than silently skipped.
+    """
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        # Identity is per channel, not per workspace: the same message id
+        # in two channels is two messages.
+        UniqueConstraint("channel_id", "tg_message_id", name="uq_message_per_channel"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    tg_message_id: Mapped[int] = mapped_column(Integer)
+    # Attribution, read off the message rather than fetched: see
+    # scripts/collect.py for why an extra Telegram round trip per message
+    # is not paid here. Cleared by app.leads.forget() when a person asks to
+    # be forgotten — the message survives because it is the provenance of a
+    # *link*, but it stops naming them.
+    sender_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    sender_username: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    sender_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Link(Base):
     __tablename__ = "links"
     # Dedupe by URL within a channel using a fixed-length hash rather than the
@@ -227,6 +278,12 @@ class Link(Base):
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
     message_id: Mapped[int] = mapped_column(Integer)
+    # The message row this link was extracted from, when there is one.
+    # Nullable on purpose and permanently: links added by hand or imported
+    # from a bookmarks file have no Telegram message behind them, and rows
+    # collected before ``messages`` existed have none either. NULL here is
+    # a true statement about the link's origin, not missing data.
+    message_ref_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True, index=True)
     url: Mapped[str] = mapped_column(Text)
     url_hash: Mapped[str] = mapped_column(String(64), index=True)
     domain: Mapped[str] = mapped_column(String(300), index=True)
@@ -243,7 +300,13 @@ class Link(Base):
     platform: Mapped[str] = mapped_column(String(20), index=True, default="web", server_default="web")
     category: Mapped[str] = mapped_column(String(50), index=True, default="other")
     confidence: Mapped[float] = mapped_column(default=0.0)
-    classified_by: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm
+    # Which classifier version produced this row's category, e.g.
+    # "rules-v2", or "manual" when a human corrected it. It used to say
+    # only "rules" or "llm"; with the LLM tier removed (§43) that made it
+    # a constant, so it now carries the version instead — which answers
+    # "why did this row get this category?" months later, when the rules
+    # have moved on and the row has not.
+    classified_by: Mapped[str] = mapped_column(String(20), default="rules-v2")
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # Which rule actually fired, e.g. "extension:pdf" or "keyword:فيلم".
     # The classifier always computed this; it used to be thrown away, so a
