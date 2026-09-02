@@ -31,6 +31,7 @@ from app.models import (
     BotLinkCode,
     Channel,
     ClassificationFeedback,
+    CoverageSnapshot,
     KeywordRule,
     Lead,
     Link,
@@ -53,6 +54,9 @@ from app.models import (
 WORKSPACE_TABLES = (
     ApiKey,
     WorkflowRun,
+    # Telemetry about the workspace's own collection: it names how many
+    # sources it has and how many are failing, so it leaves with it.
+    CoverageSnapshot,
     # Leads before beneficiaries, and beneficiaries before channels: a lead
     # points at both, so deleting either first leaves a dangling reference
     # on any engine that enforces the foreign key.

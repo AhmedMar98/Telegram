@@ -269,6 +269,65 @@ class Message(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class CoverageSnapshot(Base):
+    """One run's measurement, kept so the trend is visible (§46 → §47).
+
+    ``GET /status/coverage`` answers "how are we doing right now", and a
+    right-now number cannot answer the question that actually matters:
+    **is it getting worse?** 99.2%, then 98.7%, then 94.1% is a system
+    degrading in plain sight, and each of those readings on its own looks
+    acceptable. So each run writes a row, and the series is the signal.
+
+    PostgreSQL rather than a metrics stack, deliberately. Prometheus and
+    Grafana would each be a service to run, on a deployment whose whole
+    constraint is that it runs one; a table with a retention window costs
+    nothing and answers the same question.
+    """
+
+    __tablename__ = "coverage_snapshots"
+    __table_args__ = (Index("ix_coverage_workspace_finished", "workspace_id", "finished_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    #: Groups every row a single run wrote. A run that collects for two
+    #: workspaces writes two rows sharing one id, so "what did that run
+    #: do?" stays answerable after the fact.
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime] = mapped_column(DateTime)
+
+    # --- source coverage, copied from the contract at run end ------------
+    sources_expected: Mapped[int] = mapped_column(Integer, default=0)
+    sources_due: Mapped[int] = mapped_column(Integer, default=0)
+    sources_attempted: Mapped[int] = mapped_column(Integer, default=0)
+    sources_succeeded: Mapped[int] = mapped_column(Integer, default=0)
+    sources_failed: Mapped[int] = mapped_column(Integer, default=0)
+    sources_skipped: Mapped[int] = mapped_column(Integer, default=0)
+
+    # --- what the run actually moved -------------------------------------
+    #: Messages the run was offered, including ones it recognised as
+    #: already processed. ``processed`` is the subset it did work on, so
+    #: ``seen - processed`` is the overlap between the two readers.
+    messages_seen: Mapped[int] = mapped_column(Integer, default=0)
+    messages_processed: Mapped[int] = mapped_column(Integer, default=0)
+    links_found: Mapped[int] = mapped_column(Integer, default=0)
+    links_stored: Mapped[int] = mapped_column(Integer, default=0)
+    duplicate_occurrences: Mapped[int] = mapped_column(Integer, default=0)
+
+    # --- freshness, as a distribution rather than an average -------------
+    #: An average lag hides the one source that is a day behind. The
+    #: median says what a typical source looks like; p95 says how bad the
+    #: tail is, and the tail is what breaks first.
+    collection_lag_p50: Mapped[float | None] = mapped_column(nullable=True)
+    collection_lag_p95: Mapped[float | None] = mapped_column(nullable=True)
+
+    # --- integrity, never folded into the rates above --------------------
+    watermark_regressions: Mapped[int] = mapped_column(Integer, default=0)
+    gap_events: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Link(Base):
     __tablename__ = "links"
     # Dedupe by URL within a channel using a fixed-length hash rather than the

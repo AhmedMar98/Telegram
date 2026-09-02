@@ -29,12 +29,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Literal
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.dialogs import SOURCE_PUBLIC, SOURCE_USERBOT, is_synthetic
-from app.models import Channel, Link, Message
+from app.models import Channel, CoverageSnapshot, Link, Message
 from app.timeutil import utcnow
 
 # --- failure taxonomy ------------------------------------------------------
@@ -330,3 +331,156 @@ def _duplicates(db: Session, workspace_id: int) -> DuplicateRates:
         duplicate_link_occurrence=round(shared / links, 4),
         duplicate_resource=round(shared / links, 4) if distinct_hashes else 0.0,
     )
+
+
+# --- the operational time series (§47) --------------------------------------
+#
+# A snapshot answers "how are we doing now". It cannot answer the question
+# that decides whether to act: **is it getting worse?** 99.2%, then 98.7%,
+# then 94.1% is a system degrading in plain sight, and every one of those
+# readings looks acceptable alone. So each run writes a row.
+
+#: How long snapshots are kept. Long enough to see a week-over-week trend
+#: and a slow drift; short enough that an hourly run cannot fill a 1 GiB
+#: database with its own telemetry (24 x 365 rows would be ~9k/year, so
+#: this is generous rather than tight).
+SNAPSHOT_RETENTION_DAYS = 120
+
+
+def _percentiles(values: list[float]) -> tuple[float | None, float | None]:
+    """p50 and p95 of a small list, without pulling in a stats dependency.
+
+    Reported instead of a mean because a mean hides exactly the case that
+    matters: nine fresh sources and one a day behind average out to
+    "fine". The median says what a typical source looks like; p95 says how
+    bad the tail is, and the tail is what breaks first.
+    """
+    if not values:
+        return None, None
+    ordered = sorted(values)
+
+    def pick(fraction: float) -> float:
+        # Nearest-rank, which needs no interpolation and is exact for the
+        # small N this runs on (one value per source).
+        index = min(len(ordered) - 1, max(0, round(fraction * (len(ordered) - 1))))
+        return round(ordered[index], 1)
+
+    return pick(0.5), pick(0.95)
+
+
+def per_source_lag(db: Session, workspace_id: int) -> list[float]:
+    """Seconds since each source's newest stored message, one per source.
+
+    The distribution the percentiles are taken over. Sources that have
+    never produced a message are absent rather than counted as zero: a
+    source with no data is not a fresh source.
+    """
+    now = utcnow()
+    rows = (
+        db.query(Message.channel_id, func.max(Message.posted_at))
+        .filter(Message.workspace_id == workspace_id, Message.posted_at.isnot(None))
+        .group_by(Message.channel_id)
+        .all()
+    )
+    return [(now - newest).total_seconds() for _, newest in rows if newest is not None]
+
+
+def record_snapshot(
+    db: Session,
+    workspace_id: int,
+    *,
+    run_id: str,
+    started_at,
+    summary=None,
+) -> CoverageSnapshot:
+    """Write one run's measurement into the series. Commits.
+
+    ``summary`` is the run's ``IngestSummary`` when there is one; a run
+    that collected nothing still writes a row, because a gap in the series
+    is indistinguishable from a run that found nothing, and those need
+    opposite responses.
+    """
+    report = measure(db, workspace_id)
+    lags = per_source_lag(db, workspace_id)
+    p50, p95 = _percentiles(lags)
+
+    snapshot = CoverageSnapshot(
+        workspace_id=workspace_id,
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=utcnow(),
+        sources_expected=report.sources_expected,
+        sources_due=report.sources_due,
+        sources_attempted=report.sources_attempted,
+        sources_succeeded=report.sources_succeeded,
+        sources_failed=report.sources_failed,
+        sources_skipped=report.sources_skipped,
+        messages_seen=getattr(summary, "scanned", 0) or 0,
+        messages_processed=(getattr(summary, "scanned", 0) or 0) - (getattr(summary, "already_processed", 0) or 0),
+        links_found=(getattr(summary, "stored", 0) or 0) + (getattr(summary, "duplicates", 0) or 0),
+        links_stored=getattr(summary, "stored", 0) or 0,
+        duplicate_occurrences=getattr(summary, "duplicates", 0) or 0,
+        collection_lag_p50=p50,
+        collection_lag_p95=p95,
+        watermark_regressions=report.watermark.regressions,
+        gap_events=report.watermark.regressions + report.watermark.ownership_conflicts,
+    )
+    db.add(snapshot)
+    _prune_snapshots(db, workspace_id)
+    db.commit()
+
+    # Loaded and detached before returning. Without this the caller gets a
+    # live ORM instance that raises ``DetachedInstanceError`` the moment
+    # its session closes — which is exactly what a caller does after
+    # recording a run, and the error names SQLAlchemy internals rather
+    # than the mistake. Detached-with-values is what "here is what I just
+    # wrote" should mean.
+    db.refresh(snapshot)
+    db.expunge(snapshot)
+    return snapshot
+
+
+def _prune_snapshots(db: Session, workspace_id: int) -> None:
+    """Drop rows past the retention window, on write.
+
+    On write rather than as a scheduled job for the same reason
+    ``login_attempts`` does it: a cleanup job that has to be remembered is
+    a table that grows forever on the deployment that forgot.
+    """
+    cutoff = utcnow() - timedelta(days=SNAPSHOT_RETENTION_DAYS)
+    db.query(CoverageSnapshot).filter(
+        CoverageSnapshot.workspace_id == workspace_id, CoverageSnapshot.finished_at < cutoff
+    ).delete(synchronize_session=False)
+
+
+def history(db: Session, workspace_id: int, *, limit: int = 100) -> list[CoverageSnapshot]:
+    """The series, newest first."""
+    return (
+        db.query(CoverageSnapshot)
+        .filter(CoverageSnapshot.workspace_id == workspace_id)
+        .order_by(CoverageSnapshot.finished_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def trend(snapshots: list[CoverageSnapshot]) -> Literal["improving", "steady", "degrading", "unknown"]:
+    """Which way coverage is moving: improving, steady, degrading, unknown.
+
+    Compares the mean of the newest third against the mean of the oldest
+    third, which is deliberately crude: this is a *flag* telling an
+    operator to look, not a statistic. A single reading is "unknown"
+    rather than "steady" — one point has no direction.
+    """
+    rates = [snapshot.sources_succeeded / snapshot.sources_due for snapshot in snapshots if snapshot.sources_due]
+    if len(rates) < 4:
+        return "unknown"
+    # ``snapshots`` arrives newest-first.
+    third = max(1, len(rates) // 3)
+    newest = sum(rates[:third]) / third
+    oldest = sum(rates[-third:]) / third
+    if newest - oldest > 0.02:
+        return "improving"
+    if oldest - newest > 0.02:
+        return "degrading"
+    return "steady"

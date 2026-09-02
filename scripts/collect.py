@@ -36,6 +36,7 @@ import logging
 import os
 import random
 import sys
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -708,6 +709,11 @@ async def collect() -> None:
     session_string = os.environ["TG_SESSION_STRING"]
     workspace_id = int(os.environ["COLLECTOR_WORKSPACE_ID"])
 
+    # One id for the whole run, so "what did that run do?" stays
+    # answerable across the rows it writes for each workspace.
+    run_id = str(uuid.uuid4())
+    started_at = utcnow()
+
     db = SessionLocal()
     try:
         # Every query below hits tables under row-level security. Without
@@ -724,6 +730,7 @@ async def collect() -> None:
             .all()
         )
         if not accounts:
+            coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at)
             logger.info("no active collecting accounts for this workspace; nothing to do")
             return
 
@@ -782,6 +789,10 @@ async def collect() -> None:
                 working_accounts += 1
 
         if collected_channels == 0:
+            # Recorded before returning: a run that found nothing to do is
+            # a data point, and a gap in the series is indistinguishable
+            # from a run that never happened.
+            coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at, summary=run)
             logger.info("no active channels configured for this workspace; nothing to do")
             return
 
@@ -806,6 +817,15 @@ async def collect() -> None:
         # committed, so nothing is announced that a rollback took back.
         await report_adult_links(db, workspace_id, run.adult_urls)
 
+        snapshot = coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at, summary=run)
+        logger.info(
+            "coverage: %d/%d due sources succeeded, lag p50=%ss p95=%ss, gaps=%d",
+            snapshot.sources_succeeded,
+            snapshot.sources_due,
+            snapshot.collection_lag_p50,
+            snapshot.collection_lag_p95,
+            snapshot.gap_events,
+        )
         logger.info(
             "done: %d new link(s) across %d channel(s) using %d account(s)",
             total,

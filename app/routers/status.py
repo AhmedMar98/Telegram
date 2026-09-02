@@ -24,7 +24,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import coverage, live, metrics
+from app import coverage, live, metrics, shadow
 from app.alerts import BACKUP_RESULT
 from app.config import get_settings
 from app.database import get_db
@@ -32,7 +32,10 @@ from app.deps import get_current_user, get_session_user
 from app.models import User, WorkflowRun
 from app.notify import raise_alert
 from app.schemas import (
+    ClassificationDrift,
     CollectionCoverage,
+    CoverageHistory,
+    CoverageSnapshotOut,
     LiveStatus,
     SystemStatus,
     WorkflowRunOut,
@@ -49,6 +52,51 @@ def _schema_version(db: Session) -> str | None:
         # A database built by create_all rather than alembic. A normal
         # test/dev shape, not an outage.
         return None
+
+
+@router.get("/coverage/history", response_model=CoverageHistory)
+def coverage_history(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> CoverageHistory:
+    """The measurement over time — the question a snapshot cannot answer.
+
+    99.2%, then 98.7%, then 94.1% is a system degrading in plain sight,
+    and each of those readings looks acceptable on its own.
+    """
+    snapshots = coverage.history(db, current_user.workspace_id, limit=max(1, min(limit, 500)))
+    return CoverageHistory(
+        snapshots=[CoverageSnapshotOut.model_validate(row) for row in snapshots],
+        trend=coverage.trend(snapshots),
+    )
+
+
+@router.get("/classification-drift", response_model=ClassificationDrift)
+def classification_drift(
+    limit: int = 5_000,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> ClassificationDrift:
+    """Would today's rules still produce what is stored? (§47.3)
+
+    Shadow mode against the live engine: it reads, compares and reports,
+    and writes nothing at all. The disagreements are the shortlist worth
+    a human's attention — which is how a labelled benchmark gets built
+    without labelling the whole corpus.
+    """
+    report = shadow.compare(db, current_user.workspace_id, limit=max(1, min(limit, 50_000)))
+    return ClassificationDrift(
+        compared=report.compared,
+        agreed=report.agreed,
+        disagreed=report.disagreed,
+        human_verdicts_skipped=report.human_verdicts_skipped,
+        disagreement_rate=report.disagreement_rate,
+        biggest_transitions={
+            f"{before} -> {after}": count for (before, after), count in report.biggest_transitions
+        },
+        samples=[vars(sample) for sample in report.samples],
+    )
 
 
 @router.get("/coverage", response_model=CollectionCoverage)

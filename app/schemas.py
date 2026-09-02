@@ -1052,6 +1052,103 @@ class CollectionCoverage(BaseModel):
     )
 
 
+class CoverageSnapshotOut(BaseModel):
+    """One run in the operational series (§47)."""
+
+    run_id: str
+    started_at: datetime
+    finished_at: datetime
+    sources_due: int
+    sources_succeeded: int
+    sources_failed: int
+    messages_seen: int
+    messages_processed: int
+    links_found: int
+    links_stored: int
+    duplicate_occurrences: int
+    collection_lag_p50: float | None
+    collection_lag_p95: float | None
+    watermark_regressions: int
+    gap_events: int
+
+    model_config = _config(
+        {
+            "run_id": "7c1f5c0e-1e2b-4c9a-9f0a-2b7d9c8e1a44",
+            "started_at": "2026-09-02T10:00:00",
+            "finished_at": "2026-09-02T10:00:38",
+            "sources_due": 40,
+            "sources_succeeded": 39,
+            "sources_failed": 1,
+            "messages_seen": 812,
+            "messages_processed": 640,
+            "links_found": 96,
+            "links_stored": 71,
+            "duplicate_occurrences": 25,
+            "collection_lag_p50": 1840.0,
+            "collection_lag_p95": 9120.0,
+            "watermark_regressions": 0,
+            "gap_events": 0,
+        },
+        from_attributes=True,
+    )
+
+
+class CoverageHistory(BaseModel):
+    """The series plus a direction, because one reading has no direction.
+
+    ``trend`` is a flag telling an operator to look, not a statistic:
+    "unknown" until there are enough readings to compare, and never
+    "steady" on a single point.
+    """
+
+    snapshots: list[CoverageSnapshotOut]
+    trend: Literal["improving", "steady", "degrading", "unknown"]
+
+    model_config = _config({"snapshots": [], "trend": "unknown"})
+
+
+class ClassificationDrift(BaseModel):
+    """What a candidate classifier would change, having changed nothing.
+
+    Run before a labelled benchmark rather than after: labelling a random
+    sample is slow, and most of that work confirms rows both classifiers
+    already agree on. This narrows 10,000 rows to the few hundred worth a
+    human's time.
+    """
+
+    compared: int
+    agreed: int
+    disagreed: int
+    #: Rows a person corrected, excluded entirely — a candidate gets no
+    #: opinion about a verdict it may not overwrite (§44.3).
+    human_verdicts_skipped: int
+    disagreement_rate: float | None
+    #: "movies_series -> books_courses": 37. Which way categories move,
+    #: because one total says a change is big and this says what it does.
+    biggest_transitions: dict[str, int]
+    samples: list[dict[str, Any]]
+
+    model_config = _config(
+        {
+            "compared": 10_000,
+            "agreed": 9_580,
+            "disagreed": 420,
+            "human_verdicts_skipped": 37,
+            "disagreement_rate": 0.042,
+            "biggest_transitions": {"movies_series -> books_courses": 210, "other -> games": 88},
+            "samples": [
+                {
+                    "link_id": 8412,
+                    "url": "https://youtube.com/watch?v=abc",
+                    "stored": "movies_series",
+                    "candidate": "books_courses",
+                    "stored_by": "rules-v1",
+                }
+            ],
+        }
+    )
+
+
 class SystemStatus(BaseModel):
     """The operator's one screen: what is deployed, and is it healthy.
 

@@ -71,6 +71,10 @@ SESSION_ONLY = {
     # the failure taxonomy names sources a leaked key has no business
     # enumerating.
     ("GET", "/status/coverage"),
+    ("GET", "/status/coverage/history"),
+    # Drift lists real URLs and the categories a candidate would move them
+    # to. Same boundary as the rest of the operational picture.
+    ("GET", "/status/classification-drift"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
     # Adding a collecting account is a real Telegram login: this mints a
