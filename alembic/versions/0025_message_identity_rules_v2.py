@@ -152,7 +152,7 @@ def _recompute_links() -> None:
     moved is a migration that cannot run on an old database, which is the
     one job it has.
     """
-    from app.classifier import classify_link, hash_url
+    from app.classifier import classify_link, hash_url, may_reclassify
 
     bind = op.get_bind()
     links = sa.table(
@@ -202,7 +202,7 @@ def _recompute_links() -> None:
             seen.add(key)
 
             values: dict[str, object] = {"url_hash": key[1]}
-            if classified_by != "manual":
+            if may_reclassify(classified_by):
                 result = classify_link(url or "", raw_text or "")
                 values.update(
                     category=result.category,

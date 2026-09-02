@@ -45,6 +45,28 @@ from app.arabic import normalise
 # makes "why does this row say that?" answerable a year later.
 CLASSIFIER_VERSION = "rules-v2"
 
+# What ``classified_by`` says when a person overruled the rules. Not a
+# classifier version and never produced by one — the one value in that
+# column that no automatic pass may write over.
+HUMAN_VERDICT = "manual"
+
+
+def may_reclassify(classified_by: str | None) -> bool:
+    """Whether an automatic pass is allowed to rewrite this row's category.
+
+    The rule is one line and the reason it lives here is not: it used to be
+    an inline ``if classified_by != "manual"`` inside migration 0025, which
+    made it a **rule no test could reach**. A migration runs once and is
+    then history; a condition buried in one is a guard whose removal
+    nothing detects — the pattern §43.9 records as its fourth defect.
+
+    Every future re-classification (a weights change, a rules version bump)
+    needs exactly this rule, so it is named, importable and tested once.
+    A human correction outranks every rule the machine has.
+    """
+    return classified_by != HUMAN_VERDICT
+
+
 # Named rather than spelled inline at its one other use site (the adult
 # alert in app/ingest.py). A category renamed here would otherwise leave a
 # string comparison that quietly never matches again — an alert that stops

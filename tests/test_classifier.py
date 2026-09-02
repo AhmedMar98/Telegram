@@ -161,3 +161,20 @@ def test_extract_urls_finds_multiple():
 def test_extract_urls_empty_text():
     assert extract_urls("") == []
     assert extract_urls(None) == []
+
+
+def test_a_human_verdict_is_never_reclassified():
+    """§44.3: a correction a person made outranks every rule the machine has.
+
+    The rule used to be an inline condition inside migration 0025, where no
+    test could reach it — the "guard behind a guard" pattern §43.9 records.
+    It is now a named function, so the next re-classification pass (a
+    weights change, a version bump) inherits it instead of re-deriving it.
+    """
+    from app.classifier import HUMAN_VERDICT, may_reclassify
+
+    assert may_reclassify("rules-v1") is True, "an older version may be redone"
+    assert may_reclassify("rules-v2") is True
+    assert may_reclassify(None) is True, "an unstamped row is fair game"
+    assert may_reclassify(HUMAN_VERDICT) is False, "a person's verdict is not"
+    assert HUMAN_VERDICT == "manual"

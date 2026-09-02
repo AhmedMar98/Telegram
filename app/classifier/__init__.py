@@ -19,9 +19,11 @@ from app.classifier.evidence import (
     CATEGORIES,
     CLASSIFIER_VERSION,
     DEFAULT_CATEGORY,
+    HUMAN_VERDICT,
     ClassificationResult,
     Evidence,
     classify,
+    may_reclassify,
 )
 from app.classifier.platform import DEFAULT_PLATFORM, PLATFORMS, link_platform
 from app.classifier.rules import (
@@ -56,6 +58,7 @@ __all__ = [
     "CATEGORIES",
     "CLASSIFIER_VERSION",
     "DEFAULT_CATEGORY",
+    "HUMAN_VERDICT",
     "DEFAULT_PLATFORM",
     "PLATFORMS",
     "ClassificationResult",
@@ -67,5 +70,6 @@ __all__ = [
     "extract_urls",
     "hash_url",
     "link_platform",
+    "may_reclassify",
     "split_context",
 ]
