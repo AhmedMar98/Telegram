@@ -21,6 +21,18 @@ on:
     - cron: "0 * * * *" # hourly
   workflow_dispatch: {}
 
+# A run that overlaps another is not a cosmetic problem: two live Telethon
+# sessions on the same account, or a run mid-flight while the assignment
+# engine reassigns the channels it is reading, is the concurrency the
+# assignment engine's own comment (app/assignment.py) explicitly does not
+# guard against at the database level — it relies on there being exactly
+# one runner. This is that guarantee, enforced at the only layer that can
+# make it true for free: a slow hourly run and a manual workflow_dispatch
+# queue behind each other rather than run together.
+concurrency:
+  group: collector-${{ github.repository }}
+  cancel-in-progress: false
+
 # Checks out the code to run scripts/collect.py. Everything it writes
 # goes to the database over DATABASE_URL, never through the token.
 permissions:

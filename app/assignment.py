@@ -21,6 +21,18 @@ and **reports what it had to strand** instead of quietly producing an
 assignment that cannot work. A stranded source is an operator decision —
 add the account back, or add another account to that channel — and the
 one thing this module must never do is hide that the decision is needed.
+
+**Concurrency is not guarded here.** ``apply_assignments`` reads, decides
+and writes with no row lock and no transaction isolation beyond the
+default — a rebalance from the dashboard racing a scheduled collector run
+is possible in principle. It is not guarded against in the database
+because there is exactly one place both callers can start from: the
+``concurrency:`` block in ``.github/workflows/collector.yml`` serialises
+every collector run, and the dashboard's rebalance button is a manual,
+infrequent action a human presses once and watches. That is a real
+assumption, not a proof — the fix if it is ever wrong is
+``SELECT ... FOR UPDATE`` on the channel rows being reassigned, not
+invented here because nothing today exercises the race it would guard.
 """
 
 from __future__ import annotations
