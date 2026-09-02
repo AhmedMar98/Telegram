@@ -982,6 +982,76 @@ class LiveStatus(BaseModel):
     )
 
 
+class CollectionCoverage(BaseModel):
+    """The measurement contract (§46) as a response.
+
+    Ratios are ``None`` rather than 0 or 1 when their denominator is
+    empty: "nothing was due, so everything due succeeded" is an absent
+    score, not a perfect one, and a 100% that means "we did nothing" is
+    the most misleading number this endpoint could return.
+
+    Nothing here is a classification metric. Collection correctness asks
+    "did we collect what we should have"; classification accuracy asks
+    "did we understand it", needs a labelled corpus that does not exist
+    (§44.11), and is therefore absent rather than estimated.
+    """
+
+    sources_expected: int
+    sources_due: int
+    #: Due sources whose last successful read is older than the cadence —
+    #: a schedule-staleness signal, deliberately outside coverage_rate.
+    sources_overdue: int
+    sources_attempted: int
+    sources_succeeded: int
+    sources_failed: int
+    sources_skipped: int
+    failures_by_kind: dict[str, int]
+    #: succeeded / **due** — never succeeded / expected.
+    coverage_rate: float | None
+    failure_rate: float | None
+    gap_rate: float | None
+    #: Age of the newest collected message, in seconds. None = nothing
+    #: collected yet, which is "unknown", not "infinitely stale".
+    collection_lag_seconds: float | None
+    #: How far behind the reader was when it last read, as distinct from
+    #: how long ago that was, and from how long the job took.
+    watermark_lag_seconds: float | None
+    is_fresh: bool | None
+    duplicate_message_rate: float
+    duplicate_link_occurrence_rate: float
+    duplicate_resource_rate: float
+    watermark_regressions: int
+    watermark_behind: int
+    watermark_ownership_conflicts: int
+    watermark_sound: bool
+
+    model_config = _config(
+        {
+            "sources_expected": 120,
+            "sources_due": 40,
+            "sources_overdue": 4,
+            "sources_attempted": 38,
+            "sources_succeeded": 36,
+            "sources_failed": 2,
+            "sources_skipped": 0,
+            "failures_by_kind": {"rate_limited": 1, "source_unavailable": 1},
+            "coverage_rate": 0.9,
+            "failure_rate": 0.0526,
+            "gap_rate": 0.0,
+            "collection_lag_seconds": 1840.0,
+            "watermark_lag_seconds": 240.0,
+            "is_fresh": True,
+            "duplicate_message_rate": 1.4,
+            "duplicate_link_occurrence_rate": 0.12,
+            "duplicate_resource_rate": 0.12,
+            "watermark_regressions": 0,
+            "watermark_behind": 3,
+            "watermark_ownership_conflicts": 0,
+            "watermark_sound": True,
+        }
+    )
+
+
 class SystemStatus(BaseModel):
     """The operator's one screen: what is deployed, and is it healthy.
 

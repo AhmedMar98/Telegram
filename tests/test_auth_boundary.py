@@ -65,6 +65,12 @@ SESSION_ONLY = {
     # workflow board. Reporting *into* it takes an API key on purpose
     # (that is the credential inversion); reading it does not.
     ("GET", "/status"),
+    # Coverage (§46) reads the same operational picture as the status
+    # screen — which sources were due, which failed and why — so it sits
+    # on the same side of the boundary. Nothing here needs a script, and
+    # the failure taxonomy names sources a leaked key has no business
+    # enumerating.
+    ("GET", "/status/coverage"),
     ("POST", "/auth/api-keys"),
     ("DELETE", "/auth/api-keys/{key_id:int}"),
     # Adding a collecting account is a real Telegram login: this mints a

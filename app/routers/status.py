@@ -24,14 +24,20 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import live, metrics
+from app import coverage, live, metrics
 from app.alerts import BACKUP_RESULT
 from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user, get_session_user
 from app.models import User, WorkflowRun
 from app.notify import raise_alert
-from app.schemas import LiveStatus, SystemStatus, WorkflowRunOut, WorkflowRunReport
+from app.schemas import (
+    CollectionCoverage,
+    LiveStatus,
+    SystemStatus,
+    WorkflowRunOut,
+    WorkflowRunReport,
+)
 
 router = APIRouter(prefix="/status", tags=["status"])
 
@@ -43,6 +49,43 @@ def _schema_version(db: Session) -> str | None:
         # A database built by create_all rather than alembic. A normal
         # test/dev shape, not an outage.
         return None
+
+
+@router.get("/coverage", response_model=CollectionCoverage)
+def collection_coverage(
+    db: Session = Depends(get_db), current_user: User = Depends(get_session_user)
+) -> CollectionCoverage:
+    """How much of what was due actually got collected (§46).
+
+    A read-only computation over the columns the collector stamps; it
+    never triggers a collection and never writes. Placed on the status
+    router rather than under /channels because it describes the *system's*
+    behaviour over the sources, not the sources themselves.
+    """
+    report = coverage.measure(db, current_user.workspace_id)
+    return CollectionCoverage(
+        sources_expected=report.sources_expected,
+        sources_due=report.sources_due,
+        sources_overdue=report.sources_overdue,
+        sources_attempted=report.sources_attempted,
+        sources_succeeded=report.sources_succeeded,
+        sources_failed=report.sources_failed,
+        sources_skipped=report.sources_skipped,
+        failures_by_kind=report.failures_by_kind,
+        coverage_rate=report.coverage_rate,
+        failure_rate=report.failure_rate,
+        gap_rate=report.gap_rate,
+        collection_lag_seconds=report.collection_lag_seconds,
+        watermark_lag_seconds=report.watermark_lag_seconds,
+        is_fresh=report.is_fresh,
+        duplicate_message_rate=report.duplicates.duplicate_message,
+        duplicate_link_occurrence_rate=report.duplicates.duplicate_link_occurrence,
+        duplicate_resource_rate=report.duplicates.duplicate_resource,
+        watermark_regressions=report.watermark.regressions,
+        watermark_behind=report.watermark.behind,
+        watermark_ownership_conflicts=report.watermark.ownership_conflicts,
+        watermark_sound=report.watermark.sound,
+    )
 
 
 @router.get("", response_model=SystemStatus)

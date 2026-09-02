@@ -189,6 +189,28 @@ class Channel(Base):
     # rotation rather than a cliff once an account holds more dialogs than
     # one run may touch.
     last_collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # --- what the measurement contract (§46) reads -----------------------
+    #
+    # ``last_collected_at`` above means "last *successful* read", which is
+    # what the rotation ordering needs. It cannot answer "was this source
+    # attempted and did it fail?", and coverage is meaningless without
+    # that: a source nobody tried and a source that failed both look like
+    # a source with an old timestamp.
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    #: "succeeded" | "failed" | "skipped" — see app/coverage.py.
+    last_outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: One of app.coverage.FAILURE_KINDS. NULL on success, and never the
+    #: exception class: "failed" tells an operator something is wrong,
+    #: "access_denied" tells them what to do about it.
+    last_failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: Whether the last successful read reached the end of the channel.
+    #: False means the per-run cap stopped it with a backlog remaining —
+    #: not an error, an unfinished window. NULL means never read.
+    caught_up: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Times this source's watermark was asked to move backwards. Must
+    #: stay zero; it is a counter rather than a flag so the *rate* is
+    #: visible if it ever stops being zero.
+    watermark_regressions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
