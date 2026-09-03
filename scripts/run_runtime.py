@@ -21,6 +21,13 @@ Optional:
   RUNTIME_BATCH_LIMIT       messages read per source per run (default 200)
   RUNTIME_CYCLE_PAUSE       seconds between sweeps (default 30)
 
+**Run exactly one instance.** Nothing here takes a lock. Two processes
+against one workspace would each start a worker per account and collect
+the same sources twice — the ``messages`` uniqueness keeps the stored data
+correct, but the duplicated Telegram traffic is real and is the shortest
+path to a rate limit. Horizontal scaling would need a lease on
+``source_assignments``, and this phase does not add one.
+
 **Deployment status: this entrypoint is not deployed anywhere yet.** The
 repository's cron collector (``.github/workflows/collector.yml``) is still
 what runs in production. Running this process needs a host that keeps a

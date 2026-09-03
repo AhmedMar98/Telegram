@@ -98,6 +98,77 @@ services:
       - key: COLLECTOR_WORKSPACE_ID
         sync: false
 
+  # --- Collection runtime (phase 3) ----------------------------------
+  #
+  # NOT ENABLED. Commented deliberately, not forgotten.
+  #
+  # scripts/run_runtime.py is the persistent collection runtime: one
+  # process, one Telegram connection per account, independent of the web
+  # service's request lifecycle. It is written, tested and importable, and
+  # it is the only thing that writes collection_runs and source_progress.
+  # Nothing runs it today — the hourly GitHub Actions job
+  # (.github/workflows/collector.yml) is still what collects in
+  # production.
+  #
+  # Why it is commented rather than declared: a `type: worker` service has
+  # no free plan, so syncing this blueprint with the block enabled starts
+  # billing. That is the owner's decision to make deliberately, not a
+  # side effect of merging a branch. Uncomment to make it, and confirm the
+  # current plan name and price on Render's own pricing page first — the
+  # value below is a placeholder, not a quote.
+  #
+  # Operational constraints, stated because they are not obvious:
+  #   - EXACTLY ONE INSTANCE. Nothing in the runtime takes a lock. Two
+  #     instances on one workspace would each start a worker per account
+  #     and collect the same sources twice: the `messages` uniqueness
+  #     keeps the data correct, but the duplicated Telegram traffic is
+  #     real and is the fastest route to a rate limit. Do not scale this
+  #     service horizontally, and do not enable autoscaling.
+  #   - Render sends SIGTERM on deploy and restart; the runtime installs a
+  #     handler for it and stops cleanly (finishes the in-flight message,
+  #     drains its live queue, cancels the open run, disconnects). A run
+  #     killed past the grace period is closed by the next start's
+  #     recovery sweep, so a hard kill costs a re-read, never a gap.
+  #   - A worker service gets no HTTP health check. Liveness is the
+  #     process; whether collection is *working* is a different question
+  #     and `scripts/check_collection.py` is what answers it.
+  #   - FIELD_ENCRYPTION_KEY must be the SAME value as the web service's
+  #     and the Actions secret. It decrypts the session strings this
+  #     process reads; a different key strands every account row. The
+  #     entrypoint refuses to start on the published default.
+  #
+  # - type: worker
+  #   name: link-intel-runtime
+  #   runtime: python
+  #   plan: starter          # no free worker plan — verify current pricing
+  #   region: oregon
+  #   branch: main
+  #   buildCommand: "pip install -r requirements.txt"
+  #   startCommand: "python scripts/run_runtime.py"
+  #   envVars:
+  #     - key: PYTHON_VERSION
+  #       value: 3.11.9
+  #     - key: DATABASE_URL
+  #       fromDatabase:
+  #         name: link-intel-db
+  #         property: connectionString
+  #     - key: FIELD_ENCRYPTION_KEY
+  #       sync: false
+  #     - key: TG_API_ID
+  #       sync: false
+  #     - key: TG_API_HASH
+  #       sync: false
+  #     - key: COLLECTOR_WORKSPACE_ID
+  #       sync: false
+  #     # Optional; the defaults in scripts/run_runtime.py are bounds, not
+  #     # measured capacities. Start below them, measure, then raise.
+  #     - key: RUNTIME_MAX_WORKERS
+  #       sync: false
+  #     - key: RUNTIME_BATCH_LIMIT
+  #       sync: false
+  #     - key: RUNTIME_CYCLE_PAUSE
+  #       sync: false
+
 databases:
   - name: link-intel-db
     plan: free
