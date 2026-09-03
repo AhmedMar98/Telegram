@@ -181,7 +181,7 @@ def _sources(db, workspace_id: int) -> None:
             )
         # The legacy mirror, shown only when it disagrees. It should never
         # disagree; a line here means something wrote the column outside
-        # app.progress, which is exactly what migration 0029's trigger
+        # app.progress, which is exactly what migration 0031's trigger
         # exists to make impossible.
         if live is not None and (channel.last_message_id or 0) != live.current_watermark:
             print(

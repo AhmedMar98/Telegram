@@ -75,14 +75,14 @@ def test_identity_is_absent_rather_than_invented_for_nothing():
 
 
 def test_the_migration_carries_the_same_rule_as_the_application():
-    """The copy in migration 0026 is deliberate; drift in it is not.
+    """The copy in migration 0028 is deliberate; drift in it is not.
 
     A migration that imports application code produces a different
     database when that code changes, so the rule is duplicated there on
     purpose. This is the test that keeps the duplicate honest.
     """
     module: dict = {}
-    source = (REPO / "alembic" / "versions" / "0026_target_source_model.py").read_text(encoding="utf-8")
+    source = (REPO / "alembic" / "versions" / "0028_target_source_model.py").read_text(encoding="utf-8")
     exec(compile(source, "0026", "exec"), module)  # noqa: S102 - reading our own migration
 
     for value in ("-1001234567890", "1234567890", "-1001001234", "1001234", "-42", "42", "manual", "", None):

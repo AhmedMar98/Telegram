@@ -9,7 +9,7 @@ towards repeating work.
 Four invariants, and none of them is left to a caller to remember:
 
 **Monotonicity.** Progress never goes backwards. Enforced by a database
-trigger (migration 0029), not by this module — a Python guard protects the
+trigger (migration 0031), not by this module — a Python guard protects the
 one path that goes through Python.
 
 **Ownership.** An account that has lost the assignment does not write
@@ -101,8 +101,15 @@ def record_attempt(db: Session, channel: Channel, track: str = SourceProgress.LI
     cannot express it.
     """
     row = ensure(db, channel, track)
-    row.last_attempt_at = utcnow()
-    row.updated_at = utcnow()
+    moment = utcnow()
+    row.last_attempt_at = moment
+    row.updated_at = moment
+    if track == SourceProgress.LIVE:
+        # The legacy column derives from this row, so it moves with it. An
+        # attempt that updated only the authority would leave the mirror
+        # reading "never attempted" for a source being attempted right now
+        # — and app.coverage computes "due" from that mirror.
+        channel.last_attempt_at = row.last_attempt_at
     db.flush()
     return row
 
@@ -157,6 +164,13 @@ def advance(
             row.current_watermark,
             track,
         )
+        # The measurement contract counts regressions per source (§46). The
+        # count is fed from this refusal rather than from a second
+        # comparison somewhere else, so the number can never disagree with
+        # the guard that produced it. The event is authoritative; the
+        # counter is derived from it.
+        if track == SourceProgress.LIVE:
+            channel.watermark_regressions = (channel.watermark_regressions or 0) + 1
         row.updated_at = moment
         db.flush()
         return ProgressResult(advanced=False, watermark=row.current_watermark, refused=WOULD_REGRESS)
@@ -173,27 +187,46 @@ def advance(
         row.coverage_status = coverage
 
     if track == SourceProgress.LIVE:
-        _mirror_live(channel, watermark, moment)
+        _mirror_live(channel, row, moment)
 
     db.flush()
     return ProgressResult(advanced=moved, watermark=row.current_watermark)
 
 
-def _mirror_live(channel: Channel, watermark: int, moment: datetime) -> None:
-    """Keep the legacy columns in step with the live track.
+#: How a three-valued coverage status projects onto the two-valued legacy
+#: column. ``None`` for UNKNOWN_COVERAGE is the whole reason the projection
+#: is lossy in this direction and not the other: the enum can say "cannot
+#: tell", the boolean cannot, and NULL is the only honest rendering of it.
+_CAUGHT_UP_PROJECTION: dict[str, bool | None] = {
+    SourceProgress.NO_DETECTED_GAP: True,
+    SourceProgress.DETECTED_GAP: False,
+    SourceProgress.UNKNOWN_COVERAGE: None,
+}
 
-    ``Channel.last_message_id`` is read by the scheduled collector, the
-    dashboard and the API. Repointing all of them is not this phase's
-    work, so the column stays — as a mirror with one writer, the same
-    arrangement ``account_id`` has, rather than as a second authority.
+
+def _mirror_live(channel: Channel, row: SourceProgress, moment: datetime) -> None:
+    """Keep every legacy column on ``channels`` in step with the live track.
+
+    Four columns, one writer. ``last_message_id`` and ``last_collected_at``
+    are read by the scheduled collector, the dashboard and the API;
+    ``last_attempt_at`` and ``caught_up`` are read by the measurement
+    contract in ``app.coverage``. All four are *derived* — the live
+    ``source_progress`` row is the authority — and they are written here
+    rather than by their readers so that no second path can make one of
+    them disagree with the row it is supposed to reflect.
+
+    The arrangement is the one ``channels.account_id`` already has: a
+    mirror with a single writer, not a second authority.
     """
-    if watermark > (channel.last_message_id or 0):
-        channel.last_message_id = watermark
+    if row.current_watermark > (channel.last_message_id or 0):
+        channel.last_message_id = row.current_watermark
     # Stamped even when nothing moved: this answers "when did anything last
     # look at this dialog", which is what the collector's rotation order
     # needs. Stamping only on a non-empty run would park every quiet dialog
     # at the front of the queue forever and starve the rest.
     channel.last_collected_at = moment
+    channel.last_attempt_at = row.last_attempt_at
+    channel.caught_up = _CAUGHT_UP_PROJECTION[row.coverage_status]
 
 
 def mirror_disagreements(db: Session, workspace_id: int) -> list[tuple[int, int, int]]:

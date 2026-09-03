@@ -11,7 +11,7 @@ The rule is therefore narrow and total:
 
     every write to Channel.account_id goes through this module
 
-and a database trigger (migration 0027) refuses any other write that would
+and a database trigger (migration 0029) refuses any other write that would
 make the column disagree with the open assignment. So the mirror cannot
 drift silently — not through a forgotten call site, not through a script,
 not through a hand-written UPDATE.

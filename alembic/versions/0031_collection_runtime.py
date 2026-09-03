@@ -27,7 +27,7 @@ impossible rather than merely discouraged.
 
 Why the mirror is not guarded by a session flag
 -----------------------------------------------
-0027 guarded ``channels.account_id`` with ``app.assignment_write`` because
+0029 guarded ``channels.account_id`` with ``app.assignment_write`` because
 an assignment has no ordering — any value can legitimately follow any other,
 so "who wrote this" is the only question a trigger can ask. A watermark does
 have an ordering, so the stronger and simpler question is available: is the
@@ -50,8 +50,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0029_collection_runtime"
-down_revision: str | None = "0028_account_access_join_queue"
+revision: str = "0031_collection_runtime"
+down_revision: str | None = "0030_account_access_join_queue"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -95,7 +95,7 @@ def _assert_readable(bind, is_postgres: bool, tables: tuple[str, ...]) -> None:
         ).scalar()
         if forced:
             raise RuntimeError(
-                f"0029 was about to read {table} with FORCE ROW LEVEL SECURITY still on. "
+                f"0031 was about to read {table} with FORCE ROW LEVEL SECURITY still on. "
                 "This connection has no tenant, so every row would be invisible and the "
                 "backfill would report success having written nothing."
             )
@@ -205,7 +205,7 @@ def upgrade() -> None:
     # is cheap to notice.
     if inserted is not None and inserted >= 0 and inserted != channels:
         raise RuntimeError(
-            f"0029 backfilled {inserted} progress row(s) for {channels} channel(s). "
+            f"0031 backfilled {inserted} progress row(s) for {channels} channel(s). "
             "Every channel must get a LIVE progress row; a shortfall means the "
             "backfill could not see or could not write the rows it claimed to."
         )
@@ -218,7 +218,7 @@ def upgrade() -> None:
             ).scalar()
             if not forced:
                 raise RuntimeError(
-                    f"0029 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
+                    f"0031 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
                     "migration that would leave the table readable across tenants"
                 )
 
@@ -274,7 +274,7 @@ def upgrade() -> None:
     )
 
     # --- 4. tenant isolation, after the backfill has written --------------
-    # Last, for the reason 0026 records: FORCE applies to the migration's
+    # Last, for the reason 0028 records: FORCE applies to the migration's
     # own connection, which carries no tenant.
     for table in NEW_TENANT_TABLES:
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")

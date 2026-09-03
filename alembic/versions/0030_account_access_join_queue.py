@@ -29,7 +29,7 @@ access to a private source: what was tried, what came back, when it is
 worth trying again. It records; it does not join. Performing an access
 attempt is gated on authorisation and belongs to the runtime.
 
-The rename is ``acquisition_method``: 0026 wrote PUBLIC_ACQUISITION and
+The rename is ``acquisition_method``: 0028 wrote PUBLIC_ACQUISITION and
 AUTHORIZED_ACCOUNT, the target vocabulary is PUBLIC and AUTHORIZED_USER.
 Two names for one concept is the thing worth removing, so the values are
 normalised rather than mapped in code forever.
@@ -41,8 +41,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0028_account_access_join_queue"
-down_revision: str | None = "0027_assignment_single_authority"
+revision: str = "0030_account_access_join_queue"
+down_revision: str | None = "0029_assignment_single_authority"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -51,7 +51,7 @@ SETTING = "app.workspace_id"
 
 # Written by this migration and carrying FORCE row-level security, which a
 # migration's tenant-less connection cannot write through. Third time in
-# four migrations; see 0027 for the full reasoning.
+# four migrations; see 0029 for the full reasoning.
 FORCED_TABLES = ("channels",)
 
 ACCESS_STATES = (
@@ -171,7 +171,7 @@ def upgrade() -> None:
             ).scalar()
             if not forced:
                 raise RuntimeError(
-                    f"0028 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
+                    f"0030 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
                     "migration that would leave the table readable across tenants"
                 )
 

@@ -68,13 +68,14 @@ TENANT_SETTING = "app.workspace_id"
 PROTECTED_TABLES: tuple[str, ...] = (
     "channels",
     "messages",
+    "coverage_snapshots",
     "audit_log",
     "notification_preferences",
     "notifications",
     "workflow_runs",
     "saved_searches",
     "classification_feedback",
-    # The target source model (migration 0026). Protected from the moment
+    # The target source model (migration 0028). Protected from the moment
     # they exist rather than added later: ``links`` is unprotected today
     # because a cross-workspace script was written against it first and
     # retrofitting the policy now means rewriting that script. These tables

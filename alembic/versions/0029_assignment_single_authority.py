@@ -9,7 +9,7 @@ Why a session flag and not a subquery
 -------------------------------------
 The obvious trigger compares ``NEW.account_id`` against the open row in
 ``source_assignments``. It cannot work here, and the reason is worth
-writing down because it is the same trap migration 0026 fell into:
+writing down because it is the same trap migration 0028 fell into:
 ``source_assignments`` has FORCE row-level security, a trigger function
 runs as the invoking user, and a session with no tenant set reads **zero
 rows** from it. The comparison would then conclude "no open assignment"
@@ -35,8 +35,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0027_assignment_single_authority"
-down_revision: str | None = "0026_target_source_model"
+revision: str = "0029_assignment_single_authority"
+down_revision: str | None = "0028_target_source_model"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -46,7 +46,7 @@ GUARD_TRIGGER = "trg_channels_assignment_mirror_guard"
 # Both tables this migration writes carry FORCE row-level security, and a
 # migration carries no tenant — so every write is refused and every read
 # comes back empty. This is the third migration in a row to meet it (0025
-# on notification_preferences, 0026 on channels, this one on both plus
+# on notification_preferences, 0028 on channels, this one on both plus
 # source_assignments), which is why it is a named list rather than a line
 # of prose each time.
 FORCED_TABLES = ("channels", "source_assignments")
@@ -57,10 +57,10 @@ def upgrade() -> None:
     is_postgres = bind.dialect.name == "postgresql"
 
     # --- 1. make the two copies agree before locking the door ------------
-    # After 0026 they already do. This exists for the window between the
+    # After 0028 they already do. This exists for the window between the
     # two migrations, and for any row written by a path that predates the
     # service. The authoritative direction is used in both cases: a mirror
-    # with no assignment gets one (the rule 0026 used), and an assignment
+    # with no assignment gets one (the rule 0028 used), and an assignment
     # with a stale mirror wins over the mirror.
     if is_postgres:
         for table in FORCED_TABLES:
@@ -146,7 +146,7 @@ def upgrade() -> None:
         ).scalar()
         if not forced:
             raise RuntimeError(
-                f"0027 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
+                f"0029 left {table} without FORCE ROW LEVEL SECURITY — refusing to finish a "
                 "migration that would leave the table readable across tenants"
             )
 

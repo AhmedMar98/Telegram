@@ -982,6 +982,173 @@ class LiveStatus(BaseModel):
     )
 
 
+class CollectionCoverage(BaseModel):
+    """The measurement contract (§46) as a response.
+
+    Ratios are ``None`` rather than 0 or 1 when their denominator is
+    empty: "nothing was due, so everything due succeeded" is an absent
+    score, not a perfect one, and a 100% that means "we did nothing" is
+    the most misleading number this endpoint could return.
+
+    Nothing here is a classification metric. Collection correctness asks
+    "did we collect what we should have"; classification accuracy asks
+    "did we understand it", needs a labelled corpus that does not exist
+    (§44.11), and is therefore absent rather than estimated.
+    """
+
+    sources_expected: int
+    sources_due: int
+    #: Due sources whose last successful read is older than the cadence —
+    #: a schedule-staleness signal, deliberately outside coverage_rate.
+    sources_overdue: int
+    sources_attempted: int
+    sources_succeeded: int
+    sources_failed: int
+    sources_skipped: int
+    failures_by_kind: dict[str, int]
+    #: succeeded / **due** — never succeeded / expected.
+    coverage_rate: float | None
+    failure_rate: float | None
+    gap_rate: float | None
+    #: Age of the newest collected message, in seconds. None = nothing
+    #: collected yet, which is "unknown", not "infinitely stale".
+    collection_lag_seconds: float | None
+    #: How far behind the reader was when it last read, as distinct from
+    #: how long ago that was, and from how long the job took.
+    watermark_lag_seconds: float | None
+    is_fresh: bool | None
+    duplicate_message_rate: float
+    duplicate_link_occurrence_rate: float
+    duplicate_resource_rate: float
+    watermark_regressions: int
+    watermark_behind: int
+    watermark_ownership_conflicts: int
+    watermark_sound: bool
+
+    model_config = _config(
+        {
+            "sources_expected": 120,
+            "sources_due": 40,
+            "sources_overdue": 4,
+            "sources_attempted": 38,
+            "sources_succeeded": 36,
+            "sources_failed": 2,
+            "sources_skipped": 0,
+            "failures_by_kind": {"rate_limited": 1, "source_unavailable": 1},
+            "coverage_rate": 0.9,
+            "failure_rate": 0.0526,
+            "gap_rate": 0.0,
+            "collection_lag_seconds": 1840.0,
+            "watermark_lag_seconds": 240.0,
+            "is_fresh": True,
+            "duplicate_message_rate": 1.4,
+            "duplicate_link_occurrence_rate": 0.12,
+            "duplicate_resource_rate": 0.12,
+            "watermark_regressions": 0,
+            "watermark_behind": 3,
+            "watermark_ownership_conflicts": 0,
+            "watermark_sound": True,
+        }
+    )
+
+
+class CoverageSnapshotOut(BaseModel):
+    """One run in the operational series (§47)."""
+
+    run_id: str
+    started_at: datetime
+    finished_at: datetime
+    sources_due: int
+    sources_succeeded: int
+    sources_failed: int
+    messages_seen: int
+    messages_processed: int
+    links_found: int
+    links_stored: int
+    duplicate_occurrences: int
+    collection_lag_p50: float | None
+    collection_lag_p95: float | None
+    watermark_regressions: int
+    gap_events: int
+
+    model_config = _config(
+        {
+            "run_id": "7c1f5c0e-1e2b-4c9a-9f0a-2b7d9c8e1a44",
+            "started_at": "2026-09-02T10:00:00",
+            "finished_at": "2026-09-02T10:00:38",
+            "sources_due": 40,
+            "sources_succeeded": 39,
+            "sources_failed": 1,
+            "messages_seen": 812,
+            "messages_processed": 640,
+            "links_found": 96,
+            "links_stored": 71,
+            "duplicate_occurrences": 25,
+            "collection_lag_p50": 1840.0,
+            "collection_lag_p95": 9120.0,
+            "watermark_regressions": 0,
+            "gap_events": 0,
+        },
+        from_attributes=True,
+    )
+
+
+class CoverageHistory(BaseModel):
+    """The series plus a direction, because one reading has no direction.
+
+    ``trend`` is a flag telling an operator to look, not a statistic:
+    "unknown" until there are enough readings to compare, and never
+    "steady" on a single point.
+    """
+
+    snapshots: list[CoverageSnapshotOut]
+    trend: Literal["improving", "steady", "degrading", "unknown"]
+
+    model_config = _config({"snapshots": [], "trend": "unknown"})
+
+
+class ClassificationDrift(BaseModel):
+    """What a candidate classifier would change, having changed nothing.
+
+    Run before a labelled benchmark rather than after: labelling a random
+    sample is slow, and most of that work confirms rows both classifiers
+    already agree on. This narrows 10,000 rows to the few hundred worth a
+    human's time.
+    """
+
+    compared: int
+    agreed: int
+    disagreed: int
+    #: Rows a person corrected, excluded entirely — a candidate gets no
+    #: opinion about a verdict it may not overwrite (§44.3).
+    human_verdicts_skipped: int
+    disagreement_rate: float | None
+    #: "movies_series -> books_courses": 37. Which way categories move,
+    #: because one total says a change is big and this says what it does.
+    biggest_transitions: dict[str, int]
+    samples: list[dict[str, Any]]
+
+    model_config = _config(
+        {
+            "compared": 10_000,
+            "agreed": 9_580,
+            "disagreed": 420,
+            "human_verdicts_skipped": 37,
+            "disagreement_rate": 0.042,
+            "biggest_transitions": {"movies_series -> books_courses": 210, "other -> games": 88},
+            "samples": [
+                {
+                    "link_id": 8412,
+                    "url": "https://youtube.com/watch?v=abc",
+                    "stored": "movies_series",
+                    "candidate": "books_courses",
+                    "stored_by": "rules-v1",
+                }
+            ],
+        }
+    )
+
+
 class SystemStatus(BaseModel):
     """The operator's one screen: what is deployed, and is it healthy.
 

@@ -238,7 +238,7 @@ def test_the_backfill_gives_every_channel_a_live_track_at_its_old_watermark():
     spending the whole rate-limit budget rediscovering it.
     """
     _alembic("downgrade", "base")
-    _alembic("upgrade", "0028_account_access_join_queue")
+    _alembic("upgrade", "0030_account_access_join_queue")
     engine = create_engine(MIGRATION_DSN)
     try:
         with engine.begin() as conn:

@@ -42,8 +42,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0026_target_source_model"
-down_revision: str | None = "0025_message_identity_rules_v2"
+revision: str = "0028_target_source_model"
+down_revision: str | None = "0027_coverage_snapshots"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -299,7 +299,7 @@ def upgrade() -> None:
                 "w": row.workspace_id,
                 "o": row.last_collected_at,
                 "s": "access inferred from a completed collection run",
-                "d": "backfilled by migration 0026 from channels.last_collected_at",
+                "d": "backfilled by migration 0028 from channels.last_collected_at",
             },
         ).scalar()
         bind.execute(
@@ -340,7 +340,7 @@ def upgrade() -> None:
         ).scalar()
         if not forced:
             raise RuntimeError(
-                "0026 left channels without FORCE ROW LEVEL SECURITY — refusing to finish a "
+                "0028 left channels without FORCE ROW LEVEL SECURITY — refusing to finish a "
                 "migration that would leave the table readable across tenants"
             )
 
