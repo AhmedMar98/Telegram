@@ -44,6 +44,7 @@ def _add_account(workspace_id: int, label: str, *, session: str = SESSION, activ
             label=label,
             session_string=encrypt_field(session),
             is_active=active,
+            state=TelegramAccount.ACTIVE if active else TelegramAccount.DISABLED,
         )
         db.add(account)
         db.commit()

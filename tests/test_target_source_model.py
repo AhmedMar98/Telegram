@@ -633,8 +633,11 @@ def test_the_migration_backfills_identity_and_acquisition_without_inventing(lega
         }
         assert rows["-1001111"].identity_key == "1111"
         assert rows["manual"].identity_key == "manual"
-        assert rows["-1001111"].acquisition_method == "AUTHORIZED_ACCOUNT"
-        assert rows["-1003333"].acquisition_method == "PUBLIC_ACQUISITION"
+        # The target vocabulary, normalised by 0028: 0026 wrote
+        # AUTHORIZED_ACCOUNT and PUBLIC_ACQUISITION, and two names for one
+        # concept is the thing worth removing.
+        assert rows["-1001111"].acquisition_method == "AUTHORIZED_USER"
+        assert rows["-1003333"].acquisition_method == "PUBLIC"
         assert rows["manual"].acquisition_method is None, "a synthetic bucket is not acquired from anywhere"
 
         # Access is recorded only where a collection actually happened.

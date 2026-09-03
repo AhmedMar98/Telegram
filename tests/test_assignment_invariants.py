@@ -118,6 +118,7 @@ def test_a_disabled_account_receives_nothing():
     dead = _accounts(10)[3:]  # ids 4..10, never handed to the planner
     for account in dead:
         account.is_active = False
+        account.state = TelegramAccount.DISABLED
 
     channels = _sources(600)
     changes, report = plan_assignments(channels, alive, capacity=SOURCES)
@@ -317,18 +318,37 @@ def test_inaccessible_sources_are_never_assigned():
     assert all(load == 0 for load in report.per_account.values())
 
 
-def test_an_unowned_private_source_is_still_placeable():
-    """The boundary of invariant 10, which it would be easy to overshoot.
+def test_an_unowned_private_source_waits_for_evidence_rather_than_being_guessed():
+    """Changed deliberately in phase 2, and this is the reasoning.
 
-    A private dialog that names *no* account has not been orphaned by a
-    failure — it is new, and the account that just discovered it is the one
-    about to be recorded. Refusing to place it would strand every private
-    dialog forever, which is a stricter rule than access requires.
+    This used to assert that a private dialog naming no account was placed
+    on the least-loaded one. That produces an assignment which *looks*
+    like coverage and collects nothing: a userbot can only read a dialog
+    it is actually in, so choosing by load is a guess, and a failing guess
+    is invisible — the dashboard shows the source assigned while the run
+    fails quietly every hour.
+
+    So the planner places a source only on an account that may take it.
+    With no eligibility information it strands the source and *says so*,
+    which is a state an operator can act on.
+
+    The case the old test worried about — a freshly discovered private
+    dialog — is not stranded in the real path: discovery records the
+    access it just demonstrated (``app.dialogs.register_dialog``) and
+    ``apply_assignments`` passes that eligibility in. The second half of
+    this test is that path.
     """
     accounts = _accounts(2)
     fresh_private = _sources(10, public=False, account_id=None)
 
     changes, report = plan_assignments(fresh_private, accounts, capacity=SOURCES)
 
+    assert changes == {}, "a private source was assigned to an account with no evidence it can read it"
+    assert len(report.stranded) == 10, "sources that could not be placed were not reported"
+
+    eligible_for = {source.id: [accounts[0].id] for source in fresh_private}
+    changes, report = plan_assignments(fresh_private, accounts, capacity=SOURCES, eligible_for=eligible_for)
+
     assert len(changes) == 10
     assert report.stranded == []
+    assert set(changes.values()) == {accounts[0].id}

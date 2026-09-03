@@ -31,8 +31,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app import access, assignments
 from app.identity import canonical_id
-from app.models import Channel
+from app.models import Channel, SourceAccess
+from app.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -314,11 +316,20 @@ def register_dialog(
             row.username = username
         if _may_upgrade_kind(row.kind, kind):
             row.kind = kind
+        # Seeing a dialog in an account's list is evidence that account can
+        # read it — the strongest kind this system gets without collecting.
+        # Recorded even for a row that already exists, and even when
+        # another account collects it: knowing who *else* can reach a
+        # source is what makes failover possible before it is needed.
+        _record_discovery_access(db, row, account_id)
         return row, False
 
+    # Created unassigned, then assigned. ``account_id`` is a mirror of
+    # ``source_assignments`` and carrying one on INSERT would be an
+    # assignment made by writing the mirror — which the database refuses,
+    # and should.
     row = Channel(
         workspace_id=workspace_id,
-        account_id=account_id,
         tg_channel_id=tg_id,
         username=username,
         title=title,
@@ -326,4 +337,22 @@ def register_dialog(
     )
     db.add(row)
     db.flush()
+    _record_discovery_access(db, row, account_id)
+    if account_id is not None:
+        assignments.assign(db, row, account_id, reason="discovered by this account")
     return row, True
+
+
+def _record_discovery_access(db: Session, row: Channel, account_id: int | None) -> None:
+    """Note that this account could see this dialog, with the reason why."""
+    if account_id is None:
+        return
+    access.record(
+        db,
+        row,
+        SourceAccess.ACCESSIBLE,
+        account_id=account_id,
+        observed_at=utcnow(),
+        evidence_kind="dialog_discovery",
+        evidence_summary="the dialog appeared in this account's own dialog list",
+    )

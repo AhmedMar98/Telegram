@@ -409,6 +409,7 @@ def test_the_summary_separates_working_accounts_from_disabled_ones(client: TestC
                 label="revoked",
                 session_string="y",
                 is_active=False,
+                state=TelegramAccount.DISABLED,
                 disabled_reason="3 consecutive failures",
             )
         )

@@ -32,6 +32,7 @@ from app.models import (
     Channel,
     ClassificationFeedback,
     Evidence,
+    JoinRequest,
     KeywordRule,
     Lead,
     Link,
@@ -87,6 +88,9 @@ WORKSPACE_TABLES = (
     SourceAccess,
     SourceAssignment,
     SourceEvent,
+    # After the three above and before Evidence: a join request points at a
+    # channel, an account and an evidence row, so it precedes all three.
+    JoinRequest,
     Evidence,
     AuditLog,
     BotLink,

@@ -172,7 +172,8 @@ jobs:
           SECRET_KEY: "ci-secret"
         run: |
           set -euo pipefail
-          pytest tests/test_target_source_model.py tests/test_assignment_authority.py -q | tee migration.out
+          pytest tests/test_target_source_model.py tests/test_assignment_authority.py \
+                 tests/test_accounts_access_assignment.py -q | tee migration.out
           if grep -qi "skipped" migration.out; then
             echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so neither the backfill nor the mirror guard was verified"
             exit 1

@@ -85,6 +85,9 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "source_assignments",
     "source_events",
     "evidence",
+    # Phase 2. Which sources an account is trying to get into is exactly
+    # as tenant-private as which sources it already collects.
+    "join_requests",
 )
 
 # Two tables carry workspace_id, would benefit from RLS, and are **not**

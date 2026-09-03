@@ -33,7 +33,15 @@ def workspace_id() -> int:
 
 
 def _account(db, workspace_id: int, label: str, *, active: bool = True) -> TelegramAccount:
-    account = TelegramAccount(workspace_id=workspace_id, label=label, session_string="x", is_active=active)
+    # A disabled account has to say which kind of disabled it is: the
+    # database refuses "not active" without a state that explains it.
+    account = TelegramAccount(
+        workspace_id=workspace_id,
+        label=label,
+        session_string="x",
+        is_active=active,
+        state=TelegramAccount.ACTIVE if active else TelegramAccount.DISABLED,
+    )
     db.add(account)
     db.flush()
     return account

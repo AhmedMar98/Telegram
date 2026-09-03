@@ -14,6 +14,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -127,15 +128,78 @@ class LoginAttempt(Base):
 
 
 class TelegramAccount(Base):
-    """A userbot session (Telethon StringSession) used to collect messages."""
+    """A userbot session (Telethon StringSession) used to collect messages.
+
+    **Identity is the Telegram user, not the row.** ``tg_user_id`` is the
+    stable one: a label is a nickname, a phone can be changed, and a
+    session string is replaced every time the account is re-authorised —
+    keying on any of those would make re-authentication produce a second
+    account holding none of the first one's assignments or history. It is
+    nullable because nothing recorded it before this phase, and UNKNOWN is
+    the honest value for a row that predates it.
+    """
 
     __tablename__ = "telegram_accounts"
+    __table_args__ = (
+        # ``state`` is the operational truth and ``is_active`` is the
+        # boolean the collector and the dashboard already filter on. Rather
+        # than a second authority, they are bound: exactly one state means
+        # active, and the database refuses any write that sets one without
+        # the other. No service, no trigger, no call site to remember.
+        CheckConstraint(
+            "(state = 'ACTIVE') = is_active",
+            name="ck_account_state_matches_is_active",
+        ),
+        # The identity, when it is known. Two rows for one Telegram user in
+        # one workspace is the duplicate this prevents; NULLs stay distinct,
+        # so rows that predate the column do not collide with each other.
+        UniqueConstraint("workspace_id", "tg_user_id", name="uq_account_identity"),
+    )
+
+    #: Working, and eligible to be assigned sources.
+    ACTIVE = "ACTIVE"
+    #: Switched off by a person. Nothing is wrong with it.
+    INACTIVE = "INACTIVE"
+    #: Switched off by the system after repeated failure.
+    DISABLED = "DISABLED"
+    #: The session is gone or was never completed; a person must re-authorise.
+    AUTH_REQUIRED = "AUTH_REQUIRED"
+    #: Re-authorisation was attempted and refused.
+    AUTH_FAILED = "AUTH_FAILED"
+    #: Reachable in principle, not usable now (Telegram-side outage, ban).
+    UNAVAILABLE = "UNAVAILABLE"
+    #: Telegram is throttling this account; it recovers on its own.
+    RATE_LIMITED = "RATE_LIMITED"
+    #: Something inconsistent that a person has to look at.
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+    STATES = (
+        ACTIVE,
+        INACTIVE,
+        DISABLED,
+        AUTH_REQUIRED,
+        AUTH_FAILED,
+        UNAVAILABLE,
+        RATE_LIMITED,
+        NEEDS_REVIEW,
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     label: Mapped[str] = mapped_column(String(100))
     session_string: Mapped[str] = mapped_column(Text)
+    # The Telegram user this session belongs to. NULL means never observed:
+    # it is read off the connection, and nothing has connected as this
+    # account since the column existed.
+    tg_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Why the account is in the state it is in, and since when. Separate
+    # from ``last_error``: that is the last thing that went wrong, this is
+    # the reason for the current state, and a healthy account can have the
+    # first without the second.
+    state: Mapped[str] = mapped_column(String(20), default=ACTIVE, server_default=ACTIVE)
+    state_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    state_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # When this account last completed a collection run, and last failed
     # one. Kept as two timestamps rather than one "last run": a run that
     # failed tells you nothing about when the account last actually worked,
@@ -833,14 +897,44 @@ class SourceAccess(Base):
             unique=True,
         ),
         Index("ix_source_access_workspace_state", "workspace_id", "state"),
+        CheckConstraint(
+            "state IN ('UNKNOWN', 'ACCESSIBLE', 'INACCESSIBLE', 'NEEDS_ACCESS', "
+            "'REQUEST_SENT', 'ACCESS_DENIED', 'BLOCKED')",
+            name="ck_source_access_state",
+        ),
     )
 
+    #: Nothing has been measured. **Not** the same as INACCESSIBLE: one is
+    #: an absent measurement, the other is a failed one, and treating them
+    #: alike is how a source nobody has tried becomes a source that does
+    #: not work.
+    UNKNOWN = "UNKNOWN"
     #: The system reached the source over this path, and has evidence.
     ACCESSIBLE = "ACCESSIBLE"
     #: The path was tried and did not work. Not the same as an invalid source.
     INACCESSIBLE = "INACCESSIBLE"
     #: A valid source that needs membership or authorisation nobody has yet.
     NEEDS_ACCESS = "NEEDS_ACCESS"
+    #: A join or access request went out and has not been answered.
+    #: **Not** a grant. The distinction is the whole reason this state
+    #: exists: a request that is pending looks like progress and is not
+    #: access, and a system that conflates them reports coverage it does
+    #: not have.
+    REQUEST_SENT = "REQUEST_SENT"
+    #: The request was answered, and the answer was no.
+    ACCESS_DENIED = "ACCESS_DENIED"
+    #: Refused by policy or by Telegram in a way retrying will not fix.
+    BLOCKED = "BLOCKED"
+
+    STATES = (
+        UNKNOWN,
+        ACCESSIBLE,
+        INACCESSIBLE,
+        NEEDS_ACCESS,
+        REQUEST_SENT,
+        ACCESS_DENIED,
+        BLOCKED,
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
@@ -1116,3 +1210,83 @@ def _fill_identity_key(_mapper, _connection, target: Channel) -> None:
 
 event.listen(Channel, "before_insert", _fill_identity_key)
 event.listen(Channel, "before_update", _fill_identity_key)
+
+
+class JoinRequest(Base):
+    """One attempt to get an account access to a private source.
+
+    Separate from ``source_access`` because they answer different
+    questions. Access is a *state*: can this account read this source now.
+    A join request is a *process*: it is tried, it can be retried, it can
+    sit unanswered for days, and it ends in an outcome that then updates
+    the access state. Folding the process into the state is how
+    ``REQUEST_SENT`` turns into ``ACCESSIBLE`` without anybody verifying
+    anything.
+
+    **Nothing here joins anything.** This phase builds the record and its
+    rules; performing the access attempt belongs to the runtime, and it is
+    gated on authorisation rather than run because a row exists. A request
+    is never marked GRANTED by the act of sending it — only by a later
+    observation that the account can actually read the source.
+    """
+
+    __tablename__ = "join_requests"
+    __table_args__ = (
+        # One open request per (source, account). Two would mean two
+        # attempts racing at Telegram's rate limits on behalf of the same
+        # account, which is the thing most likely to get it restricted.
+        Index(
+            "uq_join_request_open",
+            "source_id",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT')"),
+            postgresql_where=text("status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT')"),
+        ),
+        Index("ix_join_requests_due", "workspace_id", "status", "next_action_at"),
+        CheckConstraint(
+            "status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT', 'GRANTED', 'DENIED', "
+            "'FAILED', 'MANUAL_INTERVENTION', 'BLOCKED')",
+            name="ck_join_request_status",
+        ),
+    )
+
+    #: Queued, nothing attempted yet.
+    READY = "READY"
+    #: An attempt is in flight.
+    ATTEMPTING = "ATTEMPTING"
+    #: A request was sent and is unanswered. Not access.
+    REQUEST_SENT = "REQUEST_SENT"
+    #: Verified: the account can now read the source.
+    GRANTED = "GRANTED"
+    #: Answered, and refused.
+    DENIED = "DENIED"
+    #: The attempt failed for a reason that may not repeat.
+    FAILED = "FAILED"
+    #: A person has to do something the system will not do on its own.
+    MANUAL_INTERVENTION = "MANUAL_INTERVENTION"
+    #: Policy or Telegram forbids it; retrying is not the answer.
+    BLOCKED = "BLOCKED"
+
+    #: The statuses that occupy the one-open-request slot.
+    OPEN_STATUSES = (READY, ATTEMPTING, REQUEST_SENT)
+    STATUSES = (READY, ATTEMPTING, REQUEST_SENT, GRANTED, DENIED, FAILED, MANUAL_INTERVENTION, BLOCKED)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("telegram_accounts.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default=READY, server_default=READY)
+    # Operational ordering only. Higher runs first; it says nothing about
+    # how good the source is.
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When this is worth touching again. NULL means "not on a schedule" —
+    # a terminal row, or one waiting on a person.
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # What actually happened, in the words of whatever reported it.
+    result: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
