@@ -48,7 +48,9 @@ from telethon import TelegramClient  # noqa: E402
 from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
+from app import assignments as assignment_service  # noqa: E402
 from app import coverage  # noqa: E402
+from app import progress as progress_service  # noqa: E402
 from app.accounts import record_failure, record_success  # noqa: E402
 from app.alerts import COLLECTOR_FAILED  # noqa: E402
 from app.assignment import apply_assignments  # noqa: E402
@@ -69,7 +71,7 @@ from app.dialogs import (
 )
 from app.ingest import MAX_LINKS_PER_MESSAGE, IngestSummary, ingest_text
 from app.leads import active_rules as active_keyword_rules  # noqa: E402
-from app.models import Channel, TelegramAccount  # noqa: E402
+from app.models import Channel, SourceProgress, TelegramAccount  # noqa: E402
 from app.notify import raise_alert, report_adult_links  # noqa: E402
 from app.rls import scope_session_to_workspace  # noqa: E402
 from app.timeutil import utcnow  # noqa: E402
@@ -154,17 +156,20 @@ def _still_owned_by(db: Session, channel: Channel, account_id: int | None, *, is
     another process every time an operator presses rebalance in the
     dashboard. Writing a watermark for a channel this account no longer
     owns advances it past messages the **new** owner has not read — and
-    since the new owner starts from ``min_id=last_message_id``, those
+    since the new owner starts from ``min_id`` at the watermark, those
     messages are never collected by anyone. A permanent gap, invisible in
     every counter, which is exactly what §44.7 defines collection success
     against.
 
-    Read fresh rather than trusting the in-session row: the whole point is
-    to see a change another process committed. ``None`` still passes when
-    this is the default account, because an unassigned channel legitimately
-    falls to it (see ``_channels_for``).
+    Reads ``source_assignments`` through the assignment service rather than
+    ``channels.account_id``. The two agree — a trigger enforces it — but a
+    guard is the one place where "they agree" is not good enough: it must
+    consult the authority, or it is only checking a copy.
+
+    ``None`` still passes when this is the default account, because an
+    unassigned channel legitimately falls to it (see ``_channels_for``).
     """
-    owner = db.query(Channel.account_id).filter(Channel.id == channel.id).scalar()
+    owner = assignment_service.current_account_id(db, channel.id)
     if owner is None:
         return is_default
     return owner == account_id
@@ -207,8 +212,20 @@ def _record_outcome(
     read" and is what the rotation ordering needs. Without this a source
     nobody attempted and a source that failed are indistinguishable — and
     coverage cannot be computed from an indistinguishable pair.
+
+    The attempt goes through ``app.progress`` rather than being stamped
+    here. That is the whole point of the reconciliation: this function
+    used to write ``channels.last_attempt_at`` itself, and
+    ``source_progress.last_attempt_at`` recorded the same fact — two
+    writers of one thing, which is how the two branches ended up able to
+    disagree. ``record_attempt`` writes the authority and mirrors it, so
+    the outcome recorded below and the attempt behind it can only ever
+    tell the same story.
+
+    Called on failure paths too, including ones where no read was
+    attempted at all — which is exactly when the distinction matters.
     """
-    channel.last_attempt_at = utcnow()
+    progress_service.record_attempt(db, channel, SourceProgress.LIVE)
     channel.last_outcome = outcome
     channel.last_failure_kind = kind
     if commit:
@@ -233,7 +250,12 @@ async def _collect_channel(
         _record_outcome(db, channel, coverage.FAILED, kind=_classify_failure(exc))
         return 0
 
-    new_watermark = channel.last_message_id
+    # The watermark comes from source_progress, which is the authority for
+    # "where is it safe to resume from". channels.last_message_id is a
+    # mirror of the LIVE track kept for readers that have not moved yet,
+    # and this reader has.
+    watermark = progress_service.ensure(db, channel, SourceProgress.LIVE).current_watermark
+    new_watermark = watermark
     summary = IngestSummary()
     rate_limited = False
     scanned = 0
@@ -244,9 +266,7 @@ async def _collect_channel(
     # dropping them on a busy channel. Ascending order keeps the watermark
     # contiguous, so a capped run simply resumes where it stopped next time.
     try:
-        async for message in client.iter_messages(
-            entity, min_id=channel.last_message_id, reverse=True, limit=_message_limit()
-        ):
+        async for message in client.iter_messages(entity, min_id=watermark, reverse=True, limit=_message_limit()):
             ingest_text(
                 db,
                 workspace_id=channel.workspace_id,
@@ -287,36 +307,57 @@ async def _collect_channel(
             "channel %s (%s) changed owner during the run; leaving the watermark at %d for the new owner",
             channel.id,
             label,
-            channel.last_message_id,
+            watermark,
         )
         return summary.stored
 
-    if new_watermark < channel.last_message_id:
-        # Never observed, and counted rather than silently corrected: a
-        # watermark moving backwards means messages between the two values
-        # are about to be re-read forever, and §46 reports the count so it
-        # cannot be a zero nobody checked.
-        channel.watermark_regressions = (channel.watermark_regressions or 0) + 1
-        logger.error(
-            "channel %s (%s): refusing a watermark regression %d -> %d",
+    # One writer for the watermark, and it is app.progress. It re-checks
+    # ownership against source_assignments at write time, refuses a
+    # backwards move, counts that refusal on the channel, and mirrors the
+    # LIVE track back to last_message_id / last_collected_at /
+    # last_attempt_at / caught_up.
+    #
+    # This is where the two lines of work met. The measurement contract
+    # (§46) counted a regression in Python and then corrected the value;
+    # the runtime (§50) refuses it in the database. Keeping both would be
+    # two authorities for one number, so the check lives in one place and
+    # the counter is fed from its verdict rather than from a second
+    # comparison that could disagree with it.
+    #
+    # ``account_id=None`` for an unassigned channel on the default account
+    # is not "no account" in the public-path sense — it is this call site
+    # saying it has already established the right to write (the check
+    # directly above), and that there is no assignment row for advance() to
+    # compare against. Passing the account id there would make advance()
+    # refuse every legitimately unassigned channel.
+    owner = assignment_service.current_account_id(db, channel.id) if account_id is not None else None
+    result = progress_service.advance(
+        db,
+        channel,
+        new_watermark,
+        account_id=owner,
+        track=SourceProgress.LIVE,
+        # Whether the window was finished. Hitting the per-run cap means a
+        # backlog remains — not an error, an unfinished window the next run
+        # continues, and the difference is what "behind" means in §46.
+        # Expressed on the three-valued track because that one can also say
+        # "cannot tell"; channels.caught_up is projected from it.
+        coverage=(
+            SourceProgress.NO_DETECTED_GAP if scanned < _message_limit() else SourceProgress.UNKNOWN_COVERAGE
+        ),
+    )
+    if result.refused is not None:
+        db.commit()
+        logger.warning(
+            "channel %s (%s): watermark not advanced (%s); it stays at %d",
             channel.id,
             label,
-            channel.last_message_id,
-            new_watermark,
+            result.refused,
+            result.watermark,
         )
-        new_watermark = channel.last_message_id
-
-    # Whether the window was finished. Hitting the per-run cap means a
-    # backlog remains — not an error, an unfinished window that the next
-    # run continues, and the difference is what "behind" means in §46.
-    channel.caught_up = scanned < _message_limit()
-    channel.last_message_id = new_watermark
-    # Stamped even when the run found nothing: the question this answers is
-    # "when did anything last look at this dialog", which is what the
-    # rotation ordering in _channels_for needs. Stamping only on a
-    # non-empty run would park every quiet dialog permanently at the front
-    # of the queue and starve the rest.
-    channel.last_collected_at = utcnow()
+        _record_outcome(db, channel, coverage.FAILED, kind=coverage.ASSIGNMENT_ERROR)
+        return summary.stored
+    new_watermark = result.watermark
     _record_outcome(
         db,
         channel,

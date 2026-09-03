@@ -220,7 +220,28 @@ class Coverage:
 
 
 def measure(db: Session, workspace_id: int) -> Coverage:
-    """Compute the contract for one workspace. Reads only; never writes."""
+    """Compute the contract for one workspace. Reads only; never writes.
+
+    **Reads derived columns, deliberately.** ``last_outcome``,
+    ``last_failure_kind``, ``caught_up`` and ``watermark_regressions`` live
+    on ``channels``, and since the reconciliation of the two branches they
+    are no longer independent state: ``source_progress`` and
+    ``collection_runs`` decide, and each of those four columns has exactly
+    one writer that copies from them (see the block on ``Channel`` in
+    ``app/models.py``).
+
+    They are read here rather than joined from the authority because the
+    projection is exact for every value this function distinguishes, and a
+    five-way join per measurement would cost more than it buys. What makes
+    that safe is the single writer, not luck —
+    ``tests/test_legacy_field_authority.py`` asserts the two agree after
+    the operations that move them, and goes red if a second writer appears.
+
+    One value is *not* recoverable from here and must not be inferred:
+    ``caught_up IS NULL`` means "never read" **or** "coverage unknown",
+    which the three-valued ``source_progress.coverage_status`` separates.
+    Nothing below treats NULL as either, and nothing should.
+    """
     now = utcnow()
     due_before = now - DUE_AFTER
 

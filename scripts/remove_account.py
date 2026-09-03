@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app import assignments  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Channel, TelegramAccount  # noqa: E402
 from app.rls import scope_session_to_workspace  # noqa: E402
@@ -79,10 +80,13 @@ def remove_account(db: Session, *, workspace_id: int, label: str, dry_run: bool 
     if dry_run:
         return {"channels_reassigned": len(owned), "accounts_removed": 0}
 
-    # Reassign before delete, in one transaction: a crash between the two
+    # Release before delete, in one transaction: a crash between the two
     # would otherwise leave channels pointing at an account that is gone.
+    # Through the service, so each source keeps a closed assignment row
+    # recording that this account once held it — the account goes, the
+    # history of what it collected does not.
     for channel in owned:
-        channel.account_id = None
+        assignments.release(db, channel, reason="account removed")
     db.delete(account)
     db.commit()
 

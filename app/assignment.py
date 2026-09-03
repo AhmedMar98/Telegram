@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app import assignments, eligibility
 from app.config import get_settings
 from app.dialogs import SOURCE_USERBOT, is_synthetic
 from app.models import Channel, TelegramAccount
@@ -91,13 +92,25 @@ def capacity_per_account() -> int:
 
 
 def plan_assignments(
-    channels: list[Channel], accounts: list[TelegramAccount], *, capacity: int
+    channels: list[Channel],
+    accounts: list[TelegramAccount],
+    *,
+    capacity: int,
+    eligible_for: dict[int, list[int]] | None = None,
 ) -> tuple[dict[int, int], AssignmentReport]:
     """Decide the channel → account mapping. Pure: touches no database.
 
     Returns ``({channel_id: account_id}, report)`` containing only the
     channels whose assignment *changes*, so a caller can tell "nothing to
     do" from "everything reassigned" without diffing.
+
+    ``eligible_for`` maps a channel id to the accounts that may take it,
+    already ordered best-first by ``app.eligibility``. It is optional so
+    this function stays pure and directly testable; ``apply_assignments``
+    always supplies it, so the real path is access-aware and this default
+    is a test convenience rather than a second policy. Without it the
+    fallback is the older, narrower rule: any account may take a channel
+    with a public username, and nobody may take one without.
     """
     report = AssignmentReport()
     if not accounts:
@@ -122,13 +135,23 @@ def plan_assignments(
         else:
             homeless.append(channel)
 
-    # Pass two: place what is left, least-loaded first.
+    # Pass two: place what is left, least-loaded first among the accounts
+    # that may actually take it.
     for channel in homeless:
-        if channel.account_id is not None and not is_portable(channel):
-            # Pinned to an account that is gone. Nobody else can open it.
+        if eligible_for is None:
+            allowed = list(load) if is_portable(channel) else []
+        else:
+            allowed = [account_id for account_id in eligible_for.get(channel.id, []) if account_id in load]
+
+        if not allowed:
+            # Nobody can open it. Reported rather than assigned to
+            # somebody who would fail every hour: an assignment that
+            # cannot collect is worse than none, because it looks like
+            # coverage.
             report.stranded.append(_label(channel))
             continue
-        candidates = [account_id for account_id in load if load[account_id] < capacity]
+
+        candidates = [account_id for account_id in allowed if load[account_id] < capacity]
         if not candidates:
             report.overflow.append(_label(channel))
             continue
@@ -165,12 +188,22 @@ def apply_assignments(db: Session, workspace_id: int) -> AssignmentReport:
         .all()
     )
     channels = collectable_channels(db, workspace_id)
-    changes, report = plan_assignments(channels, accounts, capacity=capacity_per_account())
+    capacity = capacity_per_account()
+    # Eligibility before scoring, always: an account that cannot read a
+    # source is not a cheaper option for it, it is not an option.
+    eligible_for = {
+        channel.id: eligibility.evaluate(db, channel, accounts, capacity=capacity).eligible for channel in channels
+    }
+    changes, report = plan_assignments(channels, accounts, capacity=capacity, eligible_for=eligible_for)
 
     if changes:
         by_id = {channel.id: channel for channel in channels}
         for channel_id, account_id in changes.items():
-            by_id[channel_id].account_id = account_id
+            # Through the service, not by assigning the column: the column
+            # is a mirror of ``source_assignments`` and writing it directly
+            # would create a second authority for the same fact — and, on
+            # PostgreSQL, be refused by the trigger that says so.
+            assignments.assign(db, by_id[channel_id], account_id, reason="capacity balancing")
         db.commit()
 
     if report.stranded:
@@ -183,7 +216,7 @@ def apply_assignments(db: Session, workspace_id: int) -> AssignmentReport:
         logger.warning(
             "assignment: %d source(s) exceed the per-account capacity of %d",
             len(report.overflow),
-            capacity_per_account(),
+            capacity,
         )
     return report
 

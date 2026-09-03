@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import account_login, roles
+from app import account_login, assignments, roles
 from app.accounts import reactivate
 from app.assignment import apply_assignments, capacity_per_account, collectable_channels, plan_assignments
 from app.audit import record as audit_record
@@ -383,10 +383,15 @@ def add_channel(
         tg_channel_id=payload.tg_channel_id,
         username=payload.username,
         title=payload.title,
-        account_id=_owned_account_id(db, payload.account_id, current_user),
     )
     db.add(channel)
     db.flush()
+    # Assignment is a second step even here. A channel row carrying an
+    # account_id on INSERT would be an assignment created by writing the
+    # mirror, which is exactly the dual authority this split removes.
+    requested = _owned_account_id(db, payload.account_id, current_user)
+    if requested is not None:
+        assignments.assign(db, channel, requested, reason="assigned at creation")
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
@@ -494,7 +499,12 @@ def reassign_channel(
     if channel is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="channel not found")
 
-    channel.account_id = _owned_account_id(db, payload.account_id, current_user)
+    assignments.assign(
+        db,
+        channel,
+        _owned_account_id(db, payload.account_id, current_user),
+        reason="manual reassignment",
+    )
     audit_record(
         db,
         workspace_id=current_user.workspace_id,

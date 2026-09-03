@@ -75,6 +75,25 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "workflow_runs",
     "saved_searches",
     "classification_feedback",
+    # The target source model (migration 0028). Protected from the moment
+    # they exist rather than added later: ``links`` is unprotected today
+    # because a cross-workspace script was written against it first and
+    # retrofitting the policy now means rewriting that script. These tables
+    # have no readers yet, so the cheap moment to get it right is now.
+    "resources",
+    "occurrences",
+    "source_access",
+    "source_assignments",
+    "source_events",
+    "evidence",
+    # Phase 2. Which sources an account is trying to get into is exactly
+    # as tenant-private as which sources it already collects.
+    "join_requests",
+    # Phase 3. A run names a source, an account and a range; progress names
+    # how far collection reached. Both are a description of one tenant's
+    # operation and belong to nobody else.
+    "source_progress",
+    "collection_runs",
 )
 
 # Two tables carry workspace_id, would benefit from RLS, and are **not**

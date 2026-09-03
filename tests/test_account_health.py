@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app import accounts
 from app.accounts import MAX_CONSECUTIVE_FAILURES, reactivate, record_failure, record_success
 from app.database import SessionLocal
 from app.models import Channel, TelegramAccount, User, Workspace
@@ -165,7 +166,7 @@ def test_an_automatic_disable_is_distinguishable_from_a_human_one():
         for _ in range(MAX_CONSECUTIVE_FAILURES):
             record_failure(db, account, "broken")
         other = db.get(TelegramAccount, manual)
-        other.is_active = False
+        accounts.set_state(db, other, TelegramAccount.INACTIVE, reason="switched off by the operator")
         db.commit()
     finally:
         db.close()
@@ -401,7 +402,9 @@ def test_an_account_disabled_mid_run_does_not_corrupt_its_own_bookkeeping():
 
         # The operator disables it while the collector is mid-run.
         operator_view = operator_db.get(TelegramAccount, account_id)
-        operator_view.is_active = False
+        accounts.set_state(
+            operator_db, operator_view, TelegramAccount.INACTIVE, reason="switched off by the operator"
+        )
         operator_db.commit()
 
         # The collector finishes and records its success.

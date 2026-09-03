@@ -14,6 +14,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -21,10 +22,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.identity import source_identity_key
 from app.timeutil import utcnow
 
 
@@ -124,15 +128,78 @@ class LoginAttempt(Base):
 
 
 class TelegramAccount(Base):
-    """A userbot session (Telethon StringSession) used to collect messages."""
+    """A userbot session (Telethon StringSession) used to collect messages.
+
+    **Identity is the Telegram user, not the row.** ``tg_user_id`` is the
+    stable one: a label is a nickname, a phone can be changed, and a
+    session string is replaced every time the account is re-authorised —
+    keying on any of those would make re-authentication produce a second
+    account holding none of the first one's assignments or history. It is
+    nullable because nothing recorded it before this phase, and UNKNOWN is
+    the honest value for a row that predates it.
+    """
 
     __tablename__ = "telegram_accounts"
+    __table_args__ = (
+        # ``state`` is the operational truth and ``is_active`` is the
+        # boolean the collector and the dashboard already filter on. Rather
+        # than a second authority, they are bound: exactly one state means
+        # active, and the database refuses any write that sets one without
+        # the other. No service, no trigger, no call site to remember.
+        CheckConstraint(
+            "(state = 'ACTIVE') = is_active",
+            name="ck_account_state_matches_is_active",
+        ),
+        # The identity, when it is known. Two rows for one Telegram user in
+        # one workspace is the duplicate this prevents; NULLs stay distinct,
+        # so rows that predate the column do not collide with each other.
+        UniqueConstraint("workspace_id", "tg_user_id", name="uq_account_identity"),
+    )
+
+    #: Working, and eligible to be assigned sources.
+    ACTIVE = "ACTIVE"
+    #: Switched off by a person. Nothing is wrong with it.
+    INACTIVE = "INACTIVE"
+    #: Switched off by the system after repeated failure.
+    DISABLED = "DISABLED"
+    #: The session is gone or was never completed; a person must re-authorise.
+    AUTH_REQUIRED = "AUTH_REQUIRED"
+    #: Re-authorisation was attempted and refused.
+    AUTH_FAILED = "AUTH_FAILED"
+    #: Reachable in principle, not usable now (Telegram-side outage, ban).
+    UNAVAILABLE = "UNAVAILABLE"
+    #: Telegram is throttling this account; it recovers on its own.
+    RATE_LIMITED = "RATE_LIMITED"
+    #: Something inconsistent that a person has to look at.
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+    STATES = (
+        ACTIVE,
+        INACTIVE,
+        DISABLED,
+        AUTH_REQUIRED,
+        AUTH_FAILED,
+        UNAVAILABLE,
+        RATE_LIMITED,
+        NEEDS_REVIEW,
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     label: Mapped[str] = mapped_column(String(100))
     session_string: Mapped[str] = mapped_column(Text)
+    # The Telegram user this session belongs to. NULL means never observed:
+    # it is read off the connection, and nothing has connected as this
+    # account since the column existed.
+    tg_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Why the account is in the state it is in, and since when. Separate
+    # from ``last_error``: that is the last thing that went wrong, this is
+    # the reason for the current state, and a healthy account can have the
+    # first without the second.
+    state: Mapped[str] = mapped_column(String(20), default=ACTIVE, server_default=ACTIVE)
+    state_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    state_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # When this account last completed a collection run, and last failed
     # one. Kept as two timestamps rather than one "last run": a run that
     # failed tells you nothing about when the account last actually worked,
@@ -161,7 +228,12 @@ class TelegramAccount(Base):
 
 class Channel(Base):
     __tablename__ = "channels"
-    __table_args__ = (UniqueConstraint("workspace_id", "tg_channel_id", name="uq_channel_per_workspace"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "tg_channel_id", name="uq_channel_per_workspace"),
+        # Identity lookups are always tenant-scoped, so the workspace leads.
+        # Not unique yet — see the identity_key column for why.
+        Index("ix_channels_identity_key", "workspace_id", "identity_key"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
@@ -196,23 +268,89 @@ class Channel(Base):
     # attempted and did it fail?", and coverage is meaningless without
     # that: a source nobody tried and a source that failed both look like
     # a source with an old timestamp.
+    #
+    # **Every column in this block is DERIVED.** The measurement contract
+    # (§46) and the collection runtime (§50) were built on separate
+    # branches and arrived at the same facts twice; the reconciliation
+    # settled which copy decides. These four are the compatibility copies,
+    # written in exactly one place each so that no reader can find them
+    # disagreeing with the row they reflect:
+    #
+    #   last_attempt_at    <- source_progress.last_attempt_at   (LIVE track)
+    #   caught_up          <- source_progress.coverage_status, projected
+    #   watermark_regressions <- counted from app.progress refusals
+    #   last_outcome / last_failure_kind
+    #                      <- the latest collection_runs row for this source
+    #
+    # The first three are written by ``app.progress`` alone; the last two
+    # by ``scripts/collect._record_outcome`` alone. Nothing else may write
+    # any of them, for the reason ``account_id`` above carries a database
+    # trigger: two writers of one fact is how the two branches produced two
+    # answers in the first place.
+    #
+    # AUTHORITATIVE: source_progress · collection_runs
+    # DERIVED / LEGACY COMPATIBILITY: everything below, until every reader
+    # has moved to the authority and they can be dropped.
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    #: "succeeded" | "failed" | "skipped" — see app/coverage.py.
+    #: "succeeded" | "failed" | "skipped" — see app/coverage.py. DERIVED
+    #: from the newest ``collection_runs`` row; that table keeps the series,
+    #: this column keeps only the latest value.
     last_outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
     #: One of app.coverage.FAILURE_KINDS. NULL on success, and never the
     #: exception class: "failed" tells an operator something is wrong,
-    #: "access_denied" tells them what to do about it.
+    #: "access_denied" tells them what to do about it. DERIVED, as above.
+    #:
+    #: Note the two vocabularies are deliberately *not* merged:
+    #: ``app.coverage.FAILURE_KINDS`` is what the measurement reports and
+    #: ``app.collection.failures.FailureKind`` is what the runtime acts on.
+    #: One is a operator-facing summary, the other drives retry policy.
     last_failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     #: Whether the last successful read reached the end of the channel.
     #: False means the per-run cap stopped it with a backlog remaining —
     #: not an error, an unfinished window. NULL means never read.
+    #:
+    #: DERIVED from ``source_progress.coverage_status``, and lossy on
+    #: purpose: the enum can say UNKNOWN_COVERAGE, a boolean cannot, and
+    #: NULL is the only honest rendering of "cannot tell". Never read this
+    #: to decide whether a gap exists — read the enum.
     caught_up: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: Times this source's watermark was asked to move backwards. Must
     #: stay zero; it is a counter rather than a flag so the *rate* is
     #: visible if it ever stops being zero.
+    #:
+    #: DERIVED: the authoritative event is the refusal in
+    #: ``app.progress.advance`` (and, on PostgreSQL, the trigger from
+    #: migration 0031 that makes the write impossible at all). This counter
+    #: is incremented from that one verdict, never from a second comparison.
     watermark_regressions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # --- target source model (phase 1) ---------------------------------
+    # One spelling of this dialog's identity, so that the same channel
+    # written ``-1001234567890`` by Telethon and ``1234567890`` by a person
+    # is one source rather than two.
+    #
+    # ``tg_channel_id`` above keeps whatever spelling arrived — it is what
+    # ``client.get_entity`` accepts back, so rewriting it would break
+    # resolution — and this column carries the comparable form. The rule is
+    # ``app.dialogs.canonical_id``; synthetic rows ("manual", "import:...")
+    # keep their own id, because they are identities too, just not
+    # Telegram's.
+    #
+    # Indexed, **not yet unique**: the current schema allowed both
+    # spellings to be inserted through ``get_or_create_channel``, so a
+    # deployment may already hold a colliding pair. Merging two sources
+    # decides which watermark and which links survive, which is a product
+    # decision and not a migration's to make. scripts/check_source_identity.py
+    # reports collisions; the constraint follows once a deployment is clean.
+    identity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # How this source is read: "userbot" needs an account with access,
+    # "public" needs none. Migrated from ``source`` above, which already
+    # carries exactly this fact — the new name is the target's word for it,
+    # and the old column stays as the live one until its readers move.
+    #
+    # NULL on synthetic rows: "manual" is not acquired from anywhere.
+    acquisition_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     workspace: Mapped[Workspace] = relationship(back_populates="channels")
     links: Mapped[list[Link]] = relationship(back_populates="channel")
@@ -265,8 +403,23 @@ class Message(Base):
     sender_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     sender_username: Mapped[str | None] = mapped_column(String(200), nullable=True)
     sender_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Three different times, and the reason they are three columns:
+    # ``posted_at`` is Telegram's, ``collected_at`` is when this system saw
+    # it (the target model calls that observed_at — the column keeps its
+    # name because the API schema exposes it), and ``processed_at`` is when
+    # the extraction pipeline finished with it. Using the last as a stand-in
+    # for the first is what turns a six-hour-old backfill into a "six-hour
+    # collection lag".
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # NULL means not processed under the new pipeline — which is every
+    # migrated row, because nothing recorded this before. Filled by the
+    # phase that owns extraction, not guessed here.
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which path produced this observation: userbot | public. NULL on
+    # migrated rows: the legacy schema recorded the path on the source, and
+    # the source's value today is not evidence about an old sighting.
+    acquisition_path: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class CoverageSnapshot(Base):
@@ -813,3 +966,596 @@ class Lead(Base):
     # new | contacted | converted | ignored
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- Phase 1: the target source/resource model -----------------------------
+#
+# Everything below exists to hold four separations the current schema
+# cannot express, and that the target product treats as load-bearing:
+#
+#     Source     ≠ Resource        a dialog is not a link
+#     Resource   ≠ Occurrence      one link seen 100 times is 1 + 100
+#     Identity   ≠ State           a source stays itself when it goes private
+#     Assignment ≠ Collection      being responsible is not having collected
+#
+# The tables are **additive**. No existing column changed meaning and no
+# reader was repointed, so the legacy path keeps working unchanged while
+# the new shape is filled in. ``Channel`` remains the physical Source table
+# and ``links`` remains the legacy link store; both are mapped, neither is
+# rewritten. Retiring them is a later phase's work, after the readers move.
+
+
+class SourceAccess(Base):
+    """Whether one path can actually read one source, and when we saw that.
+
+    Access is **not** a property of the source. The same channel can be
+    readable by account 3, invisible to account 7, and available over the
+    public path all at once, so the fact has to live on the relationship
+    rather than on either end of it.
+
+    A missing row means *never evaluated* — which is the honest state for
+    almost everything today, and the reason this table is not backfilled
+    with a row per source. Only pairs with real evidence get a row: a
+    source that has actually been collected by an account proves that
+    account could read it at that moment.
+
+    ``observed_at`` is when the access was last *seen* to hold, not when
+    the row was written. State and observation are different facts, and
+    conflating them is what turns "worked an hour ago" into "works now".
+    """
+
+    __tablename__ = "source_access"
+    __table_args__ = (
+        # One row per (source, path, account). ``COALESCE`` rather than a
+        # plain unique constraint because the public path has no account,
+        # and NULLs do not compare equal — so a bare constraint would let
+        # the same public path be recorded any number of times.
+        Index(
+            "uq_source_access_path",
+            "source_id",
+            "path_kind",
+            text("COALESCE(account_id, -1)"),
+            unique=True,
+        ),
+        Index("ix_source_access_workspace_state", "workspace_id", "state"),
+        CheckConstraint(
+            "state IN ('UNKNOWN', 'ACCESSIBLE', 'INACCESSIBLE', 'NEEDS_ACCESS', "
+            "'REQUEST_SENT', 'ACCESS_DENIED', 'BLOCKED')",
+            name="ck_source_access_state",
+        ),
+    )
+
+    #: Nothing has been measured. **Not** the same as INACCESSIBLE: one is
+    #: an absent measurement, the other is a failed one, and treating them
+    #: alike is how a source nobody has tried becomes a source that does
+    #: not work.
+    UNKNOWN = "UNKNOWN"
+    #: The system reached the source over this path, and has evidence.
+    ACCESSIBLE = "ACCESSIBLE"
+    #: The path was tried and did not work. Not the same as an invalid source.
+    INACCESSIBLE = "INACCESSIBLE"
+    #: A valid source that needs membership or authorisation nobody has yet.
+    NEEDS_ACCESS = "NEEDS_ACCESS"
+    #: A join or access request went out and has not been answered.
+    #: **Not** a grant. The distinction is the whole reason this state
+    #: exists: a request that is pending looks like progress and is not
+    #: access, and a system that conflates them reports coverage it does
+    #: not have.
+    REQUEST_SENT = "REQUEST_SENT"
+    #: The request was answered, and the answer was no.
+    ACCESS_DENIED = "ACCESS_DENIED"
+    #: Refused by policy or by Telegram in a way retrying will not fix.
+    BLOCKED = "BLOCKED"
+
+    STATES = (
+        UNKNOWN,
+        ACCESSIBLE,
+        INACCESSIBLE,
+        NEEDS_ACCESS,
+        REQUEST_SENT,
+        ACCESS_DENIED,
+        BLOCKED,
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # NULL for a path that needs no account (the public preview). Not a
+    # missing value — the absence *is* the statement.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("telegram_accounts.id"), nullable=True, index=True)
+    # "userbot" | "public" — the same vocabulary ``Channel.source`` uses,
+    # so one word does not mean two things in two places.
+    path_kind: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20))
+    # When the state above was last observed to be true. Nullable because
+    # a row can record a conclusion drawn without a fresh probe.
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SourceAssignment(Base):
+    """Which account is responsible for collecting a source, over time.
+
+    ``Channel.account_id`` answers "who collects this?" and nothing else:
+    it cannot say when the answer changed, why, or what the previous one
+    was, and it cannot distinguish *assigned* from *collected*. This table
+    is that column with a history and a reason attached; the column stays
+    as the live pointer until the readers move off it.
+
+    **At most one open assignment per source** is enforced in the database
+    by a partial unique index, not by convention. Two open assignments
+    mean two writers on one watermark, which is the failure this model
+    exists to make impossible rather than unlikely.
+
+    A closed row (``released_at`` set) is history and is never deleted.
+    """
+
+    __tablename__ = "source_assignments"
+    __table_args__ = (
+        # The Primary Collector invariant. Partial, so closed rows may
+        # accumulate freely — history is the point.
+        Index(
+            "uq_source_assignment_open",
+            "source_id",
+            unique=True,
+            sqlite_where=text("released_at IS NULL"),
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index("ix_source_assignments_account", "account_id", "released_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("telegram_accounts.id"), index=True)
+    # Nullable on purpose, and the nullability carries meaning: rows
+    # migrated from the scalar ``Channel.account_id`` have no assignment
+    # time because that column never recorded one. Inventing a timestamp
+    # here would be inventing history.
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Free text, written by whatever made the decision. Not an enum: the
+    # set of real reasons is not known yet, and freezing a guess into a
+    # constraint is worse than reading a sentence.
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SourceEvent(Base):
+    """One recorded transition in a source's life.
+
+    The current state of a source answers "what is it now"; this answers
+    "what happened to it", which is the question that survives the next
+    change. Public → Private → Needs Access → Collecting is a history, and
+    a status column can only ever hold its last frame.
+
+    **Deliberately not backfilled.** Every existing row would need a
+    previous state, a time and a reason that nothing in the current schema
+    records, so a backfill could only fabricate them. An empty table is a
+    true statement about what the system knows.
+    """
+
+    __tablename__ = "source_events"
+    __table_args__ = (Index("ix_source_events_source_time", "source_id", "occurred_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # e.g. "access_state", "acquisition_method", "assignment", "identity".
+    # Which dimension moved, so the history of one dimension can be read
+    # without filtering on the shape of the values.
+    dimension: Mapped[str] = mapped_column(String(40))
+    previous_state: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    new_state: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Who or what caused it: a user id, a script name, a worker.
+    actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+
+
+class Evidence(Base):
+    """Why the system believed something, kept apart from who did what.
+
+    Audit (``AuditLog``) records administrative acts by people. Evidence
+    records observations by the system: what it saw, over which path, at
+    what time. Using one for the other is how "the operator paused it"
+    and "the account could not read it" end up indistinguishable.
+
+    Scope is deliberately narrow in this phase. Rows are written only
+    where an observation genuinely exists — today that is the access
+    backfill. Decision-level evidence for acquisition, classification and
+    recovery arrives with the phases that make those decisions; claiming
+    it now would be claiming coverage that does not exist.
+    """
+
+    __tablename__ = "evidence"
+    __table_args__ = (Index("ix_evidence_workspace_kind", "workspace_id", "kind"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # What sort of observation this is, e.g. "access_probe",
+    # "collection_history", "identity_resolution".
+    kind: Mapped[str] = mapped_column(String(40))
+    # When the thing was observed — not when the row was written.
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # One line a human can read without decoding anything.
+    summary: Mapped[str] = mapped_column(String(300))
+    # Anything structured the writer wants to keep, as JSON text. Not a
+    # JSON column: SQLite and Postgres disagree about those, and nothing
+    # queries inside this value.
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Resource(Base):
+    """One link, once, however many times it has been seen.
+
+    ``links`` is unique per ``(channel_id, url_hash)``, which makes the
+    same URL in three channels three rows and the same URL twice in one
+    channel *nothing at all* — the second insert is rejected as a
+    duplicate and no trace of the repeat survives. Both halves are wrong
+    for the target: the first inflates the link count, the second throws
+    away exactly the spread data that makes a link interesting.
+
+    So identity moves here and appearances move to ``Occurrence``.
+
+    **The canonical URL string is not stored.** ``fingerprint`` is
+    ``sha256(canonical_url(url))`` — the same value ``Link.url_hash``
+    already carries — and ``representative_url`` is one raw spelling that
+    was actually observed. Storing a canonical *string* as well would
+    create a second value that can disagree with the function that
+    derives it, and the function is the definition.
+    """
+
+    __tablename__ = "resources"
+    __table_args__ = (
+        # The identity invariant: one fingerprint, one resource, per
+        # workspace. This is what makes "the same link from four sources"
+        # one row instead of four.
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_resource_identity"),
+        Index("ix_resources_workspace_platform", "workspace_id", "platform"),
+        Index("ix_resources_workspace_last_seen", "workspace_id", "last_seen_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # sha256 of the canonicalised URL. 64 hex characters, fixed width, so
+    # it can carry a btree unique index that raw URL text cannot.
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    # A raw URL exactly as some message wrote it. Never rewritten — the
+    # project's first invariant — and never treated as the identity.
+    representative_url: Mapped[str] = mapped_column(Text)
+    # Destination platform: telegram | whatsapp | ... Derived from the
+    # host by app.classifier.platform, which is deterministic and needs no
+    # network. Copied from the legacy row at migration time rather than
+    # recomputed, so the two cannot silently disagree.
+    platform: Mapped[str] = mapped_column(String(20), default="web", server_default="web")
+    # Telegram/WhatsApp link type (channel, group, invite, contact, ...).
+    # NULL means *not yet resolved*, which is the truth for every migrated
+    # row: nothing in the legacy schema recorded it. Filled by the phase
+    # that builds link typing, not guessed here.
+    link_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Occurrence(Base):
+    """One appearance of one resource, in one source, at one time.
+
+    This is the row that can repeat: same resource, different message;
+    same message, different extraction path. Its provenance columns are
+    the whole point — a resource with no occurrences is a URL with no
+    story, and "where did this come from" has to be answerable from the
+    row itself rather than by joining back through a guess.
+
+    ``legacy_link_id`` is unique and points at the ``links`` row this was
+    migrated from. It is what makes the migration reversible and
+    verifiable: every legacy link has exactly one occurrence, and that can
+    be asserted rather than assumed.
+    """
+
+    __tablename__ = "occurrences"
+    __table_args__ = (
+        # One occurrence per (resource, source, message, extraction path).
+        # Restricted to real Telegram messages: manual and imported rows
+        # all carry message id 0, so including them would collapse every
+        # hand-added link from one source into a single occurrence.
+        Index(
+            "uq_occurrence_identity",
+            "resource_id",
+            "source_id",
+            "tg_message_id",
+            "extraction_method",
+            unique=True,
+            sqlite_where=text("tg_message_id > 0"),
+            postgresql_where=text("tg_message_id > 0"),
+        ),
+        # The migration's own guarantee: no legacy link becomes two
+        # occurrences, on a re-run or otherwise.
+        Index("uq_occurrence_legacy_link", "legacy_link_id", unique=True),
+        Index("ix_occurrences_source_observed", "source_id", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"), index=True)
+    # Not index=True: ``ix_occurrences_source_observed`` below leads with
+    # this column, and Postgres uses a composite index for its leading
+    # column. A second index here would be paid for on every write and
+    # read by nothing.
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    # The observation this link was extracted from, when one exists.
+    # NULL for links older than the ``messages`` table and for every
+    # manual or imported row, which have no Telegram message behind them.
+    observation_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True, index=True)
+    # Kept alongside observation_id rather than only through it: the
+    # legacy rows carry a message id with no ``messages`` row to point at,
+    # and losing that number would lose the only link back to Telegram.
+    tg_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    # How the URL was found: text | hyperlink | button. Same vocabulary as
+    # ``Link.source_type``, which is where migrated values come from.
+    extraction_method: Mapped[str] = mapped_column(String(20), default="text")
+    # When Telegram says the message was posted, when the system saw it.
+    # Separate columns because they answer different questions and one is
+    # routinely absent.
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which acquisition path produced this sighting: userbot | public.
+    # NULL on migrated rows — the legacy schema recorded it on the source,
+    # not on the sighting, and the source's value today is not evidence
+    # about a sighting from six months ago.
+    acquisition_path: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    legacy_link_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- keeping identity_key filled, without asking anyone to remember ------
+#
+# Channels are created from six places: manual entry, two importers, the
+# demo seeder, dialog discovery and the live listener. Setting the column
+# at each of them is six chances to forget, and a forgotten one produces a
+# row whose identity is silently NULL — invisible until the day it matters.
+#
+# A mapper-level hook is the one place all six already go through.
+
+
+def _fill_identity_key(_mapper, _connection, target: Channel) -> None:
+    """Derive identity_key from whatever spelling tg_channel_id holds."""
+    target.identity_key = source_identity_key(target.tg_channel_id)
+
+
+event.listen(Channel, "before_insert", _fill_identity_key)
+event.listen(Channel, "before_update", _fill_identity_key)
+
+
+class JoinRequest(Base):
+    """One attempt to get an account access to a private source.
+
+    Separate from ``source_access`` because they answer different
+    questions. Access is a *state*: can this account read this source now.
+    A join request is a *process*: it is tried, it can be retried, it can
+    sit unanswered for days, and it ends in an outcome that then updates
+    the access state. Folding the process into the state is how
+    ``REQUEST_SENT`` turns into ``ACCESSIBLE`` without anybody verifying
+    anything.
+
+    **Nothing here joins anything.** This phase builds the record and its
+    rules; performing the access attempt belongs to the runtime, and it is
+    gated on authorisation rather than run because a row exists. A request
+    is never marked GRANTED by the act of sending it — only by a later
+    observation that the account can actually read the source.
+    """
+
+    __tablename__ = "join_requests"
+    __table_args__ = (
+        # One open request per (source, account). Two would mean two
+        # attempts racing at Telegram's rate limits on behalf of the same
+        # account, which is the thing most likely to get it restricted.
+        Index(
+            "uq_join_request_open",
+            "source_id",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT')"),
+            postgresql_where=text("status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT')"),
+        ),
+        Index("ix_join_requests_due", "workspace_id", "status", "next_action_at"),
+        CheckConstraint(
+            "status IN ('READY', 'ATTEMPTING', 'REQUEST_SENT', 'GRANTED', 'DENIED', "
+            "'FAILED', 'MANUAL_INTERVENTION', 'BLOCKED')",
+            name="ck_join_request_status",
+        ),
+    )
+
+    #: Queued, nothing attempted yet.
+    READY = "READY"
+    #: An attempt is in flight.
+    ATTEMPTING = "ATTEMPTING"
+    #: A request was sent and is unanswered. Not access.
+    REQUEST_SENT = "REQUEST_SENT"
+    #: Verified: the account can now read the source.
+    GRANTED = "GRANTED"
+    #: Answered, and refused.
+    DENIED = "DENIED"
+    #: The attempt failed for a reason that may not repeat.
+    FAILED = "FAILED"
+    #: A person has to do something the system will not do on its own.
+    MANUAL_INTERVENTION = "MANUAL_INTERVENTION"
+    #: Policy or Telegram forbids it; retrying is not the answer.
+    BLOCKED = "BLOCKED"
+
+    #: The statuses that occupy the one-open-request slot.
+    OPEN_STATUSES = (READY, ATTEMPTING, REQUEST_SENT)
+    STATUSES = (READY, ATTEMPTING, REQUEST_SENT, GRANTED, DENIED, FAILED, MANUAL_INTERVENTION, BLOCKED)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("telegram_accounts.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default=READY, server_default=READY)
+    # Operational ordering only. Higher runs first; it says nothing about
+    # how good the source is.
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When this is worth touching again. NULL means "not on a schedule" —
+    # a terminal row, or one waiting on a person.
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # What actually happened, in the words of whatever reported it.
+    result: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- Phase 3: the collection runtime's own records -------------------------
+
+
+class SourceProgress(Base):
+    """How far collection has got with one source, on one track.
+
+    ``Channel.last_message_id`` is a single number, and a single number
+    cannot carry two readers. A source being backfilled from January while
+    live updates arrive today has two independent frontiers, and forcing
+    them through one scalar produces exactly the corruption the target
+    model forbids: the backfill's cursor lands in the live watermark, the
+    live reader resumes from January, and every message in between is
+    skipped by both — permanently, and invisibly, because no counter
+    disagrees.
+
+    So progress is per ``(source, track)``. The live track's watermark is
+    mirrored back to ``Channel.last_message_id`` for the readers that have
+    not moved yet; the mirror is written only by ``app.progress``.
+
+    Three times, because they answer three questions:
+
+    - ``last_attempt_at``   when did anything last try
+    - ``last_progress_at``  when did anything last *succeed* at moving
+    - ``current_watermark`` where is it safe to resume from
+
+    An attempt that fails updates the first and neither of the others,
+    which is what makes "tried recently and got nowhere" a state you can
+    see rather than infer.
+    """
+
+    __tablename__ = "source_progress"
+    __table_args__ = (
+        UniqueConstraint("source_id", "track", name="uq_source_progress_track"),
+        Index("ix_source_progress_workspace_track", "workspace_id", "track"),
+        CheckConstraint("track IN ('LIVE', 'HISTORICAL')", name="ck_source_progress_track"),
+        CheckConstraint(
+            "coverage_status IN ('NO_DETECTED_GAP', 'DETECTED_GAP', 'UNKNOWN_COVERAGE')",
+            name="ck_source_progress_coverage",
+        ),
+    )
+
+    #: New messages as they arrive.
+    LIVE = "LIVE"
+    #: A requested window in the past.
+    HISTORICAL = "HISTORICAL"
+    TRACKS = (LIVE, HISTORICAL)
+
+    #: Nothing the system can detect is missing. **Not** a claim that
+    #: nothing is missing — only that no gap was detected.
+    NO_DETECTED_GAP = "NO_DETECTED_GAP"
+    #: A specific range is known to have been skipped.
+    DETECTED_GAP = "DETECTED_GAP"
+    #: The system cannot say either way, which is the honest default.
+    UNKNOWN_COVERAGE = "UNKNOWN_COVERAGE"
+    COVERAGE_STATES = (NO_DETECTED_GAP, DETECTED_GAP, UNKNOWN_COVERAGE)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    track: Mapped[str] = mapped_column(String(12))
+    # The resume point. Monotonic, enforced by a trigger rather than by
+    # whoever remembers: a watermark that can go backwards is a watermark
+    # that can skip messages nobody will ever read again.
+    current_watermark: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The run that last moved this forward, so a watermark can be traced to
+    # the work that produced it.
+    last_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(
+        String(20), default=UNKNOWN_COVERAGE, server_default=UNKNOWN_COVERAGE
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CollectionRun(Base):
+    """One attempt to collect one source, by one path, over one range.
+
+    Deferred out of phase 1 on the grounds that its columns follow the
+    runtime's shape and inventing them early would be guessing. The
+    runtime exists now, so this does too.
+
+    A run is the unit that makes collection auditable: it names the
+    source, the account, the acquisition path and the range, and it
+    records what moved and what failed. ``Assignment`` says who is
+    responsible; a run says what responsibility actually produced.
+
+    **A run is not success.** ``COMPLETED`` means the requested scope was
+    examined and progress was persisted safely — not that a connection
+    opened, not that a worker exited cleanly, and not that zero rows came
+    back. A run that found nothing new completes; a run whose connection
+    succeeded and whose scope was never read does not.
+    """
+
+    __tablename__ = "collection_runs"
+    __table_args__ = (
+        Index("ix_collection_runs_source_started", "source_id", "started_at"),
+        Index("ix_collection_runs_workspace_state", "workspace_id", "state"),
+        # Finding runs abandoned by a crashed worker, which is what startup
+        # recovery sweeps for.
+        Index("ix_collection_runs_live_heartbeat", "state", "heartbeat_at"),
+        CheckConstraint(
+            "state IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RECOVERING')",
+            name="ck_collection_run_state",
+        ),
+        CheckConstraint("mode IN ('LIVE', 'HISTORICAL')", name="ck_collection_run_mode"),
+    )
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    #: Picked up by startup recovery after a crash; not yet resolved.
+    RECOVERING = "RECOVERING"
+    STATES = (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, RECOVERING)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # NULL for the public path, which needs no account. Not missing data —
+    # the absence is the statement.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("telegram_accounts.id"), nullable=True, index=True)
+    acquisition_path: Mapped[str] = mapped_column(String(20), default="userbot")
+    mode: Mapped[str] = mapped_column(String(12))
+    state: Mapped[str] = mapped_column(String(12), default=PENDING, server_default=PENDING)
+    # The requested window, for a historical run. NULL on a live run, whose
+    # range is "whatever arrived".
+    range_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    range_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    watermark_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    watermark_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    messages_seen: Mapped[int] = mapped_column(Integer, default=0)
+    links_stored: Mapped[int] = mapped_column(Integer, default=0)
+    # One of app.collection.failures.FailureKind. NULL while the run has
+    # not failed; never a bare exception class name.
+    failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Refreshed while the run is alive. A RUNNING row whose heartbeat has
+    # stopped is the signature of a worker that died without saying so,
+    # and it is what startup recovery looks for.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)

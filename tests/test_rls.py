@@ -227,3 +227,29 @@ def _seed_channel(db: Session, workspace_id: int, tg_id: str) -> None:
         ),
         {"ws": workspace_id, "tg": tg_id},
     )
+
+
+def test_every_protected_table_still_has_force_after_all_migrations(db: Session):
+    """A migration that lifts FORCE and forgets to restore it is silent.
+
+    Migrations legitimately lift FORCE to do their own work — a migration
+    is a schema operation and carries no tenant, so a forced table refuses
+    its writes and returns nothing to its reads. Three migrations in this
+    project do it (0025, 0026, 0027). The failure mode is not the lifting;
+    it is a restore that does not happen, which leaves every workspace's
+    rows readable by every other and looks exactly like success.
+
+    So this asserts the end state of the whole chain rather than trusting
+    each migration's own check.
+    """
+    missing = []
+    for name in PROTECTED_TABLES:
+        row = db.execute(
+            text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = :n"),
+            {"n": name},
+        ).one_or_none()
+        assert row is not None, f"{name} is listed as protected but does not exist"
+        enabled, forced = row
+        if not (enabled and forced):
+            missing.append(f"{name} (enabled={enabled}, forced={forced})")
+    assert not missing, "protected tables left without enforced RLS: " + ", ".join(missing)

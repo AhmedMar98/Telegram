@@ -46,6 +46,11 @@ def _make_engine(url: str):
         engine_kwargs["pool_size"] = settings.db_pool_size
         engine_kwargs["max_overflow"] = settings.db_max_overflow
         engine_kwargs["pool_timeout"] = settings.db_pool_timeout_seconds
+        if settings.db_disable_prepared_statements:
+            # ``None`` is psycopg 3's "never prepare", not "use the
+            # default". See app/config.py for the one deployment shape
+            # that needs it.
+            connect_args["prepare_threshold"] = None
 
     return create_engine(url, connect_args=connect_args, **engine_kwargs)
 

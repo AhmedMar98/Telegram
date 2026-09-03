@@ -21,6 +21,65 @@ from app.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
+#: Which state changes are allowed, and from where. Absent pairs are not
+#: forbidden by the database — they are what "unexpected" looks like, and
+#: ``set_state`` logs rather than raises so a real transition is never lost
+#: to a table that had not anticipated it.
+#:
+#: ACTIVE is reachable from every other state because every other state is
+#: recoverable: a person re-enables, re-authorises, or waits out a limit.
+EXPECTED_TRANSITIONS: dict[str, frozenset[str]] = {
+    TelegramAccount.ACTIVE: frozenset(
+        {
+            TelegramAccount.INACTIVE,
+            TelegramAccount.DISABLED,
+            TelegramAccount.AUTH_REQUIRED,
+            TelegramAccount.UNAVAILABLE,
+            TelegramAccount.RATE_LIMITED,
+            TelegramAccount.NEEDS_REVIEW,
+        }
+    ),
+    TelegramAccount.AUTH_REQUIRED: frozenset({TelegramAccount.AUTH_FAILED, TelegramAccount.ACTIVE}),
+}
+
+
+def set_state(
+    db: Session,
+    account: TelegramAccount,
+    state: str,
+    *,
+    reason: str | None = None,
+    commit: bool = False,
+) -> None:
+    """Move an account to ``state``, keeping ``is_active`` in step.
+
+    The two columns are bound by a database CHECK — exactly ACTIVE means
+    active — so they are written together here rather than left to every
+    call site to remember. Setting one without the other is refused by the
+    database, which is the point: there is no way to end up with an
+    account that is ACTIVE and not active, or disabled and still collected
+    from.
+    """
+    if state not in TelegramAccount.STATES:
+        raise ValueError(f"unknown account state: {state!r}")
+
+    previous = account.state
+    if previous != state:
+        allowed = EXPECTED_TRANSITIONS.get(previous)
+        if allowed is not None and state not in allowed:
+            logger.info("account %s: unexpected transition %s -> %s", account.id, previous, state)
+        account.state_changed_at = utcnow()
+
+    account.state = state
+    account.is_active = state == TelegramAccount.ACTIVE
+    account.state_reason = reason
+    # Kept in step with the state it explains. The dashboard reads this to
+    # tell an automatic disable from one a person chose.
+    account.disabled_reason = reason if state == TelegramAccount.DISABLED else None
+    if commit:
+        db.commit()
+
+
 # Consecutive failed runs before an account is disabled automatically.
 # Three is a judgement, not a measurement: with the hourly schedule it is
 # roughly three hours of consistent failure, which outlasts a transient
@@ -50,12 +109,13 @@ def record_failure(db: Session, account: TelegramAccount, error: str) -> bool:
 
     disabled = False
     if account.consecutive_failures >= MAX_CONSECUTIVE_FAILURES and account.is_active:
-        account.is_active = False
-        # Recorded separately from is_active so the dashboard can tell an
-        # automatic disable from one a human chose. They need different
-        # responses, and a single boolean cannot say which happened.
-        account.disabled_reason = (
-            f"disabled automatically after {account.consecutive_failures} consecutive failures: {error[:150]}"
+        set_state(
+            db,
+            account,
+            TelegramAccount.DISABLED,
+            reason=(
+                f"disabled automatically after {account.consecutive_failures} consecutive failures: {error[:150]}"
+            ),
         )
         disabled = True
         logger.error(
@@ -77,8 +137,7 @@ def reactivate(db: Session, account: TelegramAccount) -> None:
     value would disable the account again on its next single failure,
     which is not what re-enabling means.
     """
-    account.is_active = True
-    account.disabled_reason = None
+    set_state(db, account, TelegramAccount.ACTIVE, reason=None)
     account.consecutive_failures = 0
     account.last_error = None
     db.commit()

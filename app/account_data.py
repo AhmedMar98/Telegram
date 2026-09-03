@@ -31,7 +31,10 @@ from app.models import (
     BotLinkCode,
     Channel,
     ClassificationFeedback,
+    CollectionRun,
     CoverageSnapshot,
+    Evidence,
+    JoinRequest,
     KeywordRule,
     Lead,
     Link,
@@ -39,7 +42,13 @@ from app.models import (
     Message,
     Notification,
     NotificationPreference,
+    Occurrence,
+    Resource,
     SavedSearch,
+    SourceAccess,
+    SourceAssignment,
+    SourceEvent,
+    SourceProgress,
     TelegramAccount,
     User,
     WorkflowRun,
@@ -67,11 +76,34 @@ WORKSPACE_TABLES = (
     NotificationPreference,
     ClassificationFeedback,
     SavedSearch,
+    # The target source model, ordered by what points at what. An
+    # occurrence points at a resource, a message and a channel, so it goes
+    # before all three; a resource points at nothing but the workspace, so
+    # it only has to precede that.
+    Occurrence,
     Link,
-    # After Link and before Channel: a link points at its message, and a
-    # message points at its channel, so this is the only order in which no
-    # step leaves a dangling reference on an engine that enforces them.
+    Resource,
+    # After Link and Occurrence, before Channel: a link points at its
+    # message, an occurrence points at both, and a message points at its
+    # channel, so this is the only order in which no step leaves a dangling
+    # reference on an engine that enforces them.
     Message,
+    # Access, assignment and event rows all point at a channel, an account
+    # or an evidence row, so they come before every one of those. Evidence
+    # is last of the four for the same reason: the other three cite it.
+    SourceAccess,
+    SourceAssignment,
+    SourceEvent,
+    # After the three above and before Evidence: a join request points at a
+    # channel, an account and an evidence row, so it precedes all three.
+    JoinRequest,
+    # The collection runtime's own rows. A run points at a channel, an
+    # account and an evidence row; progress points at a channel. Both
+    # therefore precede all three, and precede Evidence for the same
+    # reason the four above do.
+    CollectionRun,
+    SourceProgress,
+    Evidence,
     AuditLog,
     BotLink,
     BotLinkCode,

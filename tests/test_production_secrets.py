@@ -221,3 +221,65 @@ def test_the_account_ceiling_is_ten():
     so the number is the whole enforcement — there is nothing else to test.
     """
     assert Settings().max_accounts_per_workspace == 10
+
+
+# === The guard that would have caught scripts/run_runtime.py =================
+
+
+def _script_calls(path) -> set[str]:
+    """Every function name called at any depth in one script."""
+    import ast
+
+    tree = ast.parse(path.read_text())
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+    return names
+
+
+def test_every_script_that_touches_a_session_string_refuses_published_defaults():
+    """Enumerated from the code, not from a list somebody must remember.
+
+    ``FIELD_ENCRYPTION_KEY`` has a working default published in this
+    repository, so a job that encrypts or decrypts a Telegram session
+    string under it is storing a bearer credential in plaintext as far as
+    anyone holding the database is concerned.
+
+    ``scripts/collect.py`` and ``scripts/add_account.py`` have refused to
+    run on that default since they were written. ``scripts/run_runtime.py``
+    was added in phase 3 and did not — nothing caught it, because the rule
+    lived in two call sites and in prose. It lives here now: the check is
+    derived from which scripts actually call the crypto helpers, so the
+    next entrypoint that touches one is covered on the day it is written.
+    """
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    offenders = []
+    for path in sorted(scripts.glob("*.py")):
+        calls = _script_calls(path)
+        if not calls & {"encrypt_field", "decrypt_field"}:
+            continue
+        if "require_real_secrets" not in calls:
+            offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} encrypt or decrypt a Telegram session string without calling "
+        "require_real_secrets(), so they would run happily under the published "
+        "FIELD_ENCRYPTION_KEY and write credentials that are effectively plaintext"
+    )
+
+
+def test_the_guard_above_is_actually_looking_at_something():
+    """Guards the guard: an empty sweep would pass over zero scripts."""
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    touching = [
+        p.name for p in sorted(scripts.glob("*.py")) if _script_calls(p) & {"encrypt_field", "decrypt_field"}
+    ]
+    assert len(touching) >= 3, f"expected the credential-touching scripts, found {touching}"
