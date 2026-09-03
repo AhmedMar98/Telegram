@@ -27,8 +27,16 @@ jobs:
           BASE: ${{ secrets.APP_BASE_URL }}
         run: |
           if [ -z "$BASE" ]; then
-            echo "APP_BASE_URL not configured — nothing to probe."
-            exit 0
+            # Not a skip. This job exists to answer "is the deployment
+            # serving?", and a green tick that answered nothing is worse
+            # than no job at all: it is the reason a broken deployment can
+            # sit behind a wall of passing smoke tests for weeks. If this
+            # repository has no deployment to probe, disable the workflow
+            # deliberately rather than letting it report health it never
+            # measured.
+            echo "APP_BASE_URL is not configured, so nothing was probed." >&2
+            echo "This is a failure, not a pass: set the secret, or disable this workflow." >&2
+            exit 1
           fi
 
           fail=0

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -297,6 +297,35 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:
         return normalize_database_url(value)
+
+    # The same trap as the one below, arriving through a different door.
+    # A GitHub Actions *variable* that nobody has set does not vanish from
+    # the environment either: `${{ vars.COLLECTOR_PACE_MIN_SECONDS }}`
+    # expands to an empty string, and pydantic reads an empty string as a
+    # value that was supplied — so `float("")` fails and the whole process
+    # dies at import, before it has connected to anything. That is what the
+    # scheduled collector had been doing on every run: four ValidationErrors
+    # and an exit, from four settings whose entire purpose is to be optional.
+    #
+    # Blank therefore means unset, and unset means the default declared
+    # above. Deliberately only these four: a blank *credential* must keep
+    # failing loudly rather than falling back to something that looks like
+    # it works (an empty DATABASE_URL is a broken deployment, not a request
+    # for the local SQLite default), and `collector_scope` needs nothing
+    # here because `parse_scope` already reads blank as the default scope.
+    @field_validator(
+        "collector_auto_discover",
+        "collector_pace_min_seconds",
+        "collector_pace_max_seconds",
+        "collector_pace_budget_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _blank_tuning_value_means_unset(cls, value: object, info: ValidationInfo) -> object:
+        field = info.field_name
+        if field is not None and isinstance(value, str) and not value.strip():
+            return cls.model_fields[field].default
+        return value
 
     @field_validator("field_encryption_key")
     @classmethod
