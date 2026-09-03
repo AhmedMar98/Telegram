@@ -90,6 +90,25 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout_seconds: int = 5
 
+    # Off by default, and only ever turned on for one reason: a connection
+    # pooler running in **transaction mode**, which hands a different
+    # backend to each transaction and therefore cannot honour a prepared
+    # statement created on a previous one. psycopg 3 prepares a statement
+    # automatically once it has seen it a few times, so the failure does
+    # not appear on the first query — it appears later, under load, as
+    # "prepared statement does not exist", which reads like anything but a
+    # configuration choice.
+    #
+    # Measured rather than assumed: with the default, seven executions of
+    # one query leave 1 row in pg_prepared_statements; with this set, 0.
+    #
+    # Prefer a session-mode endpoint or a direct connection for the
+    # persistent runtime, which holds long-lived connections and gains
+    # nothing from transaction pooling. This exists so that a deployment
+    # which has no such endpoint is still correct rather than subtly
+    # broken.
+    db_disable_prepared_statements: bool = False
+
     # --- Auth -------------------------------------------------------------
     # An invite code is required to self-register because the deployed
     # instance is reachable on a public Render URL even though the product
