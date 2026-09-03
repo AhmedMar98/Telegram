@@ -682,15 +682,32 @@ def test_the_live_path_stores_without_advancing_the_watermark(source):
 
 
 def test_a_full_live_queue_drops_and_the_sweep_picks_it_up_anyway(source):
-    """Backpressure costs latency, not data — because of the rule above.
+    """Backpressure costs latency, not data — the whole chain, in order.
 
-    Sabotage: let the live path advance the watermark, and the dropped
-    message below is skipped by the sweep too. That is the failure this
-    design is shaped to make impossible.
+        queue full -> message dropped -> the one that got through is stored
+        -> NO progress recorded -> later sweep re-reads from the watermark
+        -> both messages persisted, once each
+
+    The middle link is the one that makes the rest true, and it is the one
+    worth stating: had the live path advanced the watermark to 1 after
+    storing message 1, the sweep would resume at 1 and message 2 — the
+    dropped one — would be read by nobody, permanently.
+
+    Sabotage: let ``_store_live`` advance progress and the watermark
+    assertion fails; let it advance progress *and* remove that assertion
+    and the final set comes back as {1} instead of {1, 2}.
     """
     workspace_id, account_id, channel_id = source
     reader = FakeReader({"src": [msg(1), msg(2)]})
     worker = build_worker(workspace_id, account_id, reader, queue_size=1)
+
+    # A cycle first, so the routing table exists and the live handler has
+    # somewhere to put a message. It reads nothing: the reader's messages
+    # are only delivered live in this test until the second cycle.
+    empty = FakeReader({"src": []})
+    routing_worker = build_worker(workspace_id, account_id, empty, queue_size=1)
+    asyncio.run(routing_worker.cycle())
+    worker._routes = dict(routing_worker._routes)
 
     worker._on_live_message("-100555", msg(1))
     worker._on_live_message("-100555", msg(2))  # queue is full
@@ -698,10 +715,25 @@ def test_a_full_live_queue_drops_and_the_sweep_picks_it_up_anyway(source):
     assert worker.metrics.live_dropped == 1
     assert worker.metrics.live_delivered == 2
 
-    asyncio.run(worker.cycle())
+    async def drain():
+        drainer = asyncio.create_task(worker.drain_live())
+        await worker._queue.join()
+        drainer.cancel()
+
+    asyncio.run(drain())
+
     with SessionLocal() as db:
-        seen = {r.tg_message_id for r in db.query(Message).filter(Message.channel_id == channel_id)}
-    assert seen == {1, 2}, "the dropped message was read by the sweep"
+        live_stored = {r.tg_message_id for r in db.query(Message).filter(Message.channel_id == channel_id)}
+    assert live_stored == {1}, "the message that got through is stored at once"
+    assert watermark(channel_id) == 0, "and no progress was recorded for it"
+
+    asyncio.run(worker.cycle())
+
+    with SessionLocal() as db:
+        rows = [r.tg_message_id for r in db.query(Message).filter(Message.channel_id == channel_id)]
+    assert sorted(rows) == [1, 2], "the dropped message was read by the sweep"
+    assert len(rows) == len(set(rows)), "and the re-read of message 1 did not duplicate it"
+    assert watermark(channel_id) == 2
 
 
 def test_a_live_message_for_an_unassigned_source_is_counted_not_stored(source):
@@ -751,15 +783,23 @@ def test_run_connects_sweeps_and_disconnects_on_stop(source):
 
     async def scenario():
         task = asyncio.create_task(worker.run())
-        for _ in range(200):
+        # Waits on the worker's own counter, not on a database read. The
+        # suite's in-memory SQLite is a StaticPool — one connection shared
+        # with the worker's storage thread — so polling a table from this
+        # loop contends with the writes it is waiting for, and the test
+        # fails roughly one run in three for a reason that exists nowhere
+        # but in the test. The watermark is asserted below, after the
+        # worker has stopped and nothing else is touching the connection.
+        for _ in range(500):
             await asyncio.sleep(0.01)
-            if watermark(channel_id) == 1:
+            if worker.metrics.progress_advanced:
                 break
         worker.stop()
-        await asyncio.wait_for(task, timeout=5)
+        await asyncio.wait_for(task, timeout=10)
 
     asyncio.run(scenario())
 
+    assert worker.metrics.progress_advanced == 1, "the sweep never completed a run"
     assert watermark(channel_id) == 1
     assert reader.connected is False, "shutdown always disconnects"
     assert worker.metrics.reader_connects == 1
@@ -1145,3 +1185,77 @@ def test_merging_lag_adds_totals_and_keeps_the_worst_maximum():
     assert total.live_lag_samples == 2
     assert total.live_lag_mean_seconds == 6.0
     assert total.live_lag_max_seconds == 10.0
+
+
+# =========================================================================
+# 12. Two recovery scenarios the contract names by hand
+# =========================================================================
+
+
+def test_a_historical_run_interrupted_by_shutdown_keeps_what_it_read(source):
+    """Interrupted backfill: cancelled, not completed, and resumable.
+
+    The live track has the same test above; this one exists because a
+    backfill is where an interruption is *likely* — the windows are long —
+    and because a shared code path is an argument, not evidence.
+    """
+    workspace_id, account_id, channel_id = source
+
+    worker = None
+
+    def stop_after_first(_ref, index):
+        if index == 1:
+            worker.stop()
+
+    reader = FakeReader({"src": [msg(n) for n in range(1, 10)]}, before_yield=stop_after_first)
+    worker = build_worker(workspace_id, account_id, reader, flush_every=1)
+
+    asyncio.run(worker.backfill(channel_id, from_id=0, to_id=9))
+
+    run = latest_run(channel_id)
+    assert run.state == CollectionRun.CANCELLED
+    assert run.mode == SourceProgress.HISTORICAL
+    assert watermark(channel_id, SourceProgress.HISTORICAL) == 1
+    # -1 means "no LIVE progress row exists at all": a backfill does not
+    # so much as create the live track's row, let alone move it.
+    assert watermark(channel_id, SourceProgress.LIVE) == -1, "the live track is untouched"
+
+    # A fresh worker resumes the window rather than restarting it.
+    resumed = build_worker(workspace_id, account_id, FakeReader({"src": [msg(n) for n in range(1, 10)]}))
+    asyncio.run(resumed.backfill(channel_id, from_id=0, to_id=9))
+    assert watermark(channel_id, SourceProgress.HISTORICAL) == 9
+
+
+def test_a_database_failure_mid_run_is_classified_and_bounded(source, monkeypatch):
+    """A transient database fault is not a mystery and not an infinite loop.
+
+    Injected at the storage boundary rather than at the reader, because
+    that is where a database fault actually lands during a run: messages
+    have been read and the write is what fails.
+    """
+    from app.runtime import worker as worker_module
+
+    workspace_id, account_id, channel_id = source
+
+    class OperationalError(Exception):
+        pass
+
+    def _explode(*_args, **_kwargs):
+        raise OperationalError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(worker_module, "_ingest", _explode)
+
+    worker = build_worker(workspace_id, account_id, FakeReader({"src": [msg(1), msg(2)]}), flush_every=1)
+    report = asyncio.run(worker.cycle())
+
+    assert report.runs_failed == 1
+    run = latest_run(channel_id)
+    assert run.state == CollectionRun.FAILED
+    assert run.failure_kind == FailureKind.DATABASE_FAILURE.value
+    assert watermark(channel_id) == 0, "a failed write produced no progress"
+
+    policy = failures.policy_for(FailureKind.DATABASE_FAILURE)
+    assert policy.retry_class is RetryClass.TRANSIENT
+    assert policy.delay_for(policy.max_attempts + 1) is None, "bounded, not endless"
+    deferral = worker.deferral_for(channel_id)
+    assert deferral is not None and deferral.attempts == 1

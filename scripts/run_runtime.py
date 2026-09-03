@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import get_settings, require_real_secrets  # noqa: E402
 from app.crypto import decrypt_field  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import TelegramAccount  # noqa: E402
@@ -102,6 +103,23 @@ def build_reader(account: TelegramAccount) -> SourceReader:
 
 async def _main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    # Before anything connects. This process decrypts a Telegram session
+    # string for every account it runs, and FIELD_ENCRYPTION_KEY carries a
+    # working default that is published in this repository — so under that
+    # default the rows it reads are plaintext to anyone holding the
+    # database, and the encryption is decoration. scripts/collect.py and
+    # scripts/add_account.py have refused to run on the published default
+    # since they were written; this entrypoint was added in phase 3 and
+    # was missed, which is what tests/test_production_secrets.py now
+    # checks for every script that touches the credential rather than for
+    # a list somebody has to remember to extend.
+    #
+    # SECRET_KEY is not checked: this process serves no HTTP and signs no
+    # cookie, so failing on it would stop the runtime for an irrelevant
+    # reason.
+    require_real_secrets(get_settings(), names=("FIELD_ENCRYPTION_KEY",), job="runtime")
+
     raw_workspace = os.environ.get("COLLECTOR_WORKSPACE_ID")
     if not raw_workspace:
         logger.error("COLLECTOR_WORKSPACE_ID is not set; refusing to guess which workspace to collect")
