@@ -70,6 +70,26 @@ jobs:
           sudo apt-get install -y postgresql-client-18
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
+      # postgresql-common's own dispatcher (/usr/bin/pg_dump) picks a
+      # version by looking at what's running locally, which is nothing on
+      # a fresh runner — so trusting the PATH order above without checking
+      # is exactly the kind of assumption that produced the original
+      # failure. This step is the difference between "should be 18" and
+      # "is 18": it fails the job here, with one clear line, instead of
+      # inside the dump with a server-version-mismatch error again.
+      - name: Verify the selected pg_dump is actually version 18
+        run: |
+          set -euo pipefail
+          which pg_dump
+          pg_dump --version
+          major=$(pg_dump --version | grep -oE '[0-9]+' | head -1)
+          if [ "$major" != "18" ]; then
+            echo "pg_dump resolved to major version $major, not 18 — PATH did not pick" >&2
+            echo "the installed client. Refusing to run a dump that will just fail" >&2
+            echo "against the production server's version mismatch check again." >&2
+            exit 1
+          fi
+
       - name: Dump and encrypt database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
