@@ -252,10 +252,13 @@ async def collect_public_channel(db, channel, *, fetch=fetch_preview) -> int:
     above the stored watermark, bounded by ``MAX_PAGES_PER_RUN`` so one
     very active channel cannot consume a whole run.
     """
+    from app import progress
     from app.ingest import ingest_text
-    from app.timeutil import utcnow
+    from app.models import SourceProgress
 
-    watermark = channel.last_message_id or 0
+    # source_progress is the authority for where to resume; the legacy
+    # column on ``channels`` is a mirror of its LIVE track.
+    watermark = progress.ensure(db, channel, SourceProgress.LIVE).current_watermark
     highest = watermark
     stored = 0
     before: int | None = None
@@ -290,7 +293,16 @@ async def collect_public_channel(db, channel, *, fetch=fetch_preview) -> int:
             break
         before = oldest
 
-    channel.last_message_id = max(highest, watermark)
-    channel.last_collected_at = utcnow()
+    # One writer for the watermark. ``account_id=None`` is the literal
+    # truth here rather than a shortcut: this path scrapes a public preview
+    # page and holds no Telegram account, so there is no assignment for
+    # advance() to revalidate — the absence *is* the statement.
+    progress.advance(
+        db,
+        channel,
+        max(highest, watermark),
+        account_id=None,
+        track=SourceProgress.LIVE,
+    )
     db.commit()
     return stored

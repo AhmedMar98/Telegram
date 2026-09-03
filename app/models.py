@@ -1290,3 +1290,151 @@ class JoinRequest(Base):
     evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- Phase 3: the collection runtime's own records -------------------------
+
+
+class SourceProgress(Base):
+    """How far collection has got with one source, on one track.
+
+    ``Channel.last_message_id`` is a single number, and a single number
+    cannot carry two readers. A source being backfilled from January while
+    live updates arrive today has two independent frontiers, and forcing
+    them through one scalar produces exactly the corruption the target
+    model forbids: the backfill's cursor lands in the live watermark, the
+    live reader resumes from January, and every message in between is
+    skipped by both — permanently, and invisibly, because no counter
+    disagrees.
+
+    So progress is per ``(source, track)``. The live track's watermark is
+    mirrored back to ``Channel.last_message_id`` for the readers that have
+    not moved yet; the mirror is written only by ``app.progress``.
+
+    Three times, because they answer three questions:
+
+    - ``last_attempt_at``   when did anything last try
+    - ``last_progress_at``  when did anything last *succeed* at moving
+    - ``current_watermark`` where is it safe to resume from
+
+    An attempt that fails updates the first and neither of the others,
+    which is what makes "tried recently and got nowhere" a state you can
+    see rather than infer.
+    """
+
+    __tablename__ = "source_progress"
+    __table_args__ = (
+        UniqueConstraint("source_id", "track", name="uq_source_progress_track"),
+        Index("ix_source_progress_workspace_track", "workspace_id", "track"),
+        CheckConstraint("track IN ('LIVE', 'HISTORICAL')", name="ck_source_progress_track"),
+        CheckConstraint(
+            "coverage_status IN ('NO_DETECTED_GAP', 'DETECTED_GAP', 'UNKNOWN_COVERAGE')",
+            name="ck_source_progress_coverage",
+        ),
+    )
+
+    #: New messages as they arrive.
+    LIVE = "LIVE"
+    #: A requested window in the past.
+    HISTORICAL = "HISTORICAL"
+    TRACKS = (LIVE, HISTORICAL)
+
+    #: Nothing the system can detect is missing. **Not** a claim that
+    #: nothing is missing — only that no gap was detected.
+    NO_DETECTED_GAP = "NO_DETECTED_GAP"
+    #: A specific range is known to have been skipped.
+    DETECTED_GAP = "DETECTED_GAP"
+    #: The system cannot say either way, which is the honest default.
+    UNKNOWN_COVERAGE = "UNKNOWN_COVERAGE"
+    COVERAGE_STATES = (NO_DETECTED_GAP, DETECTED_GAP, UNKNOWN_COVERAGE)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    track: Mapped[str] = mapped_column(String(12))
+    # The resume point. Monotonic, enforced by a trigger rather than by
+    # whoever remembers: a watermark that can go backwards is a watermark
+    # that can skip messages nobody will ever read again.
+    current_watermark: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The run that last moved this forward, so a watermark can be traced to
+    # the work that produced it.
+    last_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(
+        String(20), default=UNKNOWN_COVERAGE, server_default=UNKNOWN_COVERAGE
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CollectionRun(Base):
+    """One attempt to collect one source, by one path, over one range.
+
+    Deferred out of phase 1 on the grounds that its columns follow the
+    runtime's shape and inventing them early would be guessing. The
+    runtime exists now, so this does too.
+
+    A run is the unit that makes collection auditable: it names the
+    source, the account, the acquisition path and the range, and it
+    records what moved and what failed. ``Assignment`` says who is
+    responsible; a run says what responsibility actually produced.
+
+    **A run is not success.** ``COMPLETED`` means the requested scope was
+    examined and progress was persisted safely — not that a connection
+    opened, not that a worker exited cleanly, and not that zero rows came
+    back. A run that found nothing new completes; a run whose connection
+    succeeded and whose scope was never read does not.
+    """
+
+    __tablename__ = "collection_runs"
+    __table_args__ = (
+        Index("ix_collection_runs_source_started", "source_id", "started_at"),
+        Index("ix_collection_runs_workspace_state", "workspace_id", "state"),
+        # Finding runs abandoned by a crashed worker, which is what startup
+        # recovery sweeps for.
+        Index("ix_collection_runs_live_heartbeat", "state", "heartbeat_at"),
+        CheckConstraint(
+            "state IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RECOVERING')",
+            name="ck_collection_run_state",
+        ),
+        CheckConstraint("mode IN ('LIVE', 'HISTORICAL')", name="ck_collection_run_mode"),
+    )
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    #: Picked up by startup recovery after a crash; not yet resolved.
+    RECOVERING = "RECOVERING"
+    STATES = (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, RECOVERING)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # NULL for the public path, which needs no account. Not missing data —
+    # the absence is the statement.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("telegram_accounts.id"), nullable=True, index=True)
+    acquisition_path: Mapped[str] = mapped_column(String(20), default="userbot")
+    mode: Mapped[str] = mapped_column(String(12))
+    state: Mapped[str] = mapped_column(String(12), default=PENDING, server_default=PENDING)
+    # The requested window, for a historical run. NULL on a live run, whose
+    # range is "whatever arrived".
+    range_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    range_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    watermark_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    watermark_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    messages_seen: Mapped[int] = mapped_column(Integer, default=0)
+    links_stored: Mapped[int] = mapped_column(Integer, default=0)
+    # One of app.collection.failures.FailureKind. NULL while the run has
+    # not failed; never a bare exception class name.
+    failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Refreshed while the run is alive. A RUNNING row whose heartbeat has
+    # stopped is the signature of a worker that died without saying so,
+    # and it is what startup recovery looks for.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)

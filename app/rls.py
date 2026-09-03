@@ -88,6 +88,11 @@ PROTECTED_TABLES: tuple[str, ...] = (
     # Phase 2. Which sources an account is trying to get into is exactly
     # as tenant-private as which sources it already collects.
     "join_requests",
+    # Phase 3. A run names a source, an account and a range; progress names
+    # how far collection reached. Both are a description of one tenant's
+    # operation and belong to nobody else.
+    "source_progress",
+    "collection_runs",
 )
 
 # Two tables carry workspace_id, would benefit from RLS, and are **not**

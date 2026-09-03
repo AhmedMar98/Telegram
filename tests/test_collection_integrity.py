@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app import assignments
 from app.database import SessionLocal
 from app.models import Channel, Link, Message, TelegramAccount, Workspace
 from scripts import collect as collector
@@ -40,10 +41,16 @@ def source() -> tuple[int, int, int]:
             tg_channel_id="-100999",
             username="integrity",
             title="قناة",
-            account_id=account.id,
             last_message_id=0,
         )
         db.add(channel)
+        db.flush()
+        # Through the service, not by setting the column. Since phase 1 the
+        # assignment lives in ``source_assignments`` and the column is a
+        # mirror of it; a fixture that wrote only the mirror would be
+        # setting up a state PostgreSQL refuses, and the ownership guard —
+        # which reads the authority — would correctly see no owner at all.
+        assignments.assign(db, channel, account.id, reason="fixture")
         db.commit()
         return workspace.id, account.id, channel.id
     finally:
@@ -226,7 +233,8 @@ def test_an_account_that_lost_the_channel_does_not_move_the_watermark(source):
         other = TelegramAccount(workspace_id=workspace_id, label="new owner", session_string="x")
         db.add(other)
         db.flush()
-        db.get(Channel, channel_id).account_id = other.id  # reassigned mid-run
+        # Reassigned mid-run, the way a rebalance does it.
+        assignments.assign(db, db.get(Channel, channel_id), other.id, reason="rebalance")
         db.commit()
     finally:
         db.close()
@@ -264,7 +272,7 @@ def test_an_unassigned_channel_is_collected_by_the_default_account(source):
     _, account_id, channel_id = source
     db = SessionLocal()
     try:
-        db.get(Channel, channel_id).account_id = None
+        assignments.release(db, db.get(Channel, channel_id), reason="unassigned")
         db.commit()
     finally:
         db.close()

@@ -31,6 +31,7 @@ from app.models import (
     BotLinkCode,
     Channel,
     ClassificationFeedback,
+    CollectionRun,
     Evidence,
     JoinRequest,
     KeywordRule,
@@ -46,6 +47,7 @@ from app.models import (
     SourceAccess,
     SourceAssignment,
     SourceEvent,
+    SourceProgress,
     TelegramAccount,
     User,
     WorkflowRun,
@@ -91,6 +93,12 @@ WORKSPACE_TABLES = (
     # After the three above and before Evidence: a join request points at a
     # channel, an account and an evidence row, so it precedes all three.
     JoinRequest,
+    # The collection runtime's own rows. A run points at a channel, an
+    # account and an evidence row; progress points at a channel. Both
+    # therefore precede all three, and precede Evidence for the same
+    # reason the four above do.
+    CollectionRun,
+    SourceProgress,
     Evidence,
     AuditLog,
     BotLink,

@@ -155,7 +155,9 @@ jobs:
           fi
           grep -qE "[0-9]+ passed" rls.out
 
-      # The 0026 backfill can only be proved where migrations actually run.
+      # The 0026 and 0029 backfills can only be proved where migrations
+      # actually run, and so can every trigger the chain installs — the
+      # assignment mirror guard and both watermark monotonicity guards.
       # The chain uses ALTER forms SQLite does not support, so the suite
       # builds its schema with create_all and these three tests skip
       # everywhere else — including here, silently, if the DSN ever stops
@@ -173,7 +175,8 @@ jobs:
         run: |
           set -euo pipefail
           pytest tests/test_target_source_model.py tests/test_assignment_authority.py \
-                 tests/test_accounts_access_assignment.py -q | tee migration.out
+                 tests/test_accounts_access_assignment.py \
+                 tests/test_collection_runtime_pg.py -q | tee migration.out
           if grep -qi "skipped" migration.out; then
             echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so neither the backfill nor the mirror guard was verified"
             exit 1
