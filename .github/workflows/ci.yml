@@ -126,6 +126,8 @@ jobs:
             -c "CREATE ROLE app_role LOGIN PASSWORD 'app_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
           psql -h localhost -U postgres -d linktest -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE rlstest OWNER app_role;"
+          psql -h localhost -U postgres -d linktest -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE migtest OWNER app_role;"
 
       - name: Migrations apply as the unprivileged owner
         env:
@@ -152,3 +154,27 @@ jobs:
             exit 1
           fi
           grep -qE "[0-9]+ passed" rls.out
+
+      # The 0026 backfill can only be proved where migrations actually run.
+      # The chain uses ALTER forms SQLite does not support, so the suite
+      # builds its schema with create_all and these three tests skip
+      # everywhere else — including here, silently, if the DSN ever stops
+      # arriving. Same skip-detection as the RLS step above, for the same
+      # reason: the first run of this migration against real Postgres
+      # backfilled *nothing*, because channels is under FORCE row-level
+      # security and the migration carries no tenant. A test that skips
+      # would have let that ship.
+      - name: Migration backfill tests against Postgres
+        shell: bash
+        env:
+          MIGRATION_TEST_DSN: "postgresql://app_role:app_pw@localhost:5432/migtest"
+          DATABASE_URL: "sqlite:///:memory:"
+          SECRET_KEY: "ci-secret"
+        run: |
+          set -euo pipefail
+          pytest tests/test_target_source_model.py -q | tee migration.out
+          if grep -qi "skipped" migration.out; then
+            echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so the backfill was not verified"
+            exit 1
+          fi
+          grep -qE "[0-9]+ passed" migration.out

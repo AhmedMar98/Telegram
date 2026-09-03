@@ -21,10 +21,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.identity import source_identity_key
 from app.timeutil import utcnow
 
 
@@ -161,7 +164,12 @@ class TelegramAccount(Base):
 
 class Channel(Base):
     __tablename__ = "channels"
-    __table_args__ = (UniqueConstraint("workspace_id", "tg_channel_id", name="uq_channel_per_workspace"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "tg_channel_id", name="uq_channel_per_workspace"),
+        # Identity lookups are always tenant-scoped, so the workspace leads.
+        # Not unique yet — see the identity_key column for why.
+        Index("ix_channels_identity_key", "workspace_id", "identity_key"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
@@ -191,6 +199,32 @@ class Channel(Base):
     last_collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # --- target source model (phase 1) ---------------------------------
+    # One spelling of this dialog's identity, so that the same channel
+    # written ``-1001234567890`` by Telethon and ``1234567890`` by a person
+    # is one source rather than two.
+    #
+    # ``tg_channel_id`` above keeps whatever spelling arrived — it is what
+    # ``client.get_entity`` accepts back, so rewriting it would break
+    # resolution — and this column carries the comparable form. The rule is
+    # ``app.dialogs.canonical_id``; synthetic rows ("manual", "import:...")
+    # keep their own id, because they are identities too, just not
+    # Telegram's.
+    #
+    # Indexed, **not yet unique**: the current schema allowed both
+    # spellings to be inserted through ``get_or_create_channel``, so a
+    # deployment may already hold a colliding pair. Merging two sources
+    # decides which watermark and which links survive, which is a product
+    # decision and not a migration's to make. scripts/check_source_identity.py
+    # reports collisions; the constraint follows once a deployment is clean.
+    identity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # How this source is read: "userbot" needs an account with access,
+    # "public" needs none. Migrated from ``source`` above, which already
+    # carries exactly this fact — the new name is the target's word for it,
+    # and the old column stays as the live one until its readers move.
+    #
+    # NULL on synthetic rows: "manual" is not acquired from anywhere.
+    acquisition_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     workspace: Mapped[Workspace] = relationship(back_populates="channels")
     links: Mapped[list[Link]] = relationship(back_populates="channel")
@@ -243,8 +277,23 @@ class Message(Base):
     sender_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     sender_username: Mapped[str | None] = mapped_column(String(200), nullable=True)
     sender_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Three different times, and the reason they are three columns:
+    # ``posted_at`` is Telegram's, ``collected_at`` is when this system saw
+    # it (the target model calls that observed_at — the column keeps its
+    # name because the API schema exposes it), and ``processed_at`` is when
+    # the extraction pipeline finished with it. Using the last as a stand-in
+    # for the first is what turns a six-hour-old backfill into a "six-hour
+    # collection lag".
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # NULL means not processed under the new pipeline — which is every
+    # migrated row, because nothing recorded this before. Filled by the
+    # phase that owns extraction, not guessed here.
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which path produced this observation: userbot | public. NULL on
+    # migrated rows: the legacy schema recorded the path on the source, and
+    # the source's value today is not evidence about an old sighting.
+    acquisition_path: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class Link(Base):
@@ -732,3 +781,338 @@ class Lead(Base):
     # new | contacted | converted | ignored
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- Phase 1: the target source/resource model -----------------------------
+#
+# Everything below exists to hold four separations the current schema
+# cannot express, and that the target product treats as load-bearing:
+#
+#     Source     ≠ Resource        a dialog is not a link
+#     Resource   ≠ Occurrence      one link seen 100 times is 1 + 100
+#     Identity   ≠ State           a source stays itself when it goes private
+#     Assignment ≠ Collection      being responsible is not having collected
+#
+# The tables are **additive**. No existing column changed meaning and no
+# reader was repointed, so the legacy path keeps working unchanged while
+# the new shape is filled in. ``Channel`` remains the physical Source table
+# and ``links`` remains the legacy link store; both are mapped, neither is
+# rewritten. Retiring them is a later phase's work, after the readers move.
+
+
+class SourceAccess(Base):
+    """Whether one path can actually read one source, and when we saw that.
+
+    Access is **not** a property of the source. The same channel can be
+    readable by account 3, invisible to account 7, and available over the
+    public path all at once, so the fact has to live on the relationship
+    rather than on either end of it.
+
+    A missing row means *never evaluated* — which is the honest state for
+    almost everything today, and the reason this table is not backfilled
+    with a row per source. Only pairs with real evidence get a row: a
+    source that has actually been collected by an account proves that
+    account could read it at that moment.
+
+    ``observed_at`` is when the access was last *seen* to hold, not when
+    the row was written. State and observation are different facts, and
+    conflating them is what turns "worked an hour ago" into "works now".
+    """
+
+    __tablename__ = "source_access"
+    __table_args__ = (
+        # One row per (source, path, account). ``COALESCE`` rather than a
+        # plain unique constraint because the public path has no account,
+        # and NULLs do not compare equal — so a bare constraint would let
+        # the same public path be recorded any number of times.
+        Index(
+            "uq_source_access_path",
+            "source_id",
+            "path_kind",
+            text("COALESCE(account_id, -1)"),
+            unique=True,
+        ),
+        Index("ix_source_access_workspace_state", "workspace_id", "state"),
+    )
+
+    #: The system reached the source over this path, and has evidence.
+    ACCESSIBLE = "ACCESSIBLE"
+    #: The path was tried and did not work. Not the same as an invalid source.
+    INACCESSIBLE = "INACCESSIBLE"
+    #: A valid source that needs membership or authorisation nobody has yet.
+    NEEDS_ACCESS = "NEEDS_ACCESS"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # NULL for a path that needs no account (the public preview). Not a
+    # missing value — the absence *is* the statement.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("telegram_accounts.id"), nullable=True, index=True)
+    # "userbot" | "public" — the same vocabulary ``Channel.source`` uses,
+    # so one word does not mean two things in two places.
+    path_kind: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20))
+    # When the state above was last observed to be true. Nullable because
+    # a row can record a conclusion drawn without a fresh probe.
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SourceAssignment(Base):
+    """Which account is responsible for collecting a source, over time.
+
+    ``Channel.account_id`` answers "who collects this?" and nothing else:
+    it cannot say when the answer changed, why, or what the previous one
+    was, and it cannot distinguish *assigned* from *collected*. This table
+    is that column with a history and a reason attached; the column stays
+    as the live pointer until the readers move off it.
+
+    **At most one open assignment per source** is enforced in the database
+    by a partial unique index, not by convention. Two open assignments
+    mean two writers on one watermark, which is the failure this model
+    exists to make impossible rather than unlikely.
+
+    A closed row (``released_at`` set) is history and is never deleted.
+    """
+
+    __tablename__ = "source_assignments"
+    __table_args__ = (
+        # The Primary Collector invariant. Partial, so closed rows may
+        # accumulate freely — history is the point.
+        Index(
+            "uq_source_assignment_open",
+            "source_id",
+            unique=True,
+            sqlite_where=text("released_at IS NULL"),
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index("ix_source_assignments_account", "account_id", "released_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("telegram_accounts.id"), index=True)
+    # Nullable on purpose, and the nullability carries meaning: rows
+    # migrated from the scalar ``Channel.account_id`` have no assignment
+    # time because that column never recorded one. Inventing a timestamp
+    # here would be inventing history.
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Free text, written by whatever made the decision. Not an enum: the
+    # set of real reasons is not known yet, and freezing a guess into a
+    # constraint is worse than reading a sentence.
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SourceEvent(Base):
+    """One recorded transition in a source's life.
+
+    The current state of a source answers "what is it now"; this answers
+    "what happened to it", which is the question that survives the next
+    change. Public → Private → Needs Access → Collecting is a history, and
+    a status column can only ever hold its last frame.
+
+    **Deliberately not backfilled.** Every existing row would need a
+    previous state, a time and a reason that nothing in the current schema
+    records, so a backfill could only fabricate them. An empty table is a
+    true statement about what the system knows.
+    """
+
+    __tablename__ = "source_events"
+    __table_args__ = (Index("ix_source_events_source_time", "source_id", "occurred_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    # e.g. "access_state", "acquisition_method", "assignment", "identity".
+    # Which dimension moved, so the history of one dimension can be read
+    # without filtering on the shape of the values.
+    dimension: Mapped[str] = mapped_column(String(40))
+    previous_state: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    new_state: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Who or what caused it: a user id, a script name, a worker.
+    actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence.id"), nullable=True)
+
+
+class Evidence(Base):
+    """Why the system believed something, kept apart from who did what.
+
+    Audit (``AuditLog``) records administrative acts by people. Evidence
+    records observations by the system: what it saw, over which path, at
+    what time. Using one for the other is how "the operator paused it"
+    and "the account could not read it" end up indistinguishable.
+
+    Scope is deliberately narrow in this phase. Rows are written only
+    where an observation genuinely exists — today that is the access
+    backfill. Decision-level evidence for acquisition, classification and
+    recovery arrives with the phases that make those decisions; claiming
+    it now would be claiming coverage that does not exist.
+    """
+
+    __tablename__ = "evidence"
+    __table_args__ = (Index("ix_evidence_workspace_kind", "workspace_id", "kind"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # What sort of observation this is, e.g. "access_probe",
+    # "collection_history", "identity_resolution".
+    kind: Mapped[str] = mapped_column(String(40))
+    # When the thing was observed — not when the row was written.
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # One line a human can read without decoding anything.
+    summary: Mapped[str] = mapped_column(String(300))
+    # Anything structured the writer wants to keep, as JSON text. Not a
+    # JSON column: SQLite and Postgres disagree about those, and nothing
+    # queries inside this value.
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Resource(Base):
+    """One link, once, however many times it has been seen.
+
+    ``links`` is unique per ``(channel_id, url_hash)``, which makes the
+    same URL in three channels three rows and the same URL twice in one
+    channel *nothing at all* — the second insert is rejected as a
+    duplicate and no trace of the repeat survives. Both halves are wrong
+    for the target: the first inflates the link count, the second throws
+    away exactly the spread data that makes a link interesting.
+
+    So identity moves here and appearances move to ``Occurrence``.
+
+    **The canonical URL string is not stored.** ``fingerprint`` is
+    ``sha256(canonical_url(url))`` — the same value ``Link.url_hash``
+    already carries — and ``representative_url`` is one raw spelling that
+    was actually observed. Storing a canonical *string* as well would
+    create a second value that can disagree with the function that
+    derives it, and the function is the definition.
+    """
+
+    __tablename__ = "resources"
+    __table_args__ = (
+        # The identity invariant: one fingerprint, one resource, per
+        # workspace. This is what makes "the same link from four sources"
+        # one row instead of four.
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_resource_identity"),
+        Index("ix_resources_workspace_platform", "workspace_id", "platform"),
+        Index("ix_resources_workspace_last_seen", "workspace_id", "last_seen_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # sha256 of the canonicalised URL. 64 hex characters, fixed width, so
+    # it can carry a btree unique index that raw URL text cannot.
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    # A raw URL exactly as some message wrote it. Never rewritten — the
+    # project's first invariant — and never treated as the identity.
+    representative_url: Mapped[str] = mapped_column(Text)
+    # Destination platform: telegram | whatsapp | ... Derived from the
+    # host by app.classifier.platform, which is deterministic and needs no
+    # network. Copied from the legacy row at migration time rather than
+    # recomputed, so the two cannot silently disagree.
+    platform: Mapped[str] = mapped_column(String(20), default="web", server_default="web")
+    # Telegram/WhatsApp link type (channel, group, invite, contact, ...).
+    # NULL means *not yet resolved*, which is the truth for every migrated
+    # row: nothing in the legacy schema recorded it. Filled by the phase
+    # that builds link typing, not guessed here.
+    link_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Occurrence(Base):
+    """One appearance of one resource, in one source, at one time.
+
+    This is the row that can repeat: same resource, different message;
+    same message, different extraction path. Its provenance columns are
+    the whole point — a resource with no occurrences is a URL with no
+    story, and "where did this come from" has to be answerable from the
+    row itself rather than by joining back through a guess.
+
+    ``legacy_link_id`` is unique and points at the ``links`` row this was
+    migrated from. It is what makes the migration reversible and
+    verifiable: every legacy link has exactly one occurrence, and that can
+    be asserted rather than assumed.
+    """
+
+    __tablename__ = "occurrences"
+    __table_args__ = (
+        # One occurrence per (resource, source, message, extraction path).
+        # Restricted to real Telegram messages: manual and imported rows
+        # all carry message id 0, so including them would collapse every
+        # hand-added link from one source into a single occurrence.
+        Index(
+            "uq_occurrence_identity",
+            "resource_id",
+            "source_id",
+            "tg_message_id",
+            "extraction_method",
+            unique=True,
+            sqlite_where=text("tg_message_id > 0"),
+            postgresql_where=text("tg_message_id > 0"),
+        ),
+        # The migration's own guarantee: no legacy link becomes two
+        # occurrences, on a re-run or otherwise.
+        Index("uq_occurrence_legacy_link", "legacy_link_id", unique=True),
+        Index("ix_occurrences_source_observed", "source_id", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"), index=True)
+    # Not index=True: ``ix_occurrences_source_observed`` below leads with
+    # this column, and Postgres uses a composite index for its leading
+    # column. A second index here would be paid for on every write and
+    # read by nothing.
+    source_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    # The observation this link was extracted from, when one exists.
+    # NULL for links older than the ``messages`` table and for every
+    # manual or imported row, which have no Telegram message behind them.
+    observation_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True, index=True)
+    # Kept alongside observation_id rather than only through it: the
+    # legacy rows carry a message id with no ``messages`` row to point at,
+    # and losing that number would lose the only link back to Telegram.
+    tg_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    # How the URL was found: text | hyperlink | button. Same vocabulary as
+    # ``Link.source_type``, which is where migrated values come from.
+    extraction_method: Mapped[str] = mapped_column(String(20), default="text")
+    # When Telegram says the message was posted, when the system saw it.
+    # Separate columns because they answer different questions and one is
+    # routinely absent.
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which acquisition path produced this sighting: userbot | public.
+    # NULL on migrated rows — the legacy schema recorded it on the source,
+    # not on the sighting, and the source's value today is not evidence
+    # about a sighting from six months ago.
+    acquisition_path: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    legacy_link_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --- keeping identity_key filled, without asking anyone to remember ------
+#
+# Channels are created from six places: manual entry, two importers, the
+# demo seeder, dialog discovery and the live listener. Setting the column
+# at each of them is six chances to forget, and a forgotten one produces a
+# row whose identity is silently NULL — invisible until the day it matters.
+#
+# A mapper-level hook is the one place all six already go through.
+
+
+def _fill_identity_key(_mapper, _connection, target: Channel) -> None:
+    """Derive identity_key from whatever spelling tg_channel_id holds."""
+    target.identity_key = source_identity_key(target.tg_channel_id)
+
+
+event.listen(Channel, "before_insert", _fill_identity_key)
+event.listen(Channel, "before_update", _fill_identity_key)

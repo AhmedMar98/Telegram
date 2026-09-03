@@ -31,6 +31,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.identity import canonical_id
 from app.models import Channel
 
 logger = logging.getLogger(__name__)
@@ -202,30 +203,11 @@ def dialog_identity(obj: Any) -> tuple[str | None, str | None, str | None]:
 # --- one spelling for an identity ------------------------------------------
 
 
-def canonical_id(raw: object) -> str | None:
-    """One spelling for a Telegram peer id, whichever form it arrived in.
-
-    Telethon reports a channel as ``-1001234567890``; an operator typing
-    the id into the dashboard usually pastes ``1234567890``. Both have to
-    match the same row.
-
-    The ``-100`` prefix is stripped **only from negative ids**, because
-    that minus sign is the marker that the prefix is a peer-type tag
-    rather than part of the number. Stripping a leading ``100`` from
-    positive ids too would be the plausible-looking version of this
-    function that is wrong: a channel genuinely numbered ``1001234``
-    would canonicalise to ``1234`` from the dashboard and to ``1001234``
-    from Telethon, and would silently never match.
-    """
-    try:
-        text = str(int(str(raw).strip()))
-    except (TypeError, ValueError):
-        return None
-    if text.startswith("-100"):
-        return text[4:]
-    if text.startswith("-"):
-        return text[1:]
-    return text
+# ``canonical_id`` is imported at the top of this module rather than
+# defined here. It moved to app/identity.py because ``app.models`` needs
+# the same rule for the identity_key column and cannot import this module
+# — this one imports it. Callers keep saying ``dialogs.canonical_id``;
+# there is still exactly one definition of the rule.
 
 
 def canonical_username(raw: object) -> str | None:
