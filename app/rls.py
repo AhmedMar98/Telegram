@@ -68,6 +68,7 @@ TENANT_SETTING = "app.workspace_id"
 PROTECTED_TABLES: tuple[str, ...] = (
     "channels",
     "messages",
+    "coverage_snapshots",
     "audit_log",
     "notification_preferences",
     "notifications",

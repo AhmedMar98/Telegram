@@ -36,16 +36,19 @@ import logging
 import os
 import random
 import sys
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from telethon import TelegramClient  # noqa: E402
 from telethon.errors import FloodWaitError, RPCError  # noqa: E402
 from telethon.sessions import StringSession  # noqa: E402
 
+from app import coverage  # noqa: E402
 from app.accounts import record_failure, record_success  # noqa: E402
 from app.alerts import COLLECTOR_FAILED  # noqa: E402
 from app.assignment import apply_assignments  # noqa: E402
@@ -167,6 +170,51 @@ def _still_owned_by(db: Session, channel: Channel, account_id: int | None, *, is
     return owner == account_id
 
 
+def _classify_failure(exc: BaseException) -> str:
+    """Which of ``app.coverage.FAILURE_KINDS`` this failure is.
+
+    Classified by what an operator would *do* about it, not by exception
+    class: a revoked session and a channel that removed the account both
+    surface as Telethon errors and need opposite responses. Anything
+    unrecognised becomes ``unknown`` — a named bucket that shows up in the
+    report, rather than being folded into a neighbour it does not belong to.
+    """
+    from telethon.errors import ChannelPrivateError, FloodWaitError
+
+    if isinstance(exc, FloodWaitError):
+        return coverage.RATE_LIMITED
+    if isinstance(exc, ChannelPrivateError):
+        return coverage.ACCESS_DENIED
+    if isinstance(exc, ValueError | TypeError):
+        # Telethon raises ValueError for an entity it cannot resolve at
+        # all: renamed, deleted, or never visible to this account.
+        return coverage.SOURCE_UNAVAILABLE
+    if isinstance(exc, OSError | ConnectionError | TimeoutError):
+        return coverage.NETWORK_ERROR
+    if isinstance(exc, RPCError):
+        return coverage.TELEGRAM_ERROR
+    if isinstance(exc, SQLAlchemyError):
+        return coverage.DATABASE_ERROR
+    return coverage.UNKNOWN
+
+
+def _record_outcome(
+    db: Session, channel: Channel, outcome: str, *, kind: str | None = None, commit: bool = True
+) -> None:
+    """Stamp what happened to one source, for the measurement contract.
+
+    Separate from ``last_collected_at``, which means "last *successful*
+    read" and is what the rotation ordering needs. Without this a source
+    nobody attempted and a source that failed are indistinguishable — and
+    coverage cannot be computed from an indistinguishable pair.
+    """
+    channel.last_attempt_at = utcnow()
+    channel.last_outcome = outcome
+    channel.last_failure_kind = kind
+    if commit:
+        db.commit()
+
+
 async def _collect_channel(
     client: TelegramClient,
     db: Session,
@@ -182,10 +230,13 @@ async def _collect_channel(
         entity = await client.get_entity(_entity_ref(channel))
     except (ValueError, TypeError, RPCError) as exc:
         logger.warning("skipping channel %s (%s): %s", channel.id, label, exc)
+        _record_outcome(db, channel, coverage.FAILED, kind=_classify_failure(exc))
         return 0
 
     new_watermark = channel.last_message_id
     summary = IngestSummary()
+    rate_limited = False
+    scanned = 0
 
     # reverse=True walks *forward* from the watermark (oldest unseen first).
     # Telethon's default is newest-first, which combined with a limit would
@@ -220,16 +271,18 @@ async def _collect_channel(
                 summary=summary,
             )
             new_watermark = max(new_watermark, message.id)
+            scanned += 1
     except FloodWaitError as exc:
         # Keep whatever was collected before the rate limit and resume from
         # the contiguous watermark on the next scheduled run.
         logger.warning("flood wait on channel %s (%s): %s", channel.id, label, exc)
+        rate_limited = True
 
     if account_id is not None and not _still_owned_by(db, channel, account_id, is_default=is_default):
         # Reassigned mid-run. Everything already stored stays stored — the
         # links are committed per message and are not the new owner's to
         # collect again — but the watermark is the new owner's to move.
-        db.commit()
+        _record_outcome(db, channel, coverage.FAILED, kind=coverage.ASSIGNMENT_ERROR)
         logger.warning(
             "channel %s (%s) changed owner during the run; leaving the watermark at %d for the new owner",
             channel.id,
@@ -238,6 +291,25 @@ async def _collect_channel(
         )
         return summary.stored
 
+    if new_watermark < channel.last_message_id:
+        # Never observed, and counted rather than silently corrected: a
+        # watermark moving backwards means messages between the two values
+        # are about to be re-read forever, and §46 reports the count so it
+        # cannot be a zero nobody checked.
+        channel.watermark_regressions = (channel.watermark_regressions or 0) + 1
+        logger.error(
+            "channel %s (%s): refusing a watermark regression %d -> %d",
+            channel.id,
+            label,
+            channel.last_message_id,
+            new_watermark,
+        )
+        new_watermark = channel.last_message_id
+
+    # Whether the window was finished. Hitting the per-run cap means a
+    # backlog remains — not an error, an unfinished window that the next
+    # run continues, and the difference is what "behind" means in §46.
+    channel.caught_up = scanned < _message_limit()
     channel.last_message_id = new_watermark
     # Stamped even when the run found nothing: the question this answers is
     # "when did anything last look at this dialog", which is what the
@@ -245,6 +317,13 @@ async def _collect_channel(
     # non-empty run would park every quiet dialog permanently at the front
     # of the queue and starve the rest.
     channel.last_collected_at = utcnow()
+    _record_outcome(
+        db,
+        channel,
+        coverage.FAILED if rate_limited else coverage.SUCCEEDED,
+        kind=coverage.RATE_LIMITED if rate_limited else None,
+        commit=False,
+    )
     audit_record(
         db,
         workspace_id=channel.workspace_id,
@@ -630,6 +709,11 @@ async def collect() -> None:
     session_string = os.environ["TG_SESSION_STRING"]
     workspace_id = int(os.environ["COLLECTOR_WORKSPACE_ID"])
 
+    # One id for the whole run, so "what did that run do?" stays
+    # answerable across the rows it writes for each workspace.
+    run_id = str(uuid.uuid4())
+    started_at = utcnow()
+
     db = SessionLocal()
     try:
         # Every query below hits tables under row-level security. Without
@@ -646,6 +730,7 @@ async def collect() -> None:
             .all()
         )
         if not accounts:
+            coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at)
             logger.info("no active collecting accounts for this workspace; nothing to do")
             return
 
@@ -704,6 +789,10 @@ async def collect() -> None:
                 working_accounts += 1
 
         if collected_channels == 0:
+            # Recorded before returning: a run that found nothing to do is
+            # a data point, and a gap in the series is indistinguishable
+            # from a run that never happened.
+            coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at, summary=run)
             logger.info("no active channels configured for this workspace; nothing to do")
             return
 
@@ -728,6 +817,15 @@ async def collect() -> None:
         # committed, so nothing is announced that a rollback took back.
         await report_adult_links(db, workspace_id, run.adult_urls)
 
+        snapshot = coverage.record_snapshot(db, workspace_id, run_id=run_id, started_at=started_at, summary=run)
+        logger.info(
+            "coverage: %d/%d due sources succeeded, lag p50=%ss p95=%ss, gaps=%d",
+            snapshot.sources_succeeded,
+            snapshot.sources_due,
+            snapshot.collection_lag_p50,
+            snapshot.collection_lag_p95,
+            snapshot.gap_events,
+        )
         logger.info(
             "done: %d new link(s) across %d channel(s) using %d account(s)",
             total,
