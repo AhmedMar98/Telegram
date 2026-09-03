@@ -45,6 +45,31 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
+      # pg_dump refuses to dump a server newer than itself, and the runner
+      # ships whatever PostgreSQL client Ubuntu packages by default — 16 on
+      # ubuntu-latest today, against a production server on 18.6. That is not
+      # a transient error and no retry fixes it: every run failed the moment
+      # it finished the connection handshake, which is why this workflow has
+      # never produced a single artifact. The client has to be installed to
+      # match the server's major version, and pinned here rather than left to
+      # whatever the runner image happens to carry next month.
+      #
+      # PATH, not a rewritten pg_dump line: postgresql-common's wrapper picks
+      # a version of its own, so putting 18's bin directory first is what
+      # actually decides which binary the dump below runs.
+      - name: Install a pg_dump matching the production server
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+
       - name: Dump and encrypt database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
