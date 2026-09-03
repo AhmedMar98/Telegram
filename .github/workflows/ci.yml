@@ -164,7 +164,7 @@ jobs:
       # backfilled *nothing*, because channels is under FORCE row-level
       # security and the migration carries no tenant. A test that skips
       # would have let that ship.
-      - name: Migration backfill tests against Postgres
+      - name: Migration backfill and assignment-authority tests against Postgres
         shell: bash
         env:
           MIGRATION_TEST_DSN: "postgresql://app_role:app_pw@localhost:5432/migtest"
@@ -172,9 +172,9 @@ jobs:
           SECRET_KEY: "ci-secret"
         run: |
           set -euo pipefail
-          pytest tests/test_target_source_model.py -q | tee migration.out
+          pytest tests/test_target_source_model.py tests/test_assignment_authority.py -q | tee migration.out
           if grep -qi "skipped" migration.out; then
-            echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so the backfill was not verified"
+            echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so neither the backfill nor the mirror guard was verified"
             exit 1
           fi
           grep -qE "[0-9]+ passed" migration.out

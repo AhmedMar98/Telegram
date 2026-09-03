@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app import assignments
 from app.config import get_settings
 from app.dialogs import SOURCE_USERBOT, is_synthetic
 from app.models import Channel, TelegramAccount
@@ -170,7 +171,11 @@ def apply_assignments(db: Session, workspace_id: int) -> AssignmentReport:
     if changes:
         by_id = {channel.id: channel for channel in channels}
         for channel_id, account_id in changes.items():
-            by_id[channel_id].account_id = account_id
+            # Through the service, not by assigning the column: the column
+            # is a mirror of ``source_assignments`` and writing it directly
+            # would create a second authority for the same fact — and, on
+            # PostgreSQL, be refused by the trigger that says so.
+            assignments.assign(db, by_id[channel_id], account_id, reason="capacity balancing")
         db.commit()
 
     if report.stranded:
