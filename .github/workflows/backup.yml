@@ -26,10 +26,20 @@ name: Daily encrypted DB backup
 #                        backup permanently unreadable — that is the
 #                        trade being made, and it is the right one.
 #
-# To restore:
+# To restore — all three steps, in this order:
 #   gpg --batch --decrypt --passphrase "$BACKUP_PASSPHRASE" \
 #       -o backup.dump backup.dump.gpg
 #   pg_restore --no-owner --no-privileges -d "$DATABASE_URL" backup.dump
+#   python scripts/rearm_force_rls.py "$DATABASE_URL"
+#
+# The third step is not optional. The dump is taken with FORCE ROW LEVEL
+# SECURITY briefly lifted (the only way pg_dump will produce a complete
+# one), so it records FORCE as off. A restore therefore comes back with
+# every row, every policy and ENABLE intact — and the table owner's RLS
+# exemption handed back. Measured on a real restore: ENABLE survives
+# 18/18, FORCE survives 0/18. Skip the re-arm and the recovered database
+# isolates nothing from the application's own connection, silently, on
+# the day you least want to find out.
 
 on:
   schedule:
@@ -44,7 +54,39 @@ permissions:
 jobs:
   backup:
     runs-on: ubuntu-latest
+
+    # The restore target, and the whole reason a backup can be believed.
+    # An artifact that exists proves storage worked; only a restore proves
+    # the thing in it is a database. Same major version as production so a
+    # successful restore here means something about a real recovery.
+    services:
+      restore_target:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: restore-verification-only
+          POSTGRES_DB: restore_check
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Before the RLS window opens, never during it: an apt install or a
+      # pip resolve inside the window would hold tenant isolation off the
+      # tables for however long the network felt like taking.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       # pg_dump refuses to dump a server newer than itself, and the runner
       # ships whatever PostgreSQL client Ubuntu packages by default — 16 on
       # ubuntu-latest today, against a production server on 18.6. That is not
@@ -97,9 +139,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Was exit 0 — "skipping backup" reported as a passing job. That
+          # single line is why this workflow showed three green runs that had
+          # produced nothing at all, and why nobody knew there had never been
+          # a backup. A backup job with no database to back up has failed at
+          # the only thing it exists to do.
           if [ -z "${DATABASE_URL:-}" ]; then
-            echo "DATABASE_URL secret is not set yet; skipping backup." >&2
-            exit 0
+            echo "DATABASE_URL is not set, so no backup was taken." >&2
+            echo "This is a failure, not a skip: set the secret, or disable this workflow." >&2
+            exit 1
           fi
 
           # Deliberately a hard failure, not a fallback to an unencrypted
@@ -112,7 +160,12 @@ jobs:
             exit 1
           fi
 
-          pg_dump "$DATABASE_URL" --no-owner --no-privileges -F c -f backup.dump
+          # Not a bare pg_dump: eighteen tables carry FORCE ROW LEVEL
+          # SECURITY, which strips this role's owner exemption, and pg_dump
+          # correctly refuses to write a dump it knows would be filtered.
+          # The script lifts FORCE on exactly those tables, dumps, and puts
+          # FORCE back — verified, and whether or not the dump succeeded.
+          python scripts/backup_full_dump.py "$DATABASE_URL" backup.dump
 
           # --batch with the passphrase on stdin: passing it as an argument
           # would put it in the process list, which other steps can read.
@@ -124,6 +177,86 @@ jobs:
 
           # The plaintext dump must not survive into the upload step.
           shred -u backup.dump 2>/dev/null || rm -f backup.dump
+
+      # The step that decides whether any of the above meant anything.
+      # Everything before this proves a file was produced; this proves the
+      # file is a database — decrypted with the same secret a real recovery
+      # would use, restored into a clean PostgreSQL 18, and then read.
+      #
+      # Deliberately decrypts the artifact rather than reusing the dump from
+      # the step above: the pre-encryption file was never in doubt. What is
+      # in doubt is whether the *encrypted* thing that gets stored can be
+      # turned back into rows, and only decrypting it answers that.
+      - name: Verify the backup restores into an isolated PostgreSQL 18
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          PGPASSWORD: restore-verification-only
+        run: |
+          set -euo pipefail
+
+          if [ ! -s backup.dump.gpg ]; then
+            echo "No encrypted backup to verify — nothing was produced." >&2
+            exit 1
+          fi
+          echo "artifact bytes: $(stat -c%s backup.dump.gpg)"
+
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --decrypt \
+            --passphrase-fd 0 \
+            --output restore-check.dump \
+            backup.dump.gpg
+          echo "decrypt: OK ($(stat -c%s restore-check.dump) bytes)"
+
+          pg_restore --no-owner --no-privileges --exit-on-error \
+            -h 127.0.0.1 -p 5433 -U postgres -d restore_check \
+            restore-check.dump
+          echo "restore: OK"
+
+          q() { psql -h 127.0.0.1 -p 5433 -U postgres -d restore_check -tAc "$1"; }
+
+          tables=$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
+          echo "restored tables: $tables"
+          [ "$tables" -gt 0 ] || { echo "restore produced no tables" >&2; exit 1; }
+
+          # The revision is the one fact that says which schema this is. A
+          # restore that came back without it is not this database.
+          revision=$(q "SELECT version_num FROM alembic_version")
+          echo "alembic_version: $revision"
+          [ -n "$revision" ] || { echo "no alembic_version in the restore" >&2; exit 1; }
+
+          # Encrypted columns: present, and still carrying ciphertext of the
+          # length the source had. Never decrypted, never printed — the point
+          # is that a restore preserved them, not what they say.
+          for pair in "telegram_accounts:session_string" "users:totp_secret" "workspaces:webhook_url"; do
+            t="${pair%%:*}"; c="${pair##*:}"
+            exists=$(q "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' AND column_name='$c'")
+            [ "$exists" = "1" ] || { echo "encrypted column $t.$c missing from the restore" >&2; exit 1; }
+            filled=$(q "SELECT count(*) FROM $t WHERE $c IS NOT NULL AND $c <> ''")
+            echo "  $t.$c present, non-empty rows: $filled"
+          done
+
+          # Every protected table has to have come back too, or the window
+          # did not do what it was opened for.
+          for t in $(python -c "from app.rls import PROTECTED_TABLES; print(' '.join(PROTECTED_TABLES))"); do
+            n=$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='$t'")
+            [ "$n" = "1" ] || { echo "protected table $t missing from the restore" >&2; exit 1; }
+          done
+          echo "all 18 protected tables restored"
+
+          # The gap a restore leaves, and the proof the documented fix for
+          # it works. Asserted before re-arming so this stays a measurement
+          # rather than a belief about pg_dump's behaviour.
+          forced_before=$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relforcerowsecurity")
+          echo "FORCE RLS as restored: $forced_before (expected 0 — the dump was taken with the window open)"
+
+          DATABASE_URL="postgresql://postgres:restore-verification-only@127.0.0.1:5433/restore_check" \
+            python scripts/rearm_force_rls.py "postgresql://postgres:restore-verification-only@127.0.0.1:5433/restore_check"
+
+          forced_after=$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relforcerowsecurity")
+          echo "FORCE RLS after re-arm: $forced_after"
+          [ "$forced_after" = "18" ] || { echo "re-arm left $forced_after/18 forced" >&2; exit 1; }
+
+          shred -u restore-check.dump 2>/dev/null || rm -f restore-check.dump
+          echo "RESTORE-VERIFIED"
 
       - uses: actions/upload-artifact@v5
         if: hashFiles('backup.dump.gpg') != ''

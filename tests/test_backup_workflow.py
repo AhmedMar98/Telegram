@@ -26,11 +26,26 @@ def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+DUMP_STEP = "Dump and encrypt database"
+
+
 def _dump_step_script() -> str:
+    """The dump step's script, found by name rather than by position.
+
+    This used to take the first step carrying a ``run:``, which was the
+    dump step right up until the job grew steps in front of it — installing
+    a matching pg_dump, checking the version it actually resolved. Then
+    every assertion below quietly started reading `pip install` instead and
+    passing on it, which is the failure mode this whole file exists to
+    catch, arriving through its own front door.
+    """
     for step in _workflow()["jobs"]["backup"]["steps"]:
-        if "run" in step:
+        if step.get("name") == DUMP_STEP:
             return step["run"]
-    raise AssertionError("no run step found in the backup job")
+    raise AssertionError(
+        f"no step named {DUMP_STEP!r} in the backup job — it was renamed or removed, "
+        "and every contract in this file is about that step specifically"
+    )
 
 
 def test_the_backup_runs_daily():
