@@ -27,9 +27,10 @@ REPO = Path(__file__).resolve().parent.parent
 # Same contract as tests/test_target_source_model.py: this can only be
 # proved where the chain actually runs, and skipping loudly beats passing
 # vacuously on SQLite.
-# Normalised on the way in for the same reason app/config.py does it: a
-# bare postgresql:// resolves to psycopg2, which this project does not
-# ship. A test that dies on the driver proves nothing about the migration.
+# Kept raw here because alembic receives it as DATABASE_URL and app.config
+# normalises it there; every create_engine below normalises at its own call
+# site, for the reason app.config does it — a bare postgresql:// resolves to
+# psycopg2, which this project does not ship.
 MIGRATION_DSN = os.environ.get("MIGRATION_TEST_DSN", "")
 
 pg_migration = pytest.mark.skipif(

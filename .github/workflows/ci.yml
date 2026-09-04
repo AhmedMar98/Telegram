@@ -176,9 +176,32 @@ jobs:
           SECRET_KEY: "ci-secret"
         run: |
           set -euo pipefail
-          pytest tests/test_target_source_model.py tests/test_assignment_authority.py \
-                 tests/test_accounts_access_assignment.py \
-                 tests/test_collection_runtime_pg.py -q | tee migration.out
+          # Enumerated rather than globbed, so that running a file here is a
+          # deliberate act. The cost of enumeration is that a new PostgreSQL
+          # test file joins the suite and this step never runs it — which is
+          # how 0032's backfill proof nearly shipped unverified: under SQLite
+          # it skips, so it passed everywhere while proving nothing. The list
+          # therefore checks itself against the gate the files actually use.
+          FILES=(
+            tests/test_target_source_model.py
+            tests/test_assignment_authority.py
+            tests/test_accounts_access_assignment.py
+            tests/test_collection_runtime_pg.py
+            tests/test_timestamp_not_null.py
+          )
+          missing=0
+          for f in $(grep -rl 'MIGRATION_TEST_DSN' tests/*.py | sort); do
+            found=0
+            for g in "${FILES[@]}"; do
+              if [ "$f" = "$g" ]; then found=1; fi
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "::error::$f gates on MIGRATION_TEST_DSN but this step does not run it, so it skips everywhere and proves nothing"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+          pytest "${FILES[@]}" -q | tee migration.out
           if grep -qi "skipped" migration.out; then
             echo "::error::migration tests skipped — MIGRATION_TEST_DSN never reached pytest, so neither the backfill nor the mirror guard was verified"
             exit 1
