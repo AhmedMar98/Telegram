@@ -23,6 +23,7 @@ with what is set right now?
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +59,40 @@ def report(status: str, check: str, detail: str) -> None:
 
 def _is_production() -> bool:
     return os.environ.get("ENVIRONMENT", "development") == "production"
+
+
+def _declared_environment() -> str | None:
+    """``ENVIRONMENT`` as render.yaml declares it for the web service.
+
+    Deliberately not the same question as ``_is_production()``. That one
+    asks what *this* process is; this one asks what the *deployment* is,
+    and the two are different whenever the diagnostic runs somewhere the
+    deployment is not — which is exactly what "Verify setup" on a GitHub
+    runner does. The runner holds the deployment's secrets but not its
+    ENVIRONMENT, because ENVIRONMENT is not a secret: it is declared in
+    the blueprint, and the blueprint is in this repository.
+
+    Parsed by hand rather than with PyYAML: yaml is only a transitive
+    dependency here, and a diagnostic that crashes on a missing import is
+    a diagnostic nobody can run when they need it. Anything unexpected
+    returns None, which the caller treats as "no declaration" rather than
+    as a pass.
+    """
+    blueprint = Path(__file__).resolve().parent.parent / "render.yaml"
+    try:
+        lines = blueprint.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    for index, line in enumerate(lines):
+        if line.strip() != "- key: ENVIRONMENT":
+            continue
+        for following in lines[index + 1 : index + 3]:
+            match = re.match(r"\s*value:\s*(\S+)\s*$", following)
+            if match:
+                return match.group(1)
+        return None
+    return None
 
 
 def check_core_env() -> bool:
@@ -336,10 +371,27 @@ def check_optional_features() -> None:
     # serves HTTPS without ENVIRONMENT=production sends its session cookie
     # marked as safe over plain HTTP — silently, with nothing on screen to
     # say so. render.yaml sets it; a service created by hand may not.
-    environment = os.environ.get("ENVIRONMENT", "development")
+    # Unset is not the same as "development". A process that never had
+    # ENVIRONMENT set is usually not the deployment at all — it is this
+    # diagnostic, run on a GitHub runner against a deployment's secrets —
+    # and reading its own blank env as the deployment's answer is how this
+    # check reported a failure that did not exist on a service configured
+    # correctly. Where the process states nothing, the blueprint is asked
+    # instead, and the verdict says which of the two it came from.
+    stated = os.environ.get("ENVIRONMENT")
+    environment = stated if stated is not None else "development"
     base_url = os.environ.get("PUBLIC_BASE_URL") or ""
+    declared = _declared_environment() if stated is None else None
     if environment == "production":
         report(OK, "session cookie", "HttpOnly, SameSite=Lax, Secure (ENVIRONMENT=production)")
+    elif base_url.startswith("https://") and declared == "production":
+        report(
+            OK,
+            "session cookie",
+            "render.yaml declares ENVIRONMENT=production for the web service, so the deployed cookie "
+            "carries Secure. Declared, not observed: this check reads the blueprint, not the running "
+            "service, because ENVIRONMENT is not a secret this runner is given",
+        )
     elif base_url.startswith("https://"):
         report(
             FAIL,

@@ -234,6 +234,60 @@ def test_production_environment_reports_the_real_flags(monkeypatch):
     assert _statuses()["session cookie"] == check_setup.OK
 
 
+def test_unset_environment_reads_the_blueprint_rather_than_its_own_env(monkeypatch):
+    """The false positive this branch exists to prevent.
+
+    "Verify setup" runs on a GitHub runner: it holds the deployment's
+    secrets but not its ENVIRONMENT, because ENVIRONMENT is not a secret.
+    Reading its own blank env as the deployment's answer reported a
+    cookie failure on a service that was configured correctly — the exact
+    shape of finding a defect where there is none, which costs the
+    diagnostic the trust that makes it worth running.
+    """
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://link-intel-web.onrender.com")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.OK
+    # And it says which question it answered. "Declared" is a weaker
+    # claim than "observed", and a verdict that hides the difference is
+    # the false green this file exists to catch.
+    assert "Declared, not observed" in _details()["session cookie"]
+
+
+def test_a_blueprint_that_does_not_declare_production_still_fails(monkeypatch):
+    """Sabotage direction. The check must keep failing for the deployment
+    it was written for: TLS in front, no ENVIRONMENT=production behind."""
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://link-intel-web.onrender.com")
+    monkeypatch.setattr(check_setup, "_declared_environment", lambda: None)
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.FAIL
+    assert "WITHOUT Secure" in _details()["session cookie"]
+
+
+def test_a_process_that_states_development_is_never_overridden(monkeypatch):
+    """An explicit ENVIRONMENT is the process speaking for itself, and the
+    blueprint does not get to overrule it — otherwise a real development
+    service behind TLS would be waved through by a file it does not use."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://link-intel-web.onrender.com")
+    monkeypatch.setattr(check_setup, "_declared_environment", lambda: "production")
+
+    check_setup.check_optional_features()
+
+    assert _statuses()["session cookie"] == check_setup.FAIL
+
+
+def test_the_blueprint_declaration_is_read_from_render_yaml():
+    """Pins the parse against the real file rather than a fixture: the
+    value this check trusts has to be the one Render is actually given."""
+    assert check_setup._declared_environment() == "production"
+
+
 def test_local_http_development_is_only_a_warning(monkeypatch):
     """Secure would break plain-http local development, so its absence
     there is correct rather than a finding."""
