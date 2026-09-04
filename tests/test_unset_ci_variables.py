@@ -131,6 +131,28 @@ def test_the_smoke_workflow_cannot_report_success_without_probing() -> None:
     assert "exit 0" not in guard
 
 
+def test_the_smoke_workflow_checks_that_registration_is_still_closed() -> None:
+    """Signup can reopen by an environment variable going missing.
+
+    Nothing else in this workflow would notice: every page still returns
+    its expected status while anyone on the internet can create an
+    account. So the policy is probed, and the probe is pinned here
+    against being quietly dropped.
+    """
+    with open(".github/workflows/smoke.yml") as handle:
+        workflow = yaml.safe_load(handle)
+    steps = workflow["jobs"]["smoke"]["steps"]
+
+    named = [step for step in steps if step.get("name") == "Registration is invite-only"]
+    assert named, "the smoke workflow no longer checks that registration is invite-only"
+
+    script = named[0]["run"]
+    assert "/auth/register" in script
+    assert "403" in script, "the invite-only answer is not recognised"
+    assert "422" in script, "the signup-is-open answer is not recognised"
+    assert "exit 1" in script, "the workflow does not fail when signup is open"
+
+
 def test_the_smoke_workflow_reports_the_revision_it_probed() -> None:
     """A green post-deploy check must say which revision went green.
 

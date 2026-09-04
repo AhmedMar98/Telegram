@@ -209,6 +209,55 @@ def test_the_invite_code_is_configured_by_its_environment_variable(monkeypatch):
     assert Settings().invite_code is None
 
 
+def test_the_deployment_probe_cannot_create_an_account(client: TestClient, monkeypatch):
+    """The smoke test asks production whether signup is still invite-only.
+
+    It asks by *attempting* a registration, so the attempt must be
+    incapable of succeeding. It carries no invite and a password that
+    clears the schema's length rule but fails the strength rule, and the
+    handler checks in that order — gate, then conflict, then strength,
+    then the first write. So the request stops at the gate when the gate
+    is up and at the strength rule when it is not, and creates nothing
+    either way.
+
+    Both halves are asserted here because both are load-bearing in
+    production: if the ordering is ever changed so the write happens
+    first, that probe starts creating accounts on the live deployment
+    four times a day.
+    """
+    from app.passwords import rejection_reason
+
+    probe = {
+        "email": "smoke-probe@invalid.example",
+        "password": "password",
+        "workspace_name": "smoke probe",
+    }
+    assert rejection_reason(probe["password"]) is not None, "the probe's password must fail the strength rule"
+
+    db = SessionLocal()
+    try:
+        before = db.query(User).count()
+    finally:
+        db.close()
+
+    settings = get_settings()
+
+    monkeypatch.setattr(settings, "invite_code", None)
+    gate_down = client.post("/auth/register", json=probe)
+    assert gate_down.status_code == 422, "with no gate the probe must stop at the password rule"
+    assert "breach lists" in gate_down.text, "the smoke step reads this phrase to tell the two 422s apart"
+
+    monkeypatch.setattr(settings, "invite_code", "secret-invite")
+    gate_up = client.post("/auth/register", json=probe)
+    assert gate_up.status_code == 403, "with the gate up the probe must stop at the gate"
+
+    db = SessionLocal()
+    try:
+        assert db.query(User).count() == before, "the deployment probe created an account"
+    finally:
+        db.close()
+
+
 def test_constant_time_equals_handles_missing_values():
     assert constant_time_equals("abc", "abc") is True
     assert constant_time_equals("abc", "abd") is False

@@ -91,6 +91,55 @@ jobs:
       # built by alembic, which is a real finding rather than a blip.
       #
       # The body is {"status", "schema_version"} and carries no secret.
+      # Registration policy is invite-only. A deployment can lose that by
+      # nothing more dramatic than an environment variable going missing,
+      # and every page above would stay green while signup silently
+      # reopened — so it is probed rather than assumed.
+      #
+      # The probe cannot create an account whichever way it lands. The
+      # invite gate is the first check in the handler; the password
+      # strength rule is checked after it and still before the first
+      # write. A request carrying no invite and a password that passes the
+      # schema (>= 8 characters) but fails the strength rule therefore
+      # separates the two states without any INSERT being reached:
+      #
+      #   403  the gate answered  -> invite-only, the configured policy
+      #   422  the password rule answered -> the request needed no invite,
+      #        so the gate is off and signup is open to anyone
+      #
+      # tests/test_auth_hardening.py pins that ordering, because if the
+      # handler is ever reordered this probe stops being harmless.
+      - name: Registration is invite-only
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+          body=$(mktemp)
+          code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 90 \
+            -X POST "$BASE/auth/register" \
+            -H 'content-type: application/json' \
+            -d '{"email":"smoke-probe@invalid.example","password":"password","workspace_name":"smoke probe"}' \
+            || echo 000)
+          case "$code" in
+            403)
+              echo "ok   registration is invite-only -> 403"
+              ;;
+            422)
+              if grep -q "breach lists" "$body"; then
+                echo "::error::registration reached the password rule without an invite -> signup is OPEN. INVITE_CODE is not set on the deployment"
+              else
+                echo "::error::/auth/register answered 422 for a reason other than the password rule; the probe could not read the policy"
+                cat "$body"
+              fi
+              exit 1
+              ;;
+            *)
+              echo "::error::unexpected response from /auth/register -> $code"
+              cat "$body"
+              exit 1
+              ;;
+          esac
+
       - name: Report the deployed schema revision
         env:
           BASE: ${{ secrets.APP_BASE_URL }}
