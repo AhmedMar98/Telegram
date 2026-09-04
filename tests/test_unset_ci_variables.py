@@ -129,3 +129,27 @@ def test_the_smoke_workflow_cannot_report_success_without_probing() -> None:
     assert "APP_BASE_URL" in guard
     assert "exit 1" in guard
     assert "exit 0" not in guard
+
+
+def test_the_smoke_workflow_reports_the_revision_it_probed() -> None:
+    """A green post-deploy check must say which revision went green.
+
+    /readyz reads alembic_version on every call, and its body is the only
+    view of the deployed revision from outside the host. Probing it and
+    discarding the body leaves a smoke run unable to distinguish a new
+    revision serving from the previous container still serving — so a
+    migration could report success here without having been applied.
+    """
+    with open(".github/workflows/smoke.yml") as handle:
+        workflow = yaml.safe_load(handle)
+    steps = workflow["jobs"]["smoke"]["steps"]
+
+    named = [step for step in steps if step.get("name") == "Report the deployed schema revision"]
+    assert named, "the smoke workflow no longer reports the deployed schema revision"
+
+    script = named[0]["run"]
+    assert "/readyz" in script
+    assert "schema_version" in script
+    # Reported and checked for presence, not pinned to a value: a pinned
+    # revision would fail every deploy that adds one.
+    assert "exit 1" in script

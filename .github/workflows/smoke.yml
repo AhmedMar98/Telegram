@@ -76,3 +76,29 @@ jobs:
           fi
 
           exit $fail
+
+      # The probe above fetches /readyz and throws the body away. That body
+      # is the only place the deployed schema revision is visible from
+      # outside the host — /readyz reads alembic_version on every call,
+      # precisely so the answer is right when it changed under a running
+      # process. Without it a green smoke run cannot tell "the new revision
+      # is serving" apart from "the old container still is", which is the
+      # one question a post-deploy check exists to answer.
+      #
+      # Reported, not asserted against a fixed value: pinning a revision
+      # here would fail every deploy that adds one. What is asserted is
+      # that the field is there at all — absent means the database was not
+      # built by alembic, which is a real finding rather than a blip.
+      #
+      # The body is {"status", "schema_version"} and carries no secret.
+      - name: Report the deployed schema revision
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+          body=$(curl -sS --max-time 90 "$BASE/readyz")
+          echo "$body"
+          if ! echo "$body" | grep -q '"schema_version"'; then
+            echo "::error::/readyz did not report schema_version — the deployment is not reporting the revision it is serving"
+            exit 1
+          fi
