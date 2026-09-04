@@ -45,17 +45,6 @@ jobs:
           pip install pip-audit
           pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-collector.txt
 
-      - name: Alembic migrations apply and match the models
-        env:
-          DATABASE_URL: "sqlite:///./_ci_alembic.db"
-          SECRET_KEY: "ci-secret"
-        run: |
-          alembic upgrade head
-          # Fails if the ORM models have drifted from the migration chain,
-          # i.e. someone changed a model without writing the migration.
-          alembic check
-          rm -f _ci_alembic.db
-
       - name: pytest
         env:
           DATABASE_URL: "sqlite:///:memory:"
@@ -98,12 +87,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # The only place the chain is checked, and deliberately so. The
+      # lint job used to run these same two commands against SQLite,
+      # where the chain has never been able to run: 0025 adds a column
+      # with a foreign key and 0028's backfill uses DISTINCT ON, both
+      # of which 0028 documents as a deliberate PostgreSQL-only choice
+      # ("this migration chain already cannot run on SQLite ... so
+      # portability here would buy nothing and cost a great deal").
+      # That step therefore asserted a property this project has
+      # decided not to have, failed on every push for it, and took the
+      # whole pytest run down with it. Production is PostgreSQL; this
+      # is the database the check belongs against.
       - name: Migrations apply cleanly to Postgres
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/linktest"
           SECRET_KEY: "ci-secret"
         run: |
           alembic upgrade head
+          # Fails if the ORM models have drifted from the migration chain,
+          # i.e. someone changed a model without writing the migration.
           alembic check
 
       - name: Full-text search tests against Postgres
