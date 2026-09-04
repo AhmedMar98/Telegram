@@ -28,12 +28,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import access, accounts, assignments, eligibility, joinqueue
+from app.config import normalize_database_url
 from app.database import SessionLocal
 from app.models import Channel, JoinRequest, SourceAccess, TelegramAccount, Workspace
 from app.timeutil import utcnow
 
 REPO = Path(__file__).resolve().parent.parent
-MIGRATION_DSN = os.environ.get("MIGRATION_TEST_DSN", "")
+# Normalised on the way in, for the reason app/config.py normalises it:
+# a bare postgresql:// resolves to psycopg2, which this project does not
+# ship — it ships psycopg 3. Left raw, every test below died on the
+# driver import instead of running, and nobody saw it because the job
+# failed earlier and skipped the whole step.
+MIGRATION_DSN = normalize_database_url(os.environ.get("MIGRATION_TEST_DSN", ""))
 
 pg_only = pytest.mark.skipif(
     not MIGRATION_DSN, reason="MIGRATION_TEST_DSN not set — these constraints live in PostgreSQL"

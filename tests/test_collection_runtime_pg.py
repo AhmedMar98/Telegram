@@ -37,6 +37,7 @@ from sqlalchemy.orm import sessionmaker
 from app import assignments, progress
 from app.collection import runs as run_log
 from app.collection.failures import FailureKind
+from app.config import normalize_database_url
 from app.models import Channel, CollectionRun, SourceProgress, TelegramAccount
 from app.runtime.supervisor import Supervisor, SupervisorConfig
 from app.runtime.worker import AccountWorker, WorkerConfig
@@ -44,7 +45,12 @@ from app.timeutil import utcnow
 from tests.test_collection_runtime import FakeReader, msg
 
 REPO = Path(__file__).resolve().parent.parent
-MIGRATION_DSN = os.environ.get("MIGRATION_TEST_DSN", "")
+# Normalised on the way in, for the reason app/config.py normalises it:
+# a bare postgresql:// resolves to psycopg2, which this project does not
+# ship — it ships psycopg 3. Left raw, every test below died on the
+# driver import instead of running, and nobody saw it because the job
+# failed earlier and skipped the whole step.
+MIGRATION_DSN = normalize_database_url(os.environ.get("MIGRATION_TEST_DSN", ""))
 
 pg_only = pytest.mark.skipif(
     not MIGRATION_DSN,
