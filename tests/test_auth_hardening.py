@@ -123,6 +123,92 @@ def test_invite_code_is_enforced_when_configured(client: TestClient, monkeypatch
     assert correct.status_code == 201
 
 
+def test_the_invite_gate_answers_before_the_email_conflict(client: TestClient, monkeypatch):
+    """Otherwise the gate becomes an oracle for which accounts exist.
+
+    Registration answers 409 for an address already taken. If that check
+    ran first, anyone could ask the open endpoint about any address and
+    read the answer off the status code — without holding an invite at
+    all. Closing signup would then have *added* an enumeration channel.
+    The gate has to answer 403 for a known address exactly as it does for
+    an unknown one.
+    """
+    register_workspace(client, email="known@example.com", workspace_name="Known")
+    client.post("/auth/logout")
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "invite_code", "secret-invite")
+
+    known = client.post(
+        "/auth/register",
+        json={"email": "known@example.com", "password": "j8Kd0-slwQ2x", "workspace_name": "X"},
+    )
+    unknown = client.post(
+        "/auth/register",
+        json={"email": "unknown@example.com", "password": "j8Kd0-slwQ2x", "workspace_name": "X"},
+    )
+    assert known.status_code == 403
+    assert unknown.status_code == 403
+    assert known.status_code == unknown.status_code, "the gate distinguishes a known address from an unknown one"
+
+
+def test_an_empty_invite_code_is_not_a_bypass(client: TestClient, monkeypatch):
+    """`""` is falsy, and the guard reads the *configured* value's truth."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "invite_code", "secret-invite")
+
+    blank = client.post(
+        "/auth/register",
+        json={
+            "email": "blank@example.com",
+            "password": "j8Kd0-slwQ2x",
+            "workspace_name": "X",
+            "invite_code": "",
+        },
+    )
+    assert blank.status_code == 403
+
+
+def test_closing_registration_does_not_close_the_door_on_existing_users(client: TestClient, monkeypatch):
+    """The gate belongs to /register alone.
+
+    Switching to invite-only is a change nobody should have to reverse at
+    2am because it locked out the accounts that already existed, so the
+    property is asserted rather than assumed: an account created before
+    the gate went up still authenticates after it, and a wrong password
+    is still refused.
+    """
+    register_workspace(client, email="already@example.com", workspace_name="Already")
+    client.post("/auth/logout")
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "invite_code", "secret-invite")
+
+    good = client.post("/auth/login", json={"email": "already@example.com", "password": "j8Kd0-slwQ2x"})
+    assert good.status_code == 200
+
+    client.post("/auth/logout")
+    bad = client.post("/auth/login", json={"email": "already@example.com", "password": "wrong-password-9999"})
+    assert bad.status_code >= 400
+
+
+def test_the_invite_code_is_configured_by_its_environment_variable(monkeypatch):
+    """The gate is only as real as the variable that switches it on.
+
+    Every other test here sets ``settings.invite_code`` directly, which
+    proves the handler and skips the question of whether the deployment's
+    ``INVITE_CODE`` reaches it at all. A policy configured in a dashboard
+    and never read would look identical to one that works.
+    """
+    from app.config import Settings
+
+    monkeypatch.setenv("INVITE_CODE", "an-invite-from-the-environment")
+    assert Settings().invite_code == "an-invite-from-the-environment"
+
+    monkeypatch.delenv("INVITE_CODE", raising=False)
+    assert Settings().invite_code is None
+
+
 def test_constant_time_equals_handles_missing_values():
     assert constant_time_equals("abc", "abc") is True
     assert constant_time_equals("abc", "abd") is False
