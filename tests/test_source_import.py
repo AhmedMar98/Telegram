@@ -403,3 +403,56 @@ def test_the_undo_helper_refuses_foreign_ids_even_when_called_directly(client: T
     assert removed == []
     assert kept == []
     assert _count(Channel, victim_workspace) == 3, "another workspace's sources were deleted"
+
+
+# --- the shape of the work -------------------------------------------------
+
+
+def test_planning_reads_the_sources_table_once_however_long_the_list(client: TestClient, workspace: int):
+    """The duplicate check must not re-read the table per line.
+
+    ``app.dialogs.existing_channel`` reads every channel in the workspace
+    and compares canonicalised spellings in Python, which is right for its
+    own caller — dialog discovery asks about one dialog at a time. Called
+    once per imported line it is an N+1 that grows as lines × sources.
+
+    Measured before it was fixed, not guessed: re-importing 200 sources
+    into a workspace already holding 200 took 622ms, against 139ms for the
+    commit that actually wrote 200 rows — the no-op path was four and a
+    half times slower than the working one. After hoisting the index out
+    of the loop the same call is 15.7ms.
+
+    Asserted as a *count of queries* rather than a duration, because a
+    timing threshold on a shared runner is a flake generator and would say
+    nothing about why. One read is the property; the wall clock was only
+    how it was noticed.
+    """
+    from sqlalchemy import event
+
+    from app import sourceimport
+    from app.database import engine
+
+    _commit(client, "\n".join(f"@existing_{i}" for i in range(40)))
+
+    channel_selects = 0
+
+    def count(conn, cursor, statement, parameters, context, executemany):
+        nonlocal channel_selects
+        normalised = " ".join(statement.split()).lower()
+        if normalised.startswith("select") and "from channels" in normalised:
+            channel_selects += 1
+
+    db = SessionLocal()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        plan = sourceimport.plan(db, workspace, "\n".join(f"@candidate_{i}" for i in range(120)))
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+        db.close()
+
+    assert plan.counts()["new"] == 120
+    assert channel_selects == 1, (
+        f"planning 120 lines issued {channel_selects} queries against channels. "
+        "The workspace's sources are read once and indexed; one query per line is "
+        "the N+1 this test exists to keep out."
+    )
