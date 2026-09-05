@@ -92,11 +92,29 @@ def main() -> None:
 
     # ---- preflight, before anything is unlocked -------------------------
     with psycopg.connect(dsn, autocommit=True) as conn:
-        ident = conn.execute("SELECT current_database(), current_user, version()").fetchone()
+        # Two roles, not one. ``session_user`` is who the DSN authenticated as;
+        # ``current_user`` is who the session is acting as, and only the second
+        # one decides anything here — FORCE ROW LEVEL SECURITY removes the
+        # *effective* role's owner exemption. They differ whenever the login
+        # role carries a role switch (``ALTER ROLE ... SET role = ...``), which
+        # is exactly what a managed provider does when it issues a second
+        # credential for a database somebody else owns.
+        #
+        # Printing only ``current_user`` cost this project six verification
+        # runs: a rotated credential was read as "the secret was never
+        # updated", because the one identity on the line was the one that does
+        # not change when the DSN does.
+        ident = conn.execute("SELECT current_database(), session_user, current_user, version()").fetchone()
         if ident is None:  # pragma: no cover - a server that answers nothing
             _refuse("the server did not answer an identity query")
-        print(f"database={ident[0]} user={ident[1]}")
-        print(f"server={ident[2].split(',')[0]}")
+        print(f"database={ident[0]} login_role={ident[1]} effective_role={ident[2]}")
+        if ident[1] != ident[2]:
+            print(
+                f"note: authenticated as {ident[1]}, acting as {ident[2]} — the login "
+                "role switches roles on connect, so the DSN can change without this "
+                "line's effective role changing."
+            )
+        print(f"server={ident[3].split(',')[0]}")
 
         baseline = _force_state(conn)
         absent = sorted(set(PROTECTED_TABLES) - set(baseline))
