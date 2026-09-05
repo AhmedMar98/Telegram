@@ -10,6 +10,7 @@ depending on which surface asked. One builder, one behaviour.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, or_
@@ -219,3 +220,96 @@ def ordered_links(
         query = query.order_by(Link.created_at.desc())
 
     return query.order_by(Link.id.desc())
+
+
+# --- the filter set, as one value -----------------------------------------
+
+
+@dataclass(frozen=True)
+class LinkFilters:
+    """Every axis a caller may narrow "which links?" by, in one value.
+
+    Exists because the search endpoint and the three export endpoints had
+    four separate parameter lists over the same query, and they had drifted:
+    search offered ``favorite``, ``alive``, ``channel_id``, ``language``,
+    ``domain`` and ``platform``; the exports offered none of the six and
+    accepted ``since``/``until``, which search did not. Exporting a
+    filtered search therefore returned a *wider* set than the search had
+    shown — silently, and in the direction that leaks rows rather than
+    hides them.
+
+    AC-SR06 ("التصدير يطابق نطاق البحث/الفلاتر المعروضة ولا يصدّر بيانات
+    خارج النطاق المقصود") is the criterion that fails there. Keeping four
+    signatures in agreement by hand is what let it fail, so they are one
+    signature now: the router declares these parameters once and search and
+    every export depend on the same object.
+    """
+
+    q: str | None = None
+    category: str | None = None
+    favorite: bool | None = None
+    alive: bool | None = None
+    channel_id: int | None = None
+    language: str | None = None
+    domain: str | None = None
+    platform: str | None = None
+    since: date | None = None
+    until: date | None = None
+    include_archived: bool = False
+    sort: str = DEFAULT_SORT
+
+    def apply(self, db: Session, workspace_id: int) -> tuple[OrmQuery[Link], bool]:
+        """The filtered query for one workspace, and whether it can rank."""
+        return filtered_links(
+            db,
+            workspace_id,
+            q=self.q,
+            category=self.category,
+            favorite=self.favorite,
+            alive=self.alive,
+            channel_id=self.channel_id,
+            language=self.language,
+            domain=self.domain,
+            platform=self.platform,
+            since=self.since,
+            until=self.until,
+            include_archived=self.include_archived,
+        )
+
+    def scope(self, db: Session, workspace_id: int) -> OrmQuery[Link]:
+        """The filtered *and ordered* query — the result set itself.
+
+        Search pages this; the exports stream it. One method so "the same
+        filters, the same order" is a fact about the code rather than a
+        promise made in four places.
+        """
+        query, ranked = self.apply(db, workspace_id)
+        return ordered_links(query, sort=self.sort, ranked=ranked, q=self.q)
+
+    def audit_detail(self, *, fmt: str) -> str:
+        """What was exported, for the audit row.
+
+        Only the filters the caller actually set, so the record says what
+        the request narrowed to rather than burying it under nine defaults.
+        The link *contents* are not here and must not be: this is an
+        access record, not a copy of the data it granted access to.
+        """
+        parts = [f"format={fmt}"]
+        for name, value in (
+            ("q", self.q),
+            ("category", self.category),
+            ("favorite", self.favorite),
+            ("alive", self.alive),
+            ("channel_id", self.channel_id),
+            ("language", self.language),
+            ("domain", self.domain),
+            ("platform", self.platform),
+            ("since", self.since),
+            ("until", self.until),
+        ):
+            if value is not None:
+                parts.append(f"{name}={value}")
+        if self.include_archived:
+            parts.append("include_archived=true")
+        parts.append(f"sort={self.sort}")
+        return " ".join(parts)

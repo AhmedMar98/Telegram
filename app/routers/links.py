@@ -32,7 +32,7 @@ from app.deps import get_current_user
 from app.errors import ErrorCode, rate_limited, unprocessable
 from app.ingest import ingest_text, manual_channel
 from app.instability import report_if_unstable
-from app.linkquery import SORT_OPTIONS, ordered_links
+from app.linkquery import SORT_OPTIONS, LinkFilters
 from app.linkquery import filtered_links as _filtered_query
 from app.models import AuditLog, Channel, ClassificationFeedback, Link, SavedSearch, User
 from app.notify import report_adult_links
@@ -68,9 +68,7 @@ router = APIRouter(prefix="/links", tags=["links"])
 COLLECTOR_STALL_HOURS = 24
 
 
-@router.get("", response_model=SearchResponse)
-def search_links(
-    response: Response,
+def link_filters(
     q: str | None = Query(default=None, max_length=300),
     category: str | None = Query(default=None),
     favorite: bool | None = Query(default=None),
@@ -79,19 +77,29 @@ def search_links(
     language: str | None = Query(default=None, max_length=10),
     domain: str | None = Query(default=None, max_length=300),
     platform: str | None = Query(default=None, max_length=200),
+    since: date | None = Query(default=None, description="only links collected on or after this date"),
+    until: date | None = Query(default=None, description="only links collected on or before this date"),
     include_archived: bool = Query(default=False),
     sort: str = Query(default="date"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=25, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> SearchResponse:
+) -> LinkFilters:
+    """The query parameters that decide which links a request is about.
+
+    Declared once and depended on by search and by all three exports. It
+    used to be four parameter lists over one query, and they had drifted:
+    the exports ignored six of search's filters and forced
+    ``include_archived=True`` on top, so "export what I am looking at"
+    handed back rows the caller's filter excluded — archived links
+    included. A shared dependency makes that divergence unrepresentable
+    rather than something four signatures have to keep agreeing about.
+
+    ``sort`` is validated here for the same reason. The check used to sit
+    in the search endpoint's body, which left an export free to accept a
+    sort name search rejected.
+    """
     if sort not in SORT_OPTIONS:
         raise unprocessable(ErrorCode.UNKNOWN_SORT, f"sort must be one of: {', '.join(SORT_OPTIONS)}")
 
-    query, ranked = _filtered_query(
-        db,
-        current_user.workspace_id,
+    return LinkFilters(
         q=q,
         category=category,
         favorite=favorite,
@@ -100,11 +108,26 @@ def search_links(
         language=language,
         domain=domain,
         platform=platform,
+        since=since,
+        until=until,
         include_archived=include_archived,
+        sort=sort,
     )
-    total = query.count()
 
-    query = ordered_links(query, sort=sort, ranked=ranked, q=q)
+
+@router.get("", response_model=SearchResponse)
+def search_links(
+    response: Response,
+    filters: LinkFilters = Depends(link_filters),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SearchResponse:
+    query = filters.scope(db, current_user.workspace_id)
+    # order_by(None) so the count is not asked to sort what it only counts;
+    # domain_frequency's window function in particular is pure cost here.
+    total = query.order_by(None).count()
 
     items = query.offset((page - 1) * page_size).limit(page_size).all()
 
@@ -867,10 +890,7 @@ def _csv_cell(column: str, row: dict) -> str:
 @router.get("/export.csv")
 def export_links_csv(
     request: Request,
-    category: str | None = Query(default=None),
-    q: str | None = Query(default=None, max_length=300),
-    since: date | None = Query(default=None, description="only links collected on or after this date"),
-    until: date | None = Query(default=None, description="only links collected on or before this date"),
+    filters: LinkFilters = Depends(link_filters),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -883,19 +903,14 @@ def export_links_csv(
     Rows are streamed rather than materialised so a large collection does
     not have to fit in memory on a small free instance.
     """
-    # include_archived: an export is about completeness. Archiving hides a
-    # link from the dashboard; silently omitting it from the user's own
-    # data export would make the export a lie.
-    query, _ = _filtered_query(
-        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
-    )
+    query = filters.scope(db, current_user.workspace_id)
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=csv category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
+        detail=filters.audit_detail(fmt="csv"),
         ip_address=client_ip(request),
     )
     db.commit()
@@ -913,7 +928,7 @@ def export_links_csv(
         writer.writerow(list(EXPORT_COLUMNS))
         yield flush()
 
-        for link in query.order_by(Link.created_at.desc()).yield_per(200):
+        for link in query.yield_per(200):
             row = _export_row(link)
             writer.writerow([_csv_cell(column, row) for column in EXPORT_COLUMNS])
             yield flush()
@@ -928,10 +943,7 @@ def export_links_csv(
 @router.get("/export.json")
 def export_links_json(
     request: Request,
-    category: str | None = Query(default=None),
-    q: str | None = Query(default=None, max_length=300),
-    since: date | None = Query(default=None, description="only links collected on or after this date"),
-    until: date | None = Query(default=None, description="only links collected on or before this date"),
+    filters: LinkFilters = Depends(link_filters),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -940,19 +952,14 @@ def export_links_json(
     Symmetric with the CSV export (same rows, same filter), for callers
     that want structured data rather than a spreadsheet.
     """
-    # include_archived: an export is about completeness. Archiving hides a
-    # link from the dashboard; silently omitting it from the user's own
-    # data export would make the export a lie.
-    query, _ = _filtered_query(
-        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
-    )
+    query = filters.scope(db, current_user.workspace_id)
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=json category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
+        detail=filters.audit_detail(fmt="json"),
         ip_address=client_ip(request),
     )
     db.commit()
@@ -960,7 +967,7 @@ def export_links_json(
     def rows():
         yield "["
         first = True
-        for link in query.order_by(Link.created_at.desc()).yield_per(200):
+        for link in query.yield_per(200):
             prefix = "" if first else ","
             first = False
             yield prefix + json.dumps(_export_row(link), ensure_ascii=False)
@@ -996,10 +1003,7 @@ def _markdown_safe(text: str) -> str:
 @router.get("/export.md")
 def export_links_markdown(
     request: Request,
-    category: str | None = Query(default=None),
-    q: str | None = Query(default=None, max_length=300),
-    since: date | None = Query(default=None, description="only links collected on or after this date"),
-    until: date | None = Query(default=None, description="only links collected on or before this date"),
+    filters: LinkFilters = Depends(link_filters),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -1014,16 +1018,14 @@ def export_links_markdown(
     a curated share is the point — exporting the whole workspace as prose
     would not be.
     """
-    query, _ = _filtered_query(
-        db, current_user.workspace_id, q=q, category=category, since=since, until=until, include_archived=True
-    )
+    query = filters.scope(db, current_user.workspace_id)
 
     audit_record(
         db,
         workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         action="link.export",
-        detail=f"format=md category={category or 'all'} q={q or ''} since={since or ''} until={until or ''}",
+        detail=filters.audit_detail(fmt="md"),
         ip_address=client_ip(request),
     )
     db.commit()
@@ -1040,20 +1042,20 @@ def export_links_markdown(
         yield "---\n"
         yield f'exported_at: "{utcnow().isoformat(timespec="seconds")}"\n'
         yield f'source: "{settings.app_name}"\n'
-        if q:
-            yield f'query: "{_yaml_safe(q)}"\n'
-        if category:
-            yield f'category: "{_yaml_safe(category)}"\n'
+        if filters.q:
+            yield f'query: "{_yaml_safe(filters.q)}"\n'
+        if filters.category:
+            yield f'category: "{_yaml_safe(filters.category)}"\n'
         yield "---\n\n"
 
-        heading = "# روابط" + (f" — بحث: {_markdown_safe(q)}" if q else "")
+        heading = "# روابط" + (f" — بحث: {_markdown_safe(filters.q)}" if filters.q else "")
         yield heading + "\n\n"
 
         current_category: str | None = None
         # Ordered by category so the grouping needs no buffering: rows are
         # still streamed one at a time, which is what keeps a large export
         # from having to fit in memory on a small instance.
-        for link in query.order_by(Link.category.asc(), Link.created_at.desc()).yield_per(200):
+        for link in query.order_by(None).order_by(Link.category.asc(), Link.id.desc()).yield_per(200):
             if link.category != current_category:
                 current_category = link.category
                 yield f"\n## {current_category}\n\n"

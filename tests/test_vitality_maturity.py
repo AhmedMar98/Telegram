@@ -338,16 +338,47 @@ def test_archiving_is_reversible(client: TestClient):
     assert client.get("/links").json()["total"] == 1
 
 
-def test_an_archived_link_is_still_in_the_export(client: TestClient):
-    """Archiving is a view preference. Silently dropping the link from the
-    user's own data export would make the export a lie."""
+def test_an_archived_link_is_still_in_the_whole_workspace_export(client: TestClient):
+    """Archiving must never cost the user the record of the link.
+
+    ``/links/export.*`` used to force ``include_archived=True`` to protect
+    this, which made it export rows the caller's own filter excluded —
+    AC-SR06 ("لا يصدّر بيانات خارج النطاق المقصود"). The two concerns are
+    not in tension once the endpoints are read as the different things
+    they are: ``/links/export.*`` exports *this search*, and
+    ``/auth/me/export`` exports *the whole workspace*. Nothing is lost, and
+    the search export no longer widens its own scope.
+    """
     register_workspace(client, email="archexp@example.com", workspace_name="ArchExp")
     link_id = _add(client, "https://example.com/dead.pdf")
     client.post(f"/links/{link_id}/archive")
 
-    rows = client.get("/links/export.json").json()
+    everything = client.get("/auth/me/export").json()
+    assert [link["url"] for link in everything["links"]] == ["https://example.com/dead.pdf"]
+
+    # And it is still one parameter away from the filtered export.
+    rows = client.get("/links/export.json", params={"include_archived": True}).json()
     assert [r["url"] for r in rows] == ["https://example.com/dead.pdf"]
     assert rows[0]["is_archived"] is True
+
+
+def test_the_filtered_export_hides_what_the_search_hides(client: TestClient):
+    """Export scope follows the caller's filter, in both directions.
+
+    The failure this pins is silent and one-directional: an export that
+    ignores a filter returns *more* than was asked for, so nobody notices
+    until the extra rows are somewhere they should not be.
+    """
+    register_workspace(client, email="archscope@example.com", workspace_name="ArchScope")
+    kept = _add(client, "https://example.com/alive.pdf")
+    hidden = _add(client, "https://example.com/dead.pdf")
+    client.post(f"/links/{hidden}/archive")
+
+    searched = client.get("/links").json()
+    exported = client.get("/links/export.json").json()
+
+    assert [item["id"] for item in searched["items"]] == [kept]
+    assert [r["url"] for r in exported] == ["https://example.com/alive.pdf"]
 
 
 def test_cannot_archive_another_workspaces_link(client: TestClient):
