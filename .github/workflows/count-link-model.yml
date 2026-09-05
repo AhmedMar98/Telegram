@@ -1,0 +1,37 @@
+name: Count links vs resources/occurrences
+
+# One-off diagnostic, not a scheduled job. It answers a single question
+# with real numbers instead of an inference from reading code: since
+# migration 0028 backfilled resources/occurrences once from whatever
+# links held at that moment, and nothing has written to either table
+# since, how many rows has links grown by that resources/occurrences
+# never learned about.
+#
+# Read-only. It runs SELECT COUNT(*) / MAX(created_at) against links,
+# resources and occurrences and nothing else — no row content, no URLs,
+# no workspace names, no secret values are ever read or printed.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Count links, resources and occurrences
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/count_link_model_tables.py
