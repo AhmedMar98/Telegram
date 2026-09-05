@@ -1371,3 +1371,96 @@ class TeamRoleUpdate(BaseModel):
     role: str = Field(min_length=1, max_length=20)
 
     model_config = _config({"role": "agent"})
+
+
+class SourceImportRequest(BaseModel):
+    """A pasted list of Telegram sources, and whether to actually add them.
+
+    ``commit`` defaults to false, so the safe call is the short one. An
+    import that writes unless told not to has a dry run nobody uses; one
+    that previews unless told otherwise has a dry run everybody uses by
+    accident, which is the intent of AC-I03.
+    """
+
+    text: str = Field(min_length=1, max_length=50_000)
+    commit: bool = False
+
+    model_config = _config(
+        {"text": "@python_weekly\nhttps://t.me/rustlang\n@python_weekly", "commit": False},
+        {"text": "@python_weekly", "commit": True},
+    )
+
+
+class PlannedSourceOut(BaseModel):
+    """What will happen — or did happen — to one line of the input."""
+
+    raw: str
+    # new | duplicate | repeated | invalid | needs_account
+    disposition: str
+    username: str | None
+    # Absent for ``new``: there is nothing to explain about a row that is
+    # simply going to be added.
+    reason: str | None
+    # Filled only after a commit, and only for rows that were created.
+    channel_id: int | None
+
+    model_config = _config(
+        {
+            "raw": "@python_weekly",
+            "disposition": "new",
+            "username": "python_weekly",
+            "reason": None,
+            "channel_id": 12,
+        }
+    )
+
+
+class SourceImportResponse(BaseModel):
+    """The disposition of every line, plus the tally and the undo handle.
+
+    Every line comes back, not only the failures. A caller that sees
+    "17 added" and no rows cannot tell which seventeen, and the operator
+    who pasted the list is precisely the person who needs to know which
+    three were dropped and why (§18: a partial commit has to be traceable).
+    """
+
+    committed: bool
+    # Present only on a committed import. It is the audit row's id, which
+    # is what the undo endpoint takes — so the handle and the record of
+    # what it will undo are the same object rather than two that can
+    # disagree.
+    batch_id: int | None
+    counts: dict[str, int]
+    rows: list[PlannedSourceOut]
+
+    model_config = _config(
+        {
+            "committed": False,
+            "batch_id": None,
+            "counts": {"new": 1, "duplicate": 0, "repeated": 1, "invalid": 0, "needs_account": 0},
+            "rows": [
+                {
+                    "raw": "@python_weekly",
+                    "disposition": "new",
+                    "username": "python_weekly",
+                    "reason": None,
+                    "channel_id": None,
+                }
+            ],
+        }
+    )
+
+
+class SourceImportUndoResponse(BaseModel):
+    """What the undo removed, and what it deliberately would not.
+
+    ``kept`` is the interesting half. A source that has collected links
+    since the import is no longer only the import's artefact, and removing
+    it would take those links with it — so it stays, and says so, rather
+    than the undo quietly doing less than its name.
+    """
+
+    removed: list[int]
+    kept: list[int]
+
+    model_config = _config({"removed": [12, 13], "kept": [14]})

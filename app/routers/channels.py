@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import account_login, assignments, roles
+from app import account_login, assignments, roles, sourceimport
 from app.accounts import reactivate
 from app.assignment import apply_assignments, capacity_per_account, collectable_channels, plan_assignments
 from app.audit import record as audit_record
@@ -14,7 +14,7 @@ from app.database import get_db
 from app.deps import get_current_user, get_session_user
 from app.dialogs import SOURCE_PUBLIC, SOURCE_USERBOT, existing_channel
 from app.errors import ErrorCode, rate_limited
-from app.models import Channel, TelegramAccount, User
+from app.models import AuditLog, Channel, TelegramAccount, User
 from app.publicsource import classify_source
 from app.schemas import (
     AccountLoginStart,
@@ -26,7 +26,11 @@ from app.schemas import (
     ChannelCreate,
     ChannelOut,
     ChannelUpdate,
+    PlannedSourceOut,
     PublicSourceCreate,
+    SourceImportRequest,
+    SourceImportResponse,
+    SourceImportUndoResponse,
     TelegramAccountOut,
 )
 from app.security import is_action_rate_limited, record_action_event, verify_password, waste_password_time
@@ -476,6 +480,139 @@ def add_public_source(
     db.commit()
     db.refresh(channel)
     return channel
+
+
+# --- bulk source import ----------------------------------------------------
+#
+# The action name the audit log records, and the one the undo looks for.
+# A constant because the two must be the same string: an undo searching
+# for an action nobody writes finds nothing and reports an honest-looking
+# "batch not found".
+BULK_IMPORT_ACTION = "channel.bulk_import"
+
+
+def _import_rows(plan: sourceimport.ImportPlan) -> list[PlannedSourceOut]:
+    return [
+        PlannedSourceOut(
+            raw=row.raw,
+            disposition=row.disposition,
+            username=row.username,
+            reason=row.reason,
+            channel_id=row.channel_id,
+        )
+        for row in plan.rows
+    ]
+
+
+@router.post("/import", response_model=SourceImportResponse)
+def import_sources(
+    payload: SourceImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(roles.require(roles.COLLECTION_MANAGE)),
+) -> SourceImportResponse:
+    """Preview, or actually perform, a bulk source import.
+
+    ``commit=false`` (the default) is the dry run: every line is parsed,
+    validated and checked for duplicates against both the workspace and
+    the rest of the batch, and the answer is returned with **nothing
+    written**. ``commit=true`` runs the identical planning code and then
+    creates exactly the rows that plan marked ``new``.
+
+    One endpoint rather than two because the preview and the commit have
+    to agree, and the cheapest way to guarantee that is for them to be the
+    same call with a flag — not two handlers that each build their own
+    idea of what the input means.
+
+    Idempotent by construction: everything this creates is a source the
+    workspace now has, so re-sending the same text plans every line as
+    ``duplicate`` and writes nothing.
+
+    ``COLLECTION_MANAGE`` rather than plain membership. Adding sources in
+    bulk decides what the collection fleet spends its capacity on, which
+    is the same authority ``/assignments/rebalance`` requires.
+    """
+    lines = sourceimport.parse_lines(payload.text)
+    if len(lines) > sourceimport.MAX_LINES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"الحد الأقصى {sourceimport.MAX_LINES} مصدراً في الاستيراد الواحد (أرسلت {len(lines)})",
+        )
+
+    plan = sourceimport.plan(db, current_user.workspace_id, payload.text)
+
+    if not payload.commit:
+        # The dry run ends here, before any write and before the audit
+        # row: a preview is not an event, and recording one would make the
+        # audit log unable to answer "what was actually imported".
+        db.rollback()
+        return SourceImportResponse(committed=False, batch_id=None, counts=plan.counts(), rows=_import_rows(plan))
+
+    applied = sourceimport.commit(db, current_user.workspace_id, plan)
+    created = [row.channel_id for row in applied.rows if row.channel_id is not None]
+
+    entry = AuditLog(
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action=BULK_IMPORT_ACTION,
+        target_type="channel",
+        # The ids this batch created, which is what makes the undo
+        # traceable rather than a guess reconstructed from timestamps.
+        detail=",".join(str(channel_id) for channel_id in created),
+    )
+    db.add(entry)
+    # Same transaction as the channels it describes. An audit row that can
+    # outlive a rolled-back import, or an import that can outlive a failed
+    # audit write, is a record that disagrees with the data.
+    db.commit()
+
+    return SourceImportResponse(
+        committed=True, batch_id=entry.id, counts=applied.counts(), rows=_import_rows(applied)
+    )
+
+
+@router.post("/import/{batch_id}/undo", response_model=SourceImportUndoResponse)
+def undo_source_import(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(roles.require(roles.COLLECTION_MANAGE)),
+) -> SourceImportUndoResponse:
+    """Remove the sources one committed import created.
+
+    The batch is looked up scoped to the caller's workspace *and* to the
+    import action, so another workspace's batch id — and this workspace's
+    own audit rows for unrelated actions — are both simply not found,
+    rather than being distinguishable from a batch that never existed.
+
+    Sources that have collected links since the import are kept and
+    reported, never deleted: the undo may not take history with it.
+    """
+    entry = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.id == batch_id,
+            AuditLog.workspace_id == current_user.workspace_id,
+            AuditLog.action == BULK_IMPORT_ACTION,
+        )
+        .first()
+    )
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import batch not found")
+
+    ids = [int(part) for part in (entry.detail or "").split(",") if part.strip().isdigit()]
+    removed, kept = sourceimport.undo(db, current_user.workspace_id, ids)
+
+    audit_record(
+        db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        action="channel.bulk_import_undo",
+        target_type="channel",
+        target_id=str(batch_id),
+        detail=f"removed={len(removed)} kept={len(kept)}",
+    )
+    db.commit()
+
+    return SourceImportUndoResponse(removed=removed, kept=kept)
 
 
 @router.patch("/{channel_id:int}", response_model=ChannelOut)

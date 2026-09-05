@@ -92,6 +92,7 @@ def test_every_parameterised_path_is_covered_by_this_sweep():
         "/notifications/{notification_id}/read",
         "/auth/sessions/{session_id}",
         "/channels/{channel_id}",
+        "/channels/import/{batch_id}/undo",
         "/links/{link_id}",
         "/links/{link_id}/favorite",
         "/links/{link_id}/archive",
@@ -179,8 +180,17 @@ def victim_ids(client: TestClient) -> dict[str, int]:
     finally:
         db.close()
 
+    # A committed bulk source import, so the sweep has a real batch id to
+    # probe. Undo is the most destructive id-taking endpoint the platform
+    # has — it deletes sources — so "another workspace's batch id" is
+    # exactly the probe that must come back 404.
+    batch_id = client.post("/channels/import", json={"text": "@victim_imported_source", "commit": True}).json()[
+        "batch_id"
+    ]
+
     client.post("/auth/logout")
     return {
+        "batch_id": batch_id,
         "notification_id": notification_id,
         "channel_id": channel["id"],
         "link_id": link["id"],
@@ -250,7 +260,7 @@ def test_foreign_resource_survives_the_probe(attacker, victim_ids, path: str, me
     attacker.post("/auth/login", json={"email": "victim@example.com", "password": "j8Kd0-slwQ2x"})
 
     assert attacker.get("/links").json()["total"] == 1, f"{method} {path} destroyed the victim's link"
-    assert len(attacker.get("/channels").json()) == 2  # manual bucket + the added one
+    assert len(attacker.get("/channels").json()) == 3  # manual bucket, the added one, the imported one
     assert len(attacker.get("/links/saved").json()) == 1, f"{method} {path} destroyed the victim's saved search"
     assert len(attacker.get("/auth/api-keys").json()) == 1, f"{method} {path} revoked the victim's API key"
 
