@@ -108,12 +108,18 @@ jobs:
           # i.e. someone changed a model without writing the migration.
           alembic check
 
-      - name: Full-text search tests against Postgres
+      # test_postgres_pagination.py belongs here and not in the SQLite
+      # suite for a reason its own docstring measures: with the ordering
+      # tie-breaker deleted it still passes on SQLite, which answers a
+      # tied ORDER BY from a rowid scan. Postgres answers it from a top-N
+      # heapsort and loses 198 rows in 2000. Only this job can tell the
+      # guard from its absence.
+      - name: Full-text search and pagination tests against Postgres
         env:
           PG_TEST_DSN: "postgresql://postgres:postgres@localhost:5432/linktest"
           DATABASE_URL: "sqlite:///:memory:"
           SECRET_KEY: "ci-secret"
-        run: pytest tests/test_postgres_search.py -q
+        run: pytest tests/test_postgres_search.py tests/test_postgres_pagination.py -q
 
       # Row-level security has to be tested as an UNPRIVILEGED role, and
       # that is not a detail. A superuser bypasses RLS entirely — FORCE and

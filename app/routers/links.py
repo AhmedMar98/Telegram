@@ -32,6 +32,7 @@ from app.deps import get_current_user
 from app.errors import ErrorCode, rate_limited, unprocessable
 from app.ingest import ingest_text, manual_channel
 from app.instability import report_if_unstable
+from app.linkquery import SORT_OPTIONS, ordered_links
 from app.linkquery import filtered_links as _filtered_query
 from app.models import AuditLog, Channel, ClassificationFeedback, Link, SavedSearch, User
 from app.notify import report_adult_links
@@ -54,15 +55,12 @@ from app.schemas import (
     StorageStats,
     VitalityStats,
 )
-from app.search import fts_rank, parse_query
 from app.security import is_action_rate_limited, record_action_event
 from app.storage import database_bytes, largest_table
 from app.timeutil import utcnow
 
 router = APIRouter(prefix="/links", tags=["links"])
 
-
-SORT_OPTIONS = ("date", "domain", "category", "confidence", "checked", "domain_frequency")
 
 # The collector runs every six hours. A day of silence is well past a single
 # missed run, a FloodWait, or a slow schedule, so it is worth telling the
@@ -106,33 +104,7 @@ def search_links(
     )
     total = query.count()
 
-    if sort == "domain":
-        query = query.order_by(Link.domain.asc(), Link.created_at.desc())
-    elif sort == "category":
-        query = query.order_by(Link.category.asc(), Link.created_at.desc())
-    elif sort == "confidence":
-        query = query.order_by(Link.confidence.desc(), Link.created_at.desc())
-    elif sort == "domain_frequency":
-        # Groups the collection by how much of it comes from the same place,
-        # busiest source first. A window function rather than a join on a
-        # grouped subquery — verified to run identically on SQLite (>= 3.25)
-        # and Postgres, so the two backends do not diverge here.
-        frequency = func.count().over(partition_by=Link.domain)
-        query = query.order_by(frequency.desc(), Link.domain.asc(), Link.created_at.desc())
-    elif sort == "checked":
-        # Most recently verified first. Different question from "newest":
-        # this answers "what do I currently know to be working?", which the
-        # collection date cannot.
-        query = query.order_by(Link.last_checked_at.desc(), Link.created_at.desc())
-    elif ranked and q:
-        # Default "date" sort yields to relevance when there is a search
-        # term and Postgres can actually rank it — a plain date order would
-        # bury the best match under whatever was collected most recently.
-        query = query.order_by(
-            fts_rank(Link.raw_text, Link.url, parse_query(q).include).desc(), Link.created_at.desc()
-        )
-    else:
-        query = query.order_by(Link.created_at.desc())
+    query = ordered_links(query, sort=sort, ranked=ranked, q=q)
 
     items = query.offset((page - 1) * page_size).limit(page_size).all()
 

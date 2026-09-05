@@ -17,7 +17,7 @@ from sqlalchemy.orm import Query as OrmQuery
 from sqlalchemy.orm import Session
 
 from app.models import Link
-from app.search import fts_document, fts_query, parse_query
+from app.search import fts_document, fts_query, fts_rank, parse_query
 
 
 def dialect_of(db: Session) -> str:
@@ -137,3 +137,85 @@ def filtered_links(
                 query = query.filter(~or_(Link.url.ilike(like), func.coalesce(Link.raw_text, "").ilike(like)))
 
     return query, ranked
+
+
+# --- ordering --------------------------------------------------------------
+
+# The sorts the product offers. Lives here rather than in the router
+# because the ordering they name is applied here: a caller that knows the
+# option names but not how they are applied would be free to invent its
+# own ordering for the same name, which is the divergence this module
+# exists to stop.
+SORT_OPTIONS: tuple[str, ...] = (
+    "date",
+    "domain",
+    "category",
+    "confidence",
+    "checked",
+    "domain_frequency",
+)
+
+DEFAULT_SORT = "date"
+
+
+def ordered_links(
+    query: OrmQuery[Link],
+    *,
+    sort: str = DEFAULT_SORT,
+    ranked: bool = False,
+    q: str | None = None,
+) -> OrmQuery[Link]:
+    """Apply one of ``SORT_OPTIONS`` and always end on a unique column.
+
+    **Why the trailing ``Link.id``.** Every sort key here is non-unique —
+    two links collected in the same flush share a ``created_at`` to the
+    microsecond, and a whole workspace can share one ``domain`` or one
+    ``category``. SQL leaves the order of tied rows undefined, and
+    ``OFFSET``/``LIMIT`` paginate by *position* in that undefined order,
+    so the same query run twice may place a tied row on page 1 the first
+    time and page 2 the second. The reader sees one link twice and never
+    sees another — with no error, and no way to tell from the response
+    that anything was skipped.
+
+    A unique final key removes the tie entirely: with ``id`` last, no two
+    rows compare equal, so the total order is fully determined and page
+    boundaries fall in the same place on every run. This is AC-SR03
+    ("ترتيب النتائج ثابت عند تساوي القيم باستخدام tie-breaker محدد") and
+    it is why the column is appended to *every* branch below rather than
+    only the ones that looked risky.
+
+    ``id`` rather than ``url`` or ``fingerprint``: it is the primary key,
+    so uniqueness is enforced by the database rather than assumed, and it
+    is already indexed. Descending, so it agrees with the recency the
+    other keys express — of two links stored in the same flush, the one
+    inserted second is the newer.
+    """
+    if sort == "domain":
+        query = query.order_by(Link.domain.asc(), Link.created_at.desc())
+    elif sort == "category":
+        query = query.order_by(Link.category.asc(), Link.created_at.desc())
+    elif sort == "confidence":
+        query = query.order_by(Link.confidence.desc(), Link.created_at.desc())
+    elif sort == "domain_frequency":
+        # Groups the collection by how much of it comes from the same place,
+        # busiest source first. A window function rather than a join on a
+        # grouped subquery — verified to run identically on SQLite (>= 3.25)
+        # and Postgres, so the two backends do not diverge here.
+        frequency = func.count().over(partition_by=Link.domain)
+        query = query.order_by(frequency.desc(), Link.domain.asc(), Link.created_at.desc())
+    elif sort == "checked":
+        # Most recently verified first. Different question from "newest":
+        # this answers "what do I currently know to be working?", which the
+        # collection date cannot.
+        query = query.order_by(Link.last_checked_at.desc(), Link.created_at.desc())
+    elif ranked and q:
+        # Default "date" sort yields to relevance when there is a search
+        # term and Postgres can actually rank it — a plain date order would
+        # bury the best match under whatever was collected most recently.
+        query = query.order_by(
+            fts_rank(Link.raw_text, Link.url, parse_query(q).include).desc(), Link.created_at.desc()
+        )
+    else:
+        query = query.order_by(Link.created_at.desc())
+
+    return query.order_by(Link.id.desc())
