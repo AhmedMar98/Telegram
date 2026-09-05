@@ -244,6 +244,55 @@ def test_the_window_includes_links_collected_during_the_final_day(client: TestCl
     assert "today.pdf" in body
 
 
+def test_the_window_excludes_links_collected_after_it(client: TestClient):
+    """The half the inclusive-boundary test above cannot cover.
+
+    That test asserts a link collected *on* ``until`` is present — which is
+    also true when ``until`` is ignored entirely, so it passes whether the
+    filter works or not. Sabotaging the ``until`` filter failed no test in
+    the suite until this one existed. Excluding a link that falls outside
+    the window is the property that only a working filter has.
+    """
+    register_workspace(client, email="dw4@example.com", workspace_name="DW4")
+    _add(client, "https://example.com/inside.pdf")
+    _add(client, "https://example.com/after.pdf")
+
+    with SessionLocal() as db:
+        later = db.query(Link).filter(Link.url == "https://example.com/after.pdf").one()
+        later.created_at = later.created_at + timedelta(days=30)
+        db.commit()
+
+    window = {"until": (date.today() + timedelta(days=2)).isoformat()}
+
+    assert [item["url"] for item in client.get("/links", params=window).json()["items"]] == [
+        "https://example.com/inside.pdf"
+    ]
+    body = client.get("/links/export.csv", params=window).text
+    assert "inside.pdf" in body
+    assert "after.pdf" not in body
+
+
+def test_the_date_window_applies_to_search_and_not_only_to_export(client: TestClient):
+    """``since``/``until`` reached the exports and not the search.
+
+    The shared filter dependency gives search the same two, which is what
+    AC-SR02 asks for ("يعمل البحث مع فلاتر ... والتاريخ").
+    """
+    register_workspace(client, email="dw5@example.com", workspace_name="DW5")
+    _add(client, "https://example.com/old.pdf")
+    _add(client, "https://example.com/new.pdf")
+
+    with SessionLocal() as db:
+        old = db.query(Link).filter(Link.url == "https://example.com/old.pdf").one()
+        old.created_at = old.created_at - timedelta(days=30)
+        db.commit()
+
+    recent = client.get("/links", params={"since": (date.today() - timedelta(days=2)).isoformat()}).json()
+
+    assert [item["url"] for item in recent["items"]] == ["https://example.com/new.pdf"]
+    assert recent["total"] == 1
+
+
 def test_a_nonsense_date_is_rejected_rather_than_ignored(client: TestClient):
     register_workspace(client, email="dw3@example.com", workspace_name="DW3")
 
