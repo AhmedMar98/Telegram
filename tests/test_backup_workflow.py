@@ -50,11 +50,33 @@ def _dump_step_script() -> str:
 
 def test_the_backup_runs_daily():
     """Owner decision. Weekly meant up to seven days of collection could
-    be lost to one bad restore point."""
+    be lost to one bad restore point.
+
+    The contract is *daily*, not one particular hour. This used to assert
+    the literal string "0 3 * * *", which turned every legitimate retune of
+    the hour into a red build — and it did, the first time the owner moved
+    the job an hour earlier. The hour is an operational preference; the
+    cadence is the thing that, if it silently changed, would cost up to a
+    week of collection. So the cadence is what is pinned: exactly one
+    schedule, every day of every month, at a fixed time of day.
+    """
     # PyYAML parses the bare key `on` as the boolean True.
     schedules = _workflow()[True]["schedule"]
 
-    assert [entry["cron"] for entry in schedules] == ["0 3 * * *"]
+    assert len(schedules) == 1, f"expected exactly one schedule, got {schedules}"
+
+    minute, hour, day_of_month, month, day_of_week = schedules[0]["cron"].split()
+
+    assert (day_of_month, month, day_of_week) == ("*", "*", "*"), (
+        f"the backup is no longer daily: {schedules[0]['cron']!r}. Restricting any of "
+        "day-of-month, month or day-of-week means whole days go unbacked-up, which is "
+        "the weekly cadence this job was moved off."
+    )
+    assert minute.isdigit() and hour.isdigit(), (
+        f"the backup no longer runs once a day at a fixed time: {schedules[0]['cron']!r}. "
+        "A wildcard or step in the minute or hour field runs the dump repeatedly, and "
+        "each run briefly lifts FORCE ROW LEVEL SECURITY on eighteen tables."
+    )
 
 
 def test_a_missing_passphrase_fails_instead_of_uploading_plaintext():

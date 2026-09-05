@@ -43,7 +43,12 @@ name: Daily encrypted DB backup
 
 on:
   schedule:
-    - cron: "0 2 * * *" # daily, 03:00 UTC
+    # Daily. GitHub does not run scheduled workflows at the requested minute
+    # and this repository's delay is not small: measured against git history,
+    # four consecutive firings landed 4h33m-4h49m late. Treat the field as
+    # "once a day", not as a delivery time, and read run_started_at when the
+    # actual hour matters.
+    - cron: "0 2 * * *"
   workflow_dispatch: {}
 
 # Least privilege: this job reads the repository and writes an artifact.
