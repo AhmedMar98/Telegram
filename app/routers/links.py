@@ -70,7 +70,12 @@ COLLECTOR_STALL_HOURS = 24
 
 def link_filters(
     q: str | None = Query(default=None, max_length=300),
-    category: str | None = Query(default=None),
+    # Capped like ``platform`` below, which it otherwise mirrors exactly:
+    # both accept a comma-separated list and both turn it into an IN
+    # clause, so an uncapped one lets a caller choose the query's
+    # complexity. 200 is generous — all eight categories joined is 81
+    # characters — and it was the only filter here with no bound at all.
+    category: str | None = Query(default=None, max_length=200),
     favorite: bool | None = Query(default=None),
     alive: bool | None = Query(default=None),
     channel_id: int | None = Query(default=None),
