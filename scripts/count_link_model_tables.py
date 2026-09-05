@@ -85,9 +85,22 @@ def main() -> None:
         # so one global query is the true total — the same reasoning
         # scripts/check_link_vitality.py already relies on.
         links_total = scalar("SELECT count(*) FROM links")
+        links_earliest = timestamp("SELECT min(created_at) FROM links")
         links_latest = timestamp("SELECT max(created_at) FROM links")
         print(f"links_total={links_total}")
+        print(f"links_min_created_at={links_earliest}")
         print(f"links_max_created_at={links_latest}")
+
+        # Optional: how much of links already existed at some moment in the
+        # past. Set LINKS_BEFORE to an ISO timestamp — the moment migration
+        # 0028 reached production, say — and this separates "the backfill
+        # had nothing to copy" from "the backfill had rows and copied none
+        # of them". Those two produce the same resources_total=0 and are
+        # otherwise indistinguishable.
+        cutoff = os.environ.get("LINKS_BEFORE", "").strip()
+        if cutoff:
+            before = scalar("SELECT count(*) FROM links WHERE created_at < :cutoff", cutoff=cutoff)
+            print(f"links_before_{cutoff}={before}")
 
         # resources and occurrences are FORCE row-level security
         # (app.rls.PROTECTED_TABLES). A query with no tenant set would see

@@ -34,4 +34,9 @@ jobs:
       - name: Count links, resources and occurrences
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # The moment migration 0028 reached main, and so the moment
+          # Render's `alembic upgrade head` ran its one-time backfill.
+          # Counting the links older than this separates "the backfill had
+          # nothing to copy" from "the backfill had rows and copied none".
+          LINKS_BEFORE: "2026-09-03T17:40:31"
         run: python scripts/count_link_model_tables.py
